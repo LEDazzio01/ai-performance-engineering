@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 import torch
 
 N = 1 << 20
@@ -13,18 +12,34 @@ def main() -> None:
     b = 2 * a
     c = torch.empty_like(a)
 
-    torch.cuda.synchronize(device) if device.type == "cuda" else None
-    start = time.time()
-    for i in range(N):
-        c[i] = a[i] + b[i]
-    torch.cuda.synchronize(device) if device.type == "cuda" else None
-    sequential_ms = (time.time() - start) * 1_000
-
-    torch.cuda.synchronize(device) if device.type == "cuda" else None
-    start = time.time()
-    c = a + b
-    torch.cuda.synchronize(device) if device.type == "cuda" else None
-    vector_ms = (time.time() - start) * 1_000
+    if device.type == "cuda":
+        # Use CUDA Events for accurate GPU timing
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        start_event.record()
+        for i in range(N):
+            c[i] = a[i] + b[i]
+        end_event.record()
+        end_event.synchronize()
+        sequential_ms = start_event.elapsed_time(end_event)
+        
+        start_event.record()
+        c = a + b
+        end_event.record()
+        end_event.synchronize()
+        vector_ms = start_event.elapsed_time(end_event)
+    else:
+        # CPU timing
+        import time
+        start = time.time()
+        for i in range(N):
+            c[i] = a[i] + b[i]
+        sequential_ms = (time.time() - start) * 1_000
+        
+        start = time.time()
+        c = a + b
+        vector_ms = (time.time() - start) * 1_000
 
     print(f"naive loop: {sequential_ms:.2f} ms, vectorized: {vector_ms:.2f} ms")
 

@@ -42,6 +42,14 @@ except AttributeError:
 # FP8 Fused Attention (FlashAttention-style)
 # ============================================================================
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_D': 64}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_D': 64}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_D': 64}, num_warps=8, num_stages=3),
+    ],
+    key=['M', 'N', 'D'],
+)
 @triton.jit
 def fp8_fused_attention_kernel(
     Q, K, V, Out,
@@ -56,13 +64,17 @@ def fp8_fused_attention_kernel(
     BLOCK_D: tl.constexpr,
 ):
     """
-    FP8 Fused Attention Kernel (Blackwell-optimized)
+    FP8 Fused Attention Kernel (Blackwell-optimized) with autotuning.
     
     Implements FlashAttention-style algorithm with FP8 optimizations:
     - FP8 E4M3 for Q, K, V
     - FP32 accumulation for numerical stability
-    - Online softmax in FP32
+    - Online softmax in FP32 (critical for accuracy)
     - Tiling optimized for Blackwell's 5th-gen Tensor Cores
+    - Autotuning for optimal block sizes
+    
+    Note: Uses manual pointer arithmetic (not tensor descriptors) due to
+    complex online softmax with iteration-dependent memory patterns.
     
     Performance on B200: ~2x faster than FP16 FlashAttention
     """
@@ -159,13 +171,11 @@ def fp8_fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> to
     # Scale factor for attention
     scale = 1.0 / math.sqrt(D)
     
-    # Optimal block sizes for Blackwell
-    BLOCK_M = 64
-    BLOCK_N = 64
-    BLOCK_D = 64
+    # Grid computed from max block size in autotune configs
+    MAX_BLOCK_M = 128
+    grid = (triton.cdiv(M, MAX_BLOCK_M),)
     
-    grid = (triton.cdiv(M, BLOCK_M),)
-    
+    # Launch with autotuning - Triton will select best config
     fp8_fused_attention_kernel[grid](
         q, k, v, out, scale,
         M, N, D,
@@ -173,11 +183,6 @@ def fp8_fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> to
         k.stride(0), k.stride(1),
         v.stride(0), v.stride(1),
         out.stride(0), out.stride(1),
-        BLOCK_M=BLOCK_M,
-        BLOCK_N=BLOCK_N,
-        BLOCK_D=BLOCK_D,
-        num_warps=4,
-        num_stages=3,
     )
     
     return out
@@ -187,6 +192,14 @@ def fp8_fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> to
 # FP8 LayerNorm with Residual
 # ============================================================================
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_N': 1024}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_N': 2048}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_N': 4096}, num_warps=8, num_stages=3),
+    ],
+    key=['N'],
+)
 @triton.jit
 def fp8_layernorm_kernel(
     X, Y, W, B, Residual, Out,
@@ -197,13 +210,14 @@ def fp8_layernorm_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """
-    FP8 LayerNorm with residual connection
+    FP8 LayerNorm with residual connection + autotuning.
     
     Optimized for Blackwell:
     - FP8 input/output
     - FP32 accumulation for mean/variance
     - Fused residual add
     - Vectorized for HBM3e (256-byte bursts)
+    - Autotuning for optimal block size
     """
     pid = tl.program_id(0)
     
@@ -286,21 +300,16 @@ def fp8_layernorm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
     y = torch.empty_like(x)
     out = torch.empty_like(x)
     
-    # Block size optimized for Blackwell (256-byte bursts)
-    BLOCK_N = triton.next_power_of_2(N)
-    if BLOCK_N > 4096:
-        BLOCK_N = 4096
-    
+    # Grid - one thread block per row
     grid = (M,)
     
+    # Launch with autotuning - Triton will select best BLOCK_N
     fp8_layernorm_kernel[grid](
         x, y, weight, bias, residual, out,
         M, N,
         x.stride(0), x.stride(1),
         y.stride(0), y.stride(1),
         eps=eps,
-        BLOCK_N=BLOCK_N,
-        num_warps=4,
     )
     
     return y, out
@@ -310,6 +319,14 @@ def fp8_layernorm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
 # FP8 GELU Activation
 # ============================================================================
 
+@triton.autotune(
+    configs=[
+        triton.Config({'BLOCK_SIZE': 1024}, num_warps=4, num_stages=2),
+        triton.Config({'BLOCK_SIZE': 2048}, num_warps=8, num_stages=2),
+        triton.Config({'BLOCK_SIZE': 512}, num_warps=2, num_stages=2),
+    ],
+    key=['N'],
+)
 @triton.jit
 def fp8_gelu_kernel(
     X, Y,
@@ -317,12 +334,13 @@ def fp8_gelu_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """
-    FP8 GELU activation
+    FP8 GELU activation with autotuning.
     
     Optimized for Blackwell:
     - FP8 input/output
-    - FP32 computation
+    - FP32 computation for accuracy
     - Vectorized for HBM3e
+    - Autotuning for optimal block size
     """
     pid = tl.program_id(0)
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
@@ -367,13 +385,13 @@ def fp8_gelu(x: torch.Tensor) -> torch.Tensor:
     
     y = torch.empty_like(x_flat)
     
-    BLOCK_SIZE = 1024
-    grid = (triton.cdiv(N, BLOCK_SIZE),)
+    # Grid computed from max block size in autotune configs
+    MAX_BLOCK_SIZE = 2048
+    grid = (triton.cdiv(N, MAX_BLOCK_SIZE),)
     
+    # Launch with autotuning - Triton will select best block size
     fp8_gelu_kernel[grid](
         x_flat, y, N,
-        BLOCK_SIZE=BLOCK_SIZE,
-        num_warps=4,
     )
     
     return y.view(shape)
@@ -401,24 +419,34 @@ def benchmark_fp8_attention():
         v_fp8 = v_fp16.to(FP8_E4M3_DTYPE)
     
     # Warmup
-    _ = fp8_fused_attention(q_fp16, k_fp16, v_fp16)
-    torch.cuda.synchronize()
-    
-    # Benchmark FP16
-    import time
-    start = time.time()
-    for _ in range(100):
+    for _ in range(10):
         _ = fp8_fused_attention(q_fp16, k_fp16, v_fp16)
     torch.cuda.synchronize()
-    fp16_time = (time.time() - start) / 100 * 1000
+    
+    # Benchmark FP16 using CUDA Events (GPU timing)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    
+    start_event.record()
+    for _ in range(100):
+        _ = fp8_fused_attention(q_fp16, k_fp16, v_fp16)
+    end_event.record()
+    end_event.synchronize()
+    fp16_time = start_event.elapsed_time(end_event) / 100  # Already in ms
     
     if FP8_AVAILABLE:
-        # Benchmark FP8
-        start = time.time()
-        for _ in range(100):
+        # Warmup FP8
+        for _ in range(10):
             _ = fp8_fused_attention(q_fp8, k_fp8, v_fp8)
         torch.cuda.synchronize()
-        fp8_time = (time.time() - start) / 100 * 1000
+        
+        # Benchmark FP8 using CUDA Events
+        start_event.record()
+        for _ in range(100):
+            _ = fp8_fused_attention(q_fp8, k_fp8, v_fp8)
+        end_event.record()
+        end_event.synchronize()
+        fp8_time = start_event.elapsed_time(end_event) / 100
         
         print(f"FP16: {fp16_time:.2f} ms")
         print(f"FP8:  {fp8_time:.2f} ms")
@@ -442,23 +470,33 @@ def benchmark_fp8_layernorm():
     bias = torch.zeros(N, device=device, dtype=torch.float32)
     
     # Warmup
-    _ = fp8_layernorm(x, weight, bias, residual)
-    torch.cuda.synchronize()
-    
-    # Benchmark
-    import time
-    start = time.time()
-    for _ in range(100):
+    for _ in range(10):
         _ = fp8_layernorm(x, weight, bias, residual)
     torch.cuda.synchronize()
-    triton_time = (time.time() - start) / 100 * 1000
     
-    # Compare with PyTorch
-    start = time.time()
+    # Benchmark Triton FP8 using CUDA Events (GPU timing)
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    
+    start_event.record()
     for _ in range(100):
+        _ = fp8_layernorm(x, weight, bias, residual)
+    end_event.record()
+    end_event.synchronize()
+    triton_time = start_event.elapsed_time(end_event) / 100  # Already in ms
+    
+    # Warmup PyTorch
+    for _ in range(10):
         y = torch.nn.functional.layer_norm(x + residual, [N], weight, bias)
     torch.cuda.synchronize()
-    pytorch_time = (time.time() - start) / 100 * 1000
+    
+    # Benchmark PyTorch using CUDA Events
+    start_event.record()
+    for _ in range(100):
+        y = torch.nn.functional.layer_norm(x + residual, [N], weight, bias)
+    end_event.record()
+    end_event.synchronize()
+    pytorch_time = start_event.elapsed_time(end_event) / 100
     
     print(f"PyTorch FP16: {pytorch_time:.2f} ms")
     print(f"Triton FP8:   {triton_time:.2f} ms")

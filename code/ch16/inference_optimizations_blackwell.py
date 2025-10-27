@@ -398,15 +398,18 @@ class BlackwellInferencePipeline:
             _ = self.model(input_ids)
         torch.cuda.synchronize()
         
-        # Benchmark
-        start = time.time()
+        # Benchmark using CUDA Events for accurate GPU timing
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        start_event.record()
         for _ in range(num_iterations):
             _ = self.model(input_ids)
-        torch.cuda.synchronize()
-        end = time.time()
+        end_event.record()
+        end_event.synchronize()
         
-        total_time = end - start
-        avg_time = total_time / num_iterations * 1000  # ms
+        total_time = start_event.elapsed_time(end_event) / 1000  # Convert ms to seconds
+        avg_time = total_time / num_iterations * 1000  # ms per iteration
         tokens_per_sec = seq_len * num_iterations / total_time
         
         print(f"\nResults:")

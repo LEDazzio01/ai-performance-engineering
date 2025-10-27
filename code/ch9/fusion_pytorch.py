@@ -199,20 +199,25 @@ def benchmark_fusion():
     
     torch.cuda.synchronize()
     
-    # Benchmark unfused operations
+    # Benchmark unfused operations using CUDA Events (GPU timing)
     iterations = 100
-    start_time = time.time()
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    
+    start_event.record()
     for _ in range(iterations):
         result_unfused = unfused_operations(x, weight, bias)
-    torch.cuda.synchronize()
-    unfused_time = (time.time() - start_time) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    unfused_time = start_event.elapsed_time(end_event) / iterations
     
-    # Benchmark fused operations
-    start_time = time.time()
+    # Benchmark fused operations using CUDA Events
+    start_event.record()
     for _ in range(iterations):
         result_fused = fused_operations(x, weight, bias, ln_weight, ln_bias)
-    torch.cuda.synchronize()
-    fused_time = (time.time() - start_time) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    fused_time = start_event.elapsed_time(end_event) / iterations
     
     print(f"Linear + Bias + GELU + LayerNorm:")
     print(f"  Unfused time: {unfused_time:.2f} ms")
@@ -230,19 +235,22 @@ def benchmark_fusion():
     
     torch.cuda.synchronize()
     
-    # Unfused attention
-    start_time = time.time()
-    for _ in range(iterations // 10):  # Fewer iterations for complex operation
+    # Unfused attention using CUDA Events
+    attn_iterations = iterations // 10  # Fewer iterations for complex operation
+    start_event.record()
+    for _ in range(attn_iterations):
         result_attn_unfused = attention.forward_unfused(x)
-    torch.cuda.synchronize()
-    attn_unfused_time = (time.time() - start_time) * 1000 / (iterations // 10)
+    end_event.record()
+    end_event.synchronize()
+    attn_unfused_time = start_event.elapsed_time(end_event) / attn_iterations
     
-    # Fused attention
-    start_time = time.time()
-    for _ in range(iterations // 10):
+    # Fused attention using CUDA Events
+    start_event.record()
+    for _ in range(attn_iterations):
         result_attn_fused = attention.forward_fused(x)
-    torch.cuda.synchronize()
-    attn_fused_time = (time.time() - start_time) * 1000 / (iterations // 10)
+    end_event.record()
+    end_event.synchronize()
+    attn_fused_time = start_event.elapsed_time(end_event) / attn_iterations
     
     print(f"Multi-Head Attention:")
     print(f"  Unfused time: {attn_unfused_time:.2f} ms")
@@ -265,12 +273,13 @@ def benchmark_fusion():
     
     torch.cuda.synchronize()
     
-    # Benchmark custom modules
-    start_time = time.time()
+    # Benchmark custom modules using CUDA Events
+    start_event.record()
     for _ in range(iterations):
         result_custom = fused_ln_gelu_compiled(x)
-    torch.cuda.synchronize()
-    custom_time = (time.time() - start_time) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    custom_time = start_event.elapsed_time(end_event) / iterations
     
     print(f"Custom Fused LayerNorm + GELU: {custom_time:.2f} ms")
     
@@ -337,31 +346,39 @@ def demonstrate_torch_compile_fusion():
     
     torch.cuda.synchronize()
     
-    # Elementwise benchmark
-    start = time.time()
+    # Create CUDA Events for benchmarking
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    
+    # Elementwise benchmark using CUDA Events
+    start_event.record()
     for _ in range(iterations):
         unfused_elementwise(x)
-    torch.cuda.synchronize()
-    unfused_elem_time = (time.time() - start) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    unfused_elem_time = start_event.elapsed_time(end_event) / iterations
     
-    start = time.time()
+    start_event.record()
     for _ in range(iterations):
         fused_elementwise(x)
-    torch.cuda.synchronize()
-    fused_elem_time = (time.time() - start) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    fused_elem_time = start_event.elapsed_time(end_event) / iterations
     
-    # Reduction/broadcast benchmark
-    start = time.time()
+    # Reduction/broadcast benchmark using CUDA Events
+    start_event.record()
     for _ in range(iterations):
         unfused_reduction_broadcast(x)
-    torch.cuda.synchronize()
-    unfused_rb_time = (time.time() - start) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    unfused_rb_time = start_event.elapsed_time(end_event) / iterations
     
-    start = time.time()
+    start_event.record()
     for _ in range(iterations):
         fused_reduction_broadcast(x)
-    torch.cuda.synchronize()
-    fused_rb_time = (time.time() - start) * 1000 / iterations
+    end_event.record()
+    end_event.synchronize()
+    fused_rb_time = start_event.elapsed_time(end_event) / iterations
     
     print(f"Element-wise operations (sin->cos->exp):")
     print(f"  Unfused: {unfused_elem_time:.3f} ms")

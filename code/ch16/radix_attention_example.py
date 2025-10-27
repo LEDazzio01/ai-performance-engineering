@@ -589,9 +589,15 @@ def benchmark_prefix_caching():
     # Test without caching (naive approach)
     print("\n--- Without Caching ---")
     passes = 2  # first pass warms caches, second pass demonstrates reuse
+    
+    # Use CUDA Events for accurate GPU timing
     if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    start_time = time.time()
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+    else:
+        start_time = time.time()
+    
     naive_responses = []
     with nvtx.range("radix_naive_pass") if torch.cuda.is_available() else nullcontext():
         for rep in range(passes):
@@ -608,9 +614,13 @@ def benchmark_prefix_caching():
                     token, state = model.generate_next(state)
                     response.append(token)
                 naive_responses.append(response)
+    
     if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    naive_time = time.time() - start_time
+        end_event.record()
+        end_event.synchronize()
+        naive_time = start_event.elapsed_time(end_event) / 1000  # Convert ms to seconds
+    else:
+        naive_time = time.time() - start_time
     print(f"Naive approach took: {naive_time:.3f} seconds")
     
     # Test with RadixAttention caching
@@ -620,9 +630,13 @@ def benchmark_prefix_caching():
     for token in system_prompt:
         warm_state = model.forward(token, warm_state)
     radix.insert(system_prompt, warm_state.kv_cache)
+    
+    # Use CUDA Events for accurate GPU timing
     if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    start_time = time.time()
+        start_event.record()
+    else:
+        start_time = time.time()
+    
     cached_responses = []
     with nvtx.range("radix_cached_pass") if torch.cuda.is_available() else nullcontext():
         for rep in range(passes):
@@ -654,9 +668,13 @@ def benchmark_prefix_caching():
                     radix.insert(full_sequence, state.kv_cache)
 
                 cached_responses.append(response)
+    
     if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    cached_time = time.time() - start_time
+        end_event.record()
+        end_event.synchronize()
+        cached_time = start_event.elapsed_time(end_event) / 1000  # Convert ms to seconds
+    else:
+        cached_time = time.time() - start_time
     print(f"RadixAttention approach took: {cached_time:.3f} seconds")
     
     speedup = naive_time / cached_time if cached_time > 0 else float('inf')

@@ -14,11 +14,24 @@ N = 1 << 20
 def run(indices: torch.Tensor) -> float:
     table = torch.arange(N, device=indices.device, dtype=torch.float32)
     out = torch.empty_like(table)
-    torch.cuda.synchronize()
-    start = time.time()
-    out = table[indices]
-    torch.cuda.synchronize()
-    return (time.time() - start) * 1_000
+    
+    if indices.device.type == "cuda":
+        # Use CUDA Events for accurate GPU timing
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        start_event.record()
+        out = table[indices]
+        end_event.record()
+        end_event.synchronize()
+        
+        return start_event.elapsed_time(end_event)  # Already in ms
+    else:
+        # CPU timing
+        import time
+        start = time.time()
+        out = table[indices]
+        return (time.time() - start) * 1_000
 
 
 def main() -> None:
