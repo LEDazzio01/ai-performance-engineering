@@ -1,3 +1,4 @@
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 #!/usr/bin/env python
 # dist_allreduce.py
 

@@ -1,3 +1,4 @@
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 # before_dataparallel.py
 import torch
 import torch.nn as nn

@@ -1,3 +1,4 @@
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx
@@ -76,14 +77,14 @@ class TransformerBlock(nn.Module):
         return x
 
 class MyModel(nn.Module):
-    def __init__(self, num_layers=4, dim=256):
+    def __init__(self, num_layers=32, dim=4096):
         super().__init__()
-        self.embedding = nn.Embedding(4096, dim)
+        self.embedding = nn.Embedding(32000, dim)
         self.layers = nn.ModuleList([
-            TransformerBlock(dim) for _ in range(num_layers)
+            TransformerBlock(dim, num_heads=32, ff_dim=11008) for _ in range(num_layers)
         ])
         self.norm = nn.LayerNorm(dim)
-        self.output = nn.Linear(dim, 10000)
+        self.output = nn.Linear(dim, 32000)
         
     def forward(self, x):
         x = self.embedding(x)
@@ -158,7 +159,7 @@ def create_fsdp_model():
     rank, world_size = setup_distributed()
     
     # Create the model
-    model = MyModel(num_layers=4, dim=256)
+    model = MyModel(num_layers=32, dim=4096)
     
     # Mixed precision policy (BFloat16 for compute/reduction)
     mixed_precision_policy = MixedPrecision(

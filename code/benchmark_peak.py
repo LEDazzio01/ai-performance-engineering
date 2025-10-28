@@ -10,6 +10,7 @@ import torch.nn as nn
 import time
 import json
 from datetime import datetime
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 
 def init_environment():
@@ -21,20 +22,28 @@ def init_environment():
     if not torch.cuda.is_available():
         print(" CUDA not available")
         return False
-    
-    prop = torch.cuda.get_device_properties(0)
-    is_blackwell = (prop.major == 10 and prop.minor == 0)
-    
-    print(f"GPU: {prop.name}")
-    print(f"Compute Capability: {prop.major}.{prop.minor}")
-    print(f"SM Count: {prop.multi_processor_count}")
-    print(f"Memory: {prop.total_memory / (1024**3):.1f} GB")
-    print(f"Is Blackwell: {' YES' if is_blackwell else '  NO'}")
+
+    num_gpus = torch.cuda.device_count()
+    print(f"Detected CUDA devices: {num_gpus}")
     print(f"PyTorch: {torch.__version__}")
     print(f"CUDA: {torch.version.cuda}")
+
+    all_blackwell = True
+    for idx in range(num_gpus):
+        prop = torch.cuda.get_device_properties(idx)
+        is_blackwell = (prop.major == 10 and prop.minor == 0)
+        all_blackwell = all_blackwell and is_blackwell
+        mem_gb = prop.total_memory / (1024**3)
+        print(f"- GPU {idx}: {prop.name} | CC {prop.major}.{prop.minor} | "
+              f"SMs {prop.multi_processor_count} | {mem_gb:.1f} GB | "
+              f"{'Blackwell' if is_blackwell else 'Non-Blackwell'}")
+
+    if num_gpus and num_gpus != 8:
+        print(f"⚠ Expected 8 GPUs for 8x B200 validation, found {num_gpus}")
+
     print("=" * 80 + "\n")
-    
-    return is_blackwell
+
+    return all_blackwell and num_gpus == 8
 
 
 def configure_peak_performance():
@@ -87,9 +96,14 @@ def benchmark_hbm3e_bandwidth_peak():
         
         # Use float16 for maximum bandwidth (2-byte elements)
         # Blackwell HBM3e is optimized for FP16/FP8
-        x = torch.randn(size_bytes // 2, device='cuda', dtype=torch.float16, pin_memory=False)
+        num_elements = size_bytes // 2
+        x = torch.empty(num_elements, device="cuda", dtype=torch.float16)
         y = torch.empty_like(x)
-        
+
+        # Touch memory once so pages are resident without incurring RNG costs
+        y.copy_(x)
+        torch.cuda.synchronize()
+
         # Warmup (100 iterations for thermal stability)
         for _ in range(100):
             y.copy_(x)
@@ -350,4 +364,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

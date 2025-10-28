@@ -1,6 +1,7 @@
 // Architecture-specific optimizations for CUDA 13.0
 // Targets Blackwell B200/B300 (sm_100)
 // threshold_naive.cu
+// For CUDA 13 pipeline/TMA usage see ch7/async_prefetch_tma.cu or ch10/tma_2d_pipeline_blackwell.cu
 #include <cuda_runtime.h>
 #include <iostream>
 
@@ -72,31 +73,15 @@ int main() {
     
     printf("Input elements > %.1f: %d\n", threshold, count_input);
     printf("Output elements > 0: %d\n", count_output);
-    printf("Results %s\n", (count_input == count_output) ? "CORRECT" : "INCORRECT");
-    
-    // Cleanup
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    free(h_X);
-    free(h_Y);
-    cudaFree(d_X);
-    cudaFree(d_Y);
-    
-    return 0;
-}
+printf("Results %s\n", (count_input == count_output) ? "CORRECT" : "INCORRECT");
 
-// CUDA 13.0 Stream-ordered Memory Allocation Example
-__global__ void stream_ordered_memory_example() {
-    // Example of stream-ordered memory allocation
-    // This is a placeholder for actual implementation
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your kernel code here
-}
+// Cleanup
+cudaEventDestroy(start);
+cudaEventDestroy(stop);
+free(h_X);
+free(h_Y);
+cudaFree(d_X);
+cudaFree(d_Y);
 
-// CUDA 13.0 TMA (Tensor Memory Accelerator) Example
-__global__ void tma_example() {
-    // Example of TMA usage for Blackwell B200/B300
-    // This is a placeholder for actual implementation
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your TMA code here
+return 0;
 }

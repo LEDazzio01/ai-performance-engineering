@@ -1,5 +1,6 @@
 // Architecture-specific optimizations for CUDA 13.0
 // Targets Blackwell B200/B300 (sm_100)
+// For an end-to-end CUDA 13 pipeline/TMA sample see ch7/async_prefetch_tma.cu or ch10/tma_2d_pipeline_blackwell.cu
 #include <cuda_runtime.h>
 #include <iostream>
 #include <chrono>
@@ -153,11 +154,11 @@ int main() {
     printf("\nResults: %s (max error: %.2e)\n", 
            correct ? "CORRECT" : "INCORRECT", max_error);
     
-    printf("\nProfile with Nsight Compute roofline analysis:\n");
-    printf("ncu --metrics dram__throughput.avg.pct_of_peak_sustained,smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct ./fused_l2norm\n");
-    
-    // Cleanup
-    free(h_a);
+printf("\nProfile with Nsight Compute roofline analysis:\n");
+printf("ncu --metrics dram__throughput.avg.pct_of_peak_sustained,smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct ./fused_l2norm\n");
+
+// Cleanup
+free(h_a);
     free(h_b);
     free(h_out_naive);
     free(h_out_fused);
@@ -166,24 +167,8 @@ int main() {
     cudaFree(d_out_naive);
     cudaFree(d_out_fused);
     cudaFree(d_temp1);
-    cudaFree(d_temp2);
-    cudaFree(d_temp3);
-    
-    return 0;
-}
+cudaFree(d_temp2);
+cudaFree(d_temp3);
 
-// CUDA 13.0 Stream-ordered Memory Allocation Example
-__global__ void stream_ordered_memory_example() {
-    // Example of stream-ordered memory allocation
-    // This is a placeholder for actual implementation
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your kernel code here
-}
-
-// CUDA 13.0 TMA (Tensor Memory Accelerator) Example
-__global__ void tma_example() {
-    // Example of TMA usage for Blackwell B200/B300
-    // This is a placeholder for actual implementation
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your TMA code here
+return 0;
 }

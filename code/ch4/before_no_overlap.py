@@ -8,6 +8,7 @@ Updated to reflect Chapter 4 best practices:
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import socket

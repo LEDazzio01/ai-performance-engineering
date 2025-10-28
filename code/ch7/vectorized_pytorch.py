@@ -1,6 +1,7 @@
 """PyTorch vectorized vs. naive additions benchmark."""
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 

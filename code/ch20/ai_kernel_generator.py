@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 import random
 import subprocess
 import tempfile
@@ -171,7 +172,8 @@ def compare_workflows() -> None:
 
 
 def main() -> None:
-    device = "cuda" if torch.cuda.is_available() else "cpu"\n    print("AI-assisted kernel generator demo")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("AI-assisted kernel generator demo")
     print(f"Device detected: {device}")
     compare_workflows()
 

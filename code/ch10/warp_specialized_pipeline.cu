@@ -111,7 +111,7 @@ int main() {
 
   double max_err = 0.0;
   for (size_t i = 0; i < elems; ++i) {
-    max_err = std::max(max_err, std::abs(h_C[i] - h_ref[i]));
+    max_err = std::max(max_err, (double)std::abs(h_C[i] - h_ref[i]));
   }
   std::printf("Max error: %.6e\n", max_err);
 

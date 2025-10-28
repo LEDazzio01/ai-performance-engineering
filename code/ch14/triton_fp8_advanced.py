@@ -20,6 +20,7 @@ Performance:
 
 Author: Blackwell Optimization Project
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import triton
@@ -525,4 +526,3 @@ if __name__ == "__main__":
     print("- Native FP8 support (float8e4m3fn, float8e5m2)")
     print("- Blackwell tcgen05 auto-selection")
     print("- HBM3e-optimized access patterns")
-

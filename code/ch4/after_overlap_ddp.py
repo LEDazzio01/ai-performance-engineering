@@ -8,6 +8,7 @@ This version aligns with Chapter 4 guidance:
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import torch

@@ -5,6 +5,7 @@ Test script to validate Blackwell optimizations maintain correctness.
 This script verifies that all optimizations produce numerically correct results
 compared to PyTorch baseline implementations.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import sys
@@ -144,4 +145,3 @@ else:
     sys.exit(1)
 
 print("=" * 70)
-

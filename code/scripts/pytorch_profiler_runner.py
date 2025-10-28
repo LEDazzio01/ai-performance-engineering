@@ -44,7 +44,8 @@ def _set_env(output_dir: Path) -> None:
 
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
     os.environ.setdefault("CUDA_CACHE_DISABLE", "0")
-    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128,expandable_segments:True")
+    os.environ.setdefault("PYTORCH_ALLOC_CONF", "max_split_size_mb:128,expandable_segments:True")
+    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
     os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
 
 

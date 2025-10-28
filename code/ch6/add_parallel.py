@@ -1,4 +1,5 @@
 """Vectorized PyTorch addition (correct GPU utilization)."""
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 import torch

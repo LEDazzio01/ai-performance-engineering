@@ -7,14 +7,22 @@ types that work with Blackwell's Tensor Cores. Requires PyTorch 2.9+ and CUDA 13
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
+
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.amp import autocast
 import time
-from typing import Optional, Tuple
-from dataclasses import dataclass
+
+try:
+    import torch._dynamo as _dynamo
+except (ImportError, AttributeError):  # pragma: no cover - older PyTorch
+    _dynamo = None
 
 # Check FP8 availability
 try:
@@ -41,32 +49,33 @@ class FP8ScalingManager:
     
     def __init__(self, config: FP8Config):
         self.config = config
-        self.amax_history = []
+        self.amax_history = deque(maxlen=config.amax_history_len)
         self.scale = torch.tensor(1.0, dtype=torch.float32)
         
     def update_scale(self, tensor: torch.Tensor) -> torch.Tensor:
         """Update scaling factor based on tensor statistics."""
         if not self.config.enabled or not FP8_AVAILABLE:
-            return self.scale
-            
-        # Compute absolute maximum
-        amax = tensor.abs().max().item()
-        self.amax_history.append(amax)
+            return self.scale.to(tensor.device)
         
-        # Keep history bounded
-        if len(self.amax_history) > self.config.amax_history_len:
-            self.amax_history.pop(0)
-        
-        # Compute scale (FP8 E4M3 range is ~[-448, 448])
-        if self.config.amax_compute_algo == "max":
-            amax_val = max(self.amax_history)
-        else:  # most_recent
-            amax_val = self.amax_history[-1]
-        
-        # Scale to prevent overflow: target 80% of FP8 range
         fp8_max = 448.0  # E4M3 max
-        self.scale = torch.tensor(amax_val / (fp8_max * 0.8), dtype=torch.float32)
+        device = tensor.device
+        amax = tensor.detach().abs().amax()
+        scale = amax / (fp8_max * 0.8)
         
+        if _dynamo is not None and _dynamo.is_compiling():  # pragma: no branch - tracing guard
+            scale = torch.clamp(scale.to(torch.float32), min=1e-6)
+            self.scale = scale
+            return self.scale
+        
+        amax_val = float(amax)
+        self.amax_history.append(amax_val)
+        if self.config.amax_compute_algo == "max":
+            tracked = max(self.amax_history) if self.amax_history else amax_val
+        else:
+            tracked = self.amax_history[-1] if self.amax_history else amax_val
+        
+        scale_val = max(tracked / (fp8_max * 0.8), 1e-6)
+        self.scale = torch.tensor(scale_val, dtype=torch.float32, device=device)
         return self.scale
     
     def quantize_fp8(self, tensor: torch.Tensor, use_e4m3: bool = True) -> torch.Tensor:
@@ -77,7 +86,7 @@ class FP8ScalingManager:
         dtype = FP8_E4M3 if use_e4m3 else FP8_E5M2
         
         # Update scale based on current tensor
-        scale = self.update_scale(tensor)
+        scale = self.update_scale(tensor).to(tensor.device)
         
         # Scale and quantize
         scaled = tensor / scale
@@ -117,8 +126,10 @@ class FP8Linear(nn.Module):
         x_fp8, x_scale = self.scaling_manager.quantize_fp8(x, use_e4m3=True)
         w_fp8, w_scale = self.scaling_manager.quantize_fp8(self.weight, use_e4m3=True)
         
-        # Use torch._scaled_mm if available (native FP8 GEMM on Blackwell)
-        if hasattr(torch, '_scaled_mm'):
+        # Use torch._scaled_mm for inference-only paths (no grad required)
+        use_scaled_mm = hasattr(torch, '_scaled_mm') and not torch.is_grad_enabled()
+        
+        if use_scaled_mm:
             # Native FP8 matrix multiplication on Blackwell
             # Reshape for matmul: x_fp8 [..., in_features] @ w_fp8.T [out_features, in_features]
             x_shape = x_fp8.shape
@@ -126,18 +137,20 @@ class FP8Linear(nn.Module):
             
             try:
                 # _scaled_mm performs: (x_fp8 @ w_fp8.T) * scale
-                output_fp8, out_scale = torch._scaled_mm(
+                result = torch._scaled_mm(
                     x_2d, w_fp8.t(),
                     scale_a=x_scale, scale_b=w_scale,
                     out_dtype=x.dtype
                 )
-                output = output_fp8.reshape(*x_shape[:-1], -1)
-            except:
-                # Fallback if _scaled_mm fails
-                x_compute = x_fp8.to(x.dtype) * x_scale
-                w_compute = w_fp8.to(x.dtype) * w_scale
-                output = F.linear(x_compute, w_compute, None)
-        else:
+                if isinstance(result, tuple):
+                    output_fp = result[0]
+                else:
+                    output_fp = result
+                output = output_fp.reshape(*x_shape[:-1], -1)
+            except Exception:
+                use_scaled_mm = False
+        
+        if not use_scaled_mm:
             # Fallback: manual FP8 emulation
             x_compute = x_fp8.to(x.dtype) * x_scale
             w_compute = w_fp8.to(x.dtype) * w_scale
@@ -370,4 +383,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

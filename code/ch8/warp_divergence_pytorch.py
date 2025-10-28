@@ -6,6 +6,7 @@ fusing conditionals with torch.compile.
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 import torch

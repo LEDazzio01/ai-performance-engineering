@@ -1,6 +1,7 @@
 """FlexDecoding showcase aligned with PyTorch 2.9 (CUDA 13.0)."""
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import math
 import time

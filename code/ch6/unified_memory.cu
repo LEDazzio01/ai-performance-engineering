@@ -24,14 +24,22 @@ int main() {
 
   int device = 0;
   cudaGetDevice(&device);
-  cudaMemPrefetchAsync(data, bytes, device);
+  
+  // CUDA 13.0 API: cudaMemPrefetchAsync requires cudaMemLocation struct
+  struct cudaMemLocation gpuLoc;
+  gpuLoc.type = cudaMemLocationTypeDevice;
+  gpuLoc.id = device;
+  cudaMemPrefetchAsync(data, bytes, gpuLoc, 0, 0);
 
   int block = 256;
   int grid = (N + block - 1) / block;
   kernel<<<grid, block>>>(data, N);
   cudaDeviceSynchronize();
 
-  cudaMemPrefetchAsync(data, bytes, cudaCpuDeviceId);
+  struct cudaMemLocation cpuLoc;
+  cpuLoc.type = cudaMemLocationTypeHost;
+  cpuLoc.id = 0;
+  cudaMemPrefetchAsync(data, bytes, cpuLoc, 0, 0);
   cudaDeviceSynchronize();
 
   printf("First value: %.1f\n", data[0]);

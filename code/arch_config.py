@@ -134,13 +134,20 @@ class ArchitectureConfig:
         # Standard CUDA configurations
         os.environ.setdefault("TORCH_CUDNN_V8_API_ENABLED", "1")
         os.environ.setdefault("TORCH_CUDNN_V8_API_DISABLED", "0")
-        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128,expandable_segments:True")
+        if "PYTORCH_ALLOC_CONF" not in os.environ:
+            legacy_alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+            os.environ["PYTORCH_ALLOC_CONF"] = legacy_alloc or "max_split_size_mb:128,expandable_segments:True"
+        os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         
         # PyTorch 2.9: Enable TF32 for Blackwell (improves FP32 matmul performance)
-        # NEW PyTorch 2.9 API (no warnings!)
-        torch.set_float32_matmul_precision('high')
-        torch.backends.cudnn.conv.fp32_precision = 'tf32'
-        torch.backends.cuda.matmul.fp32_precision = 'high'
+        if hasattr(torch.backends.cuda, "matmul"):
+            matmul_backend = torch.backends.cuda.matmul
+            if hasattr(matmul_backend, "fp32_precision"):
+                matmul_backend.fp32_precision = "tf32"
+            elif hasattr(matmul_backend, "allow_tf32"):
+                matmul_backend.allow_tf32 = True
+        if hasattr(torch.backends.cudnn, "conv") and hasattr(torch.backends.cudnn.conv, "fp32_precision"):
+            torch.backends.cudnn.conv.fp32_precision = "tf32"
 
     def print_info(self) -> None:
         cfg = self.config
@@ -160,7 +167,98 @@ class ArchitectureConfig:
         if cfg['profiling_tools']:
             print(f"Profiling Tools: {', '.join(cfg['profiling_tools'])}")
 
+_OPTIMIZATIONS_APPLIED = False
+_SYMMETRIC_SHIM_INSTALLED = False
+
+
+def _install_symmetric_memory_shim() -> None:
+    """Bridge PyTorch symmetric memory APIs when they are hidden under experimental modules."""
+    global _SYMMETRIC_SHIM_INSTALLED
+    if _SYMMETRIC_SHIM_INSTALLED:
+        return
+
+    try:
+        import torch.distributed as dist
+        import torch.distributed.nn  # noqa: F401 - ensures dist.nn is registered
+    except ImportError:
+        return
+
+    if hasattr(dist.nn, "SymmetricMemory"):
+        _SYMMETRIC_SHIM_INSTALLED = True
+        return
+
+    try:
+        import torch.distributed._symmetric_memory as _symm
+        import torch.distributed.distributed_c10d as c10d
+        from torch._C._distributed_c10d import ProcessGroup as _ProcessGroup  # type: ignore
+    except ImportError:
+        return
+
+    if not _symm.is_nvshmem_available():
+        return
+
+    class _SymmetricMemoryWrapper:
+        """Minimal wrapper that mirrors torch.distributed.nn.SymmetricMemory semantics."""
+
+        __slots__ = ("buffer", "_group", "_handle")
+
+        def __init__(self, tensor: torch.Tensor, group=None):
+            if group is None:
+                group = dist.group.WORLD
+
+            self._group = group
+
+            try:
+                backend = _symm.get_backend(tensor.device)
+            except Exception:
+                backend = None
+            if backend != "NVSHMEM":
+                try:
+                    _symm.set_backend("NVSHMEM")
+                except Exception:
+                    pass
+
+            self.buffer = _symm.empty(
+                tensor.shape,
+                dtype=tensor.dtype,
+                device=tensor.device,
+            )
+            try:
+                if tensor.data_ptr() != self.buffer.data_ptr():
+                    self.buffer.copy_(tensor)
+            except RuntimeError:
+                pass
+
+            self._handle = _symm.rendezvous(self.buffer, group)
+
+        def get_buffer(self, rank: int):
+            return self._handle.get_buffer(rank)
+
+        def barrier(self):
+            dist.barrier(group=self._resolve_group())
+
+        def _resolve_group(self):
+            if isinstance(self._group, _ProcessGroup):
+                return self._group
+            if isinstance(self._group, str):
+                return c10d._resolve_process_group(self._group)
+            return dist.group.WORLD
+
+        def __getattr__(self, name: str):
+            return getattr(self._handle, name)
+
+    dist.nn.SymmetricMemory = _SymmetricMemoryWrapper  # type: ignore[attr-defined]
+    _SYMMETRIC_SHIM_INSTALLED = True
+
+
 def configure_optimizations() -> None:
+    global _OPTIMIZATIONS_APPLIED
+    if _OPTIMIZATIONS_APPLIED:
+        return
     ArchitectureConfig().configure_pytorch_optimizations()
+    _install_symmetric_memory_shim()
+    _OPTIMIZATIONS_APPLIED = True
+
 
 arch_config = ArchitectureConfig()
+configure_optimizations()

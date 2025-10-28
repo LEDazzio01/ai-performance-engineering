@@ -21,7 +21,7 @@ all: $(CUDA_TARGETS)
 # Build individual targets
 $(CUDA_TARGETS): %: %.cu
 	@echo "Compiling $@..."
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
 
 # Architecture-specific targets
 blackwell: ARCH=sm_100
@@ -74,4 +74,4 @@ clean:
 	rm -f $(CUDA_TARGETS) *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
 
-.PHONY: all blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all clean $(CUDA_TARGETS)
+.PHONY: all blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all clean

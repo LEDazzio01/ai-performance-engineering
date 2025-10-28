@@ -1,0 +1,22 @@
+{
+  "model": "Synthetic-MoE-Benchmark",
+  "config": {
+    "layers": 8,
+    "batch": 32,
+    "seq": 2048
+  },
+  "parameters": 7271432192,
+  "eager_time_ms": 701.906606900593,
+  "compiled_time_ms": 701.906606900593,
+  "speedup": 1.0,
+  "eager_throughput": 93368.54697719277,
+  "compiled_throughput": 93368.54697719277,
+  "fp8_eager_time_ms": null,
+  "fp8_eager_throughput": null,
+  "fp8_compiled_time_ms": null,
+  "fp8_compiled_throughput": null,
+  "fp8_speedup": null,
+  "fp8_compiled_speedup": null,
+  "fp8_compiled_gain": null,
+  "projected_full_model_throughput": 62245.69798479518
+}

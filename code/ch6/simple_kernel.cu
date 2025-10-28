@@ -1,7 +1,7 @@
 // Architecture-specific optimizations for CUDA 13.0
 // Targets Blackwell B200/B300 (sm_100)
 // simple_kernel.cu
-// Improved version with dynamic block/grid calculation
+// Improved version with dynamic block/grid calculation + stream-ordered allocation
 
 #include <cuda_runtime.h>
 #include <stdio.h>
@@ -34,12 +34,14 @@ int main() {
         h_input[i] = 1.0f;
     }
     
-    // Allocate device memory for input on the device (d_)
-    float* d_input = nullptr;
-    cudaMalloc(&d_input, N * sizeof(float));
+    // Stream-ordered memory pool demo (CUDA 13 best practice)
+    cudaStream_t stream;
+    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
     
-    // Copy data from the host to the device using cudaMemcpyHostToDevice
-    cudaMemcpy(d_input, h_input, N * sizeof(float), cudaMemcpyHostToDevice);
+    float* d_input = nullptr;
+    cudaMallocAsync(&d_input, N * sizeof(float), stream);
+    
+    cudaMemcpyAsync(d_input, h_input, N * sizeof(float), cudaMemcpyHostToDevice, stream);
     
     // 2) Tune launch parameters
     const int threadsPerBlock = 256; // multiple of 32
@@ -48,37 +50,20 @@ int main() {
     // Launch myKernel across blocksPerGrid number of blocks
     // Each block has threadsPerBlock number of threads
     // Pass a reference to the d_input device array
-    myKernel<<<blocksPerGrid, threadsPerBlock>>>(d_input, N);
+    myKernel<<<blocksPerGrid, threadsPerBlock, 0, stream>>>(d_input, N);
     
-    // Wait for the kernel to finish running on the device
-    cudaDeviceSynchronize();
-    
-    // When finished, copy the results (stored in d_input) from the device back to the host (stored in h_input) using cudaMemcpyDeviceToHost
-    cudaMemcpy(h_input, d_input, N * sizeof(float), cudaMemcpyDeviceToHost);
+    // When finished, copy the results (stored in d_input) from the device back to the host (stored in h_input)
+    cudaMemcpyAsync(h_input, d_input, N * sizeof(float), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
     
     // Verify results
     printf("First 5 values after doubling: %.1f %.1f %.1f %.1f %.1f\n", 
            h_input[0], h_input[1], h_input[2], h_input[3], h_input[4]);
     
     // Cleanup: Free memory on the device and host
-    cudaFree(d_input);
+    cudaFreeAsync(d_input, stream);
+    cudaStreamDestroy(stream);
     cudaFreeHost(h_input);
     
     return 0; // return 0 for success!
-}
-
-// CUDA 13.0 Stream-ordered Memory Allocation Example
-__global__ void stream_ordered_memory_example() {
-    // Example of stream-ordered memory allocation
-    // This is a placeholder for actual implementation
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your kernel code here
-}
-
-// CUDA 13.0 TMA (Tensor Memory Accelerator) Example
-__global__ void tma_example() {
-    // Example of TMA usage for Blackwell B200/B300
-    // This is a placeholder for actual implementation
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your TMA code here
 }

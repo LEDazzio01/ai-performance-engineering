@@ -20,12 +20,15 @@ Requirements:
 Author: Blackwell Optimization Project
 """
 
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 import torch
 import torch.profiler as profiler
 import os
 import subprocess
+import csv
+import re
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 # ============================================================================
 # 1. Nsight Systems Profiling
@@ -141,21 +144,194 @@ class NsightSystemsProfiler:
         print("\nVisualization:")
         print(f"  Open in Nsight Systems: nsys-ui {report_path}")
 
+        try:
+            NsightSystemsProfiler.summarize_report(report_path, print_summary=True)
+        except Exception as exc:
+            print(f"\n[warning] Unable to parse Nsight Systems report automatically: {exc}")
+    
+    # ------------------------------------------------------------------
+    # Automated stats extraction
+    # ------------------------------------------------------------------
+    @staticmethod
+    def summarize_report(
+        report_path: str,
+        *,
+        kernel_regex: Optional[str] = None,
+        top_k: int = 5,
+        print_summary: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Parse an .nsys-rep file with `nsys stats` and optionally filter kernels.
+
+        Args:
+            report_path: Path to the `.nsys-rep` file (or `.qdrep`).
+            kernel_regex: Optional regular expression to filter kernel names.
+            top_k: Number of kernels to report (sorted by Time %).
+            print_summary: If True, pretty-print results.
+
+        Returns:
+            Dictionary with top kernels and raw summary tables.
+        """
+        report = Path(report_path)
+        if not report.exists():
+            raise FileNotFoundError(f"Nsight Systems report not found: {report_path}")
+
+        summary_rows = NsightSystemsProfiler._run_nsys_stats(report, "summary")
+        kernel_rows = NsightSystemsProfiler._run_nsys_stats(report, "cuda_gpu_kern_sum")
+
+        kernels = NsightSystemsProfiler._filter_and_rank_kernels(
+            kernel_rows, kernel_regex, top_k
+        )
+
+        result = {
+            "report": str(report.resolve()),
+            "summary": summary_rows,
+            "kernels": kernels,
+        }
+
+        if print_summary:
+            NsightSystemsProfiler._print_nsys_summary(result, kernel_regex)
+
+        return result
+
+    @staticmethod
+    def _run_nsys_stats(report: Path, section: str) -> List[Dict[str, str]]:
+        """
+        Execute `nsys stats` and parse CSV output for the requested section.
+        """
+        cmd = [
+            "nsys",
+            "stats",
+            "--format",
+            "csv",
+            "--report",
+            section,
+            "--force-export",
+            "true",
+            str(report),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to run {' '.join(cmd)}:\n{exc.stderr.strip()}"
+            ) from exc
+
+        csv_data: List[Dict[str, str]] = []
+        headers: Optional[List[str]] = None
+        for raw_line in proc.stdout.splitlines():
+            stripped = raw_line.strip()
+            if not stripped or raw_line.startswith("#"):
+                headers = None
+                continue
+            if stripped.startswith("NOTICE") or stripped.startswith("Processing") or stripped.startswith("Generating"):
+                continue
+            row = next(csv.reader([raw_line]))
+            if len(row) <= 1:
+                headers = None
+                continue
+            if headers is None:
+                if not (row[0].startswith("Time") or row[0].startswith("Metric")):
+                    continue
+                headers = row
+                continue
+            if len(row) < len(headers):
+                row.extend([""] * (len(headers) - len(row)))
+            elif len(row) > len(headers):
+                row = row[: len(headers)]
+            csv_data.append({headers[i]: row[i] for i in range(len(headers))})
+        return csv_data
+
+    @staticmethod
+    def _filter_and_rank_kernels(
+        kernel_rows: List[Dict[str, str]],
+        kernel_regex: Optional[str],
+        top_k: int,
+    ) -> List[Dict[str, str]]:
+        """
+        Filter kernel rows by regex and rank by Time (%).
+        """
+        rows = kernel_rows
+        if kernel_regex:
+            pattern = re.compile(kernel_regex)
+            rows = [row for row in rows if pattern.search(row.get("Name", ""))]
+
+        def time_percent(row: Dict[str, str]) -> float:
+            value = row.get("Time (%)") or row.get("Time (%) [sum]")
+            try:
+                return float(value.replace('"', "").strip().rstrip("%"))
+            except (AttributeError, TypeError, ValueError):
+                return 0.0
+
+        ranked = sorted(rows, key=time_percent, reverse=True)
+        return ranked[:top_k]
+
+    @staticmethod
+    def _print_nsys_summary(summary: Dict[str, Any], kernel_regex: Optional[str]) -> None:
+        """
+        Pretty-print the parsed Nsight Systems summary.
+        """
+        print(f"\n=== Nsight Systems Summary: {summary['report']} ===")
+
+        total_time = None
+        for row in summary["summary"]:
+            if "Elapsed Time (ns)" in row:
+                total_time = float(row["Elapsed Time (ns)"])
+                break
+        if total_time:
+            print(f"Total captured time: {total_time / 1e6:.3f} ms")
+
+        print("\nTop CUDA Kernels:")
+        if kernel_regex:
+            print(f"  Filter: {kernel_regex}")
+        kernels = summary["kernels"]
+        if not kernels:
+            print("  (No kernel entries matched filter)")
+            return
+        for idx, row in enumerate(kernels, 1):
+            time_pct = (row.get("Time (%)") or row.get("Time (%) [sum]", "0")).replace('"', "")
+            time_ns = (
+                row.get("Total Time (ns)")
+                or row.get("Time (ns)")
+                or row.get("Total Time (ns) [sum]")
+                or row.get("Time (ns) [sum]", "0")
+            ).replace('"', "")
+            name = row.get("Name", "Unknown")
+            try:
+                time_ms = float(time_ns) / 1e6
+            except (TypeError, ValueError):
+                time_ms = 0.0
+            try:
+                pct = float(time_pct)
+            except (TypeError, ValueError):
+                pct = 0.0
+            print(f"  {idx:>2}. {name}")
+            print(f"       Time: {time_ms:.3f} ms   Share: {pct:.2f}%")
+
 
 # ============================================================================
 # 2. Nsight Compute Profiling
 # ============================================================================
 
 class NsightComputeProfiler:
-    """
-    Nsight Compute kernel-level profiling
-    
-    Features:
-    - Detailed kernel metrics
-    - Roofline analysis
-    - Memory access patterns
-    - Warp efficiency
-    - Tensor Core utilization
+    """Helpers for Nsight Compute profiling on Blackwell SM 10.0.
+
+    Focus areas:
+    - Core SM throughput (`sm__throughput.avg.pct_of_peak_sustained_elapsed`)
+    - HBM3e bandwidth (`dram__throughput.avg.pct_of_peak_sustained_elapsed`)
+    - tcgen05 tensor core utilization (`sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed`)
+    - L2 cache efficiency (`l2_cache_hit_rate`)
+    - Distributed shared memory and cluster launch metrics
+
+    Usage:
+        profiler = NsightComputeProfiler(kernel_name="my_kernel")
+        profiler.profile_kernel(script_path="train.py")
     """
     
     @staticmethod
@@ -414,6 +590,416 @@ def print_quick_reference():
 
 
 # ============================================================================
+# 6. Blackwell SM 10.0 Specific Metrics Guide
+# ============================================================================
+
+class BlackwellMetricsGuide:
+    """
+    Comprehensive guide to Blackwell SM 10.0 specific metrics in Nsight Compute.
+    
+    This class provides detailed information about Blackwell-specific counters,
+    metrics, and best practices for profiling on B200/B300 GPUs.
+    """
+    
+    @staticmethod
+    def get_essential_blackwell_metrics() -> List[str]:
+        """
+        Returns list of essential Nsight Compute metrics for Blackwell SM 10.0.
+        
+        These metrics cover:
+        - HBM3e memory performance
+        - tcgen05 tensor core utilization
+        - SM 10.0 compute throughput
+        - L2 cache efficiency
+        - Distributed Shared Memory (DSMEM) usage
+        """
+        return [
+            # Core performance
+            "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+            "sm__cycles_active.avg.pct_of_peak_sustained_elapsed",
+            "gpu__time_duration.sum",
+            "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+            
+            # HBM3e memory (7.8 TB/s peak)
+            "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+            "dram_read_throughput",
+            "dram_write_throughput",
+            "dram_read_bytes",
+            "dram_write_bytes",
+            "lts__t_sectors_op_read.sum",  # L2 read sectors (128B sectors for HBM3e)
+            "lts__t_sectors_op_write.sum",  # L2 write sectors
+            
+            # Blackwell Tensor Cores (tcgen05.mma)
+            "sm__inst_executed_pipe_tensor_op.sum",  # tcgen05 instructions
+            "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",
+            "smsp__inst_executed_pipe_tensor_op_hmma.sum",  # Half-precision ops
+            "smsp__inst_executed_pipe_tensor_op_qmma.sum",  # FP8/FP6/FP4 ops
+            "sm__mio_pq_read_cycles_active.avg.pct_of_peak_sustained_elapsed",
+            
+            # Cache efficiency (critical for HBM3e)
+            "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",  # L1 global loads
+            "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",  # L1 global stores
+            "l2_cache_hit_rate",
+            "l1tex__data_bank_conflicts_pipe_lsu.sum",
+            
+            # Warp efficiency
+            "smsp__average_warps_issue_stalled.pct",
+            "smsp__warps_launched.sum",
+            "smsp__thread_inst_executed_per_inst_executed.ratio",
+            
+            # Occupancy
+            "sm__warps_active.avg.pct_of_peak_sustained_active",
+            "achieved_occupancy",
+            
+            # Thread Block Clusters (8 CTAs on Blackwell)
+            "sm__ctas_launched.sum",
+            "sm__maximum_warps_avg_per_active_cycle",
+        ]
+    
+    @staticmethod
+    def print_metric_guide():
+        """Print detailed guide for interpreting Blackwell metrics."""
+        print("=" * 80)
+        print("Blackwell SM 10.0 Metrics Interpretation Guide")
+        print("=" * 80)
+        
+        print("\n📊 HBM3e Memory Metrics (7.8 TB/s peak, 178 GB capacity)")
+        print("-" * 80)
+        print("Metric: dram__throughput.avg.pct_of_peak_sustained_elapsed")
+        print("  Target: >90% for memory-bound kernels")
+        print("  >95%: Excellent - hitting HBM3e peak")
+        print("  80-90%: Good - near peak bandwidth")
+        print("  <80%: Check memory access patterns\n")
+        
+        print("Metric: lts__t_sectors_op_read.sum / lts__t_sectors_op_write.sum")
+        print("  Purpose: Track L2 sector accesses (128-byte sectors for HBM3e)")
+        print("  Optimal: Aligned to 128-byte cache lines")
+        print("  Check: (dram_bytes / l2_sectors) should be ~128 bytes\n")
+        
+        print("Memory Access Pattern Analysis:")
+        print("  256-byte bursts: Optimal for HBM3e (2x 128B cache lines)")
+        print("  float4 vectorization: 16 bytes per load")
+        print("  Cache streaming (.cs): Use for write-only patterns\n")
+        
+        print("\n⚡ tcgen05 Tensor Core Metrics (Blackwell 5th-gen)")
+        print("-" * 80)
+        print("Metric: sm__inst_executed_pipe_tensor_op.sum")
+        print("  Purpose: Count tcgen05.mma instructions (NOT WGMMA!)")
+        print("  >1M instructions/ms: Good tensor core usage")
+        print("  Compare with total instructions for TC utilization ratio\n")
+        
+        print("Metric: sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed")
+        print("  Target: >70% for matrix operations")
+        print("  >80%: Excellent - tensor cores fully utilized")
+        print("  50-70%: Good - room for improvement")
+        print("  <50%: Check tile sizes and data layout\n")
+        
+        print("Metric: smsp__inst_executed_pipe_tensor_op_qmma.sum")
+        print("  Purpose: FP8/FP6/FP4 quantized tensor ops")
+        print("  Blackwell specific: Native FP6/FP4 support")
+        print("  FP8: ~1200 TFLOPS, FP6: ~1400 TFLOPS, FP4: ~1600 TFLOPS\n")
+        
+        print("\n🔧 SM 10.0 Compute Metrics (148 SMs on B200)")
+        print("-" * 80)
+        print("Metric: sm__throughput.avg.pct_of_peak_sustained_elapsed")
+        print("  Target: >80% for compute-bound kernels")
+        print("  148 SMs on B200: Massive parallelism")
+        print("  Check: Launch enough blocks to saturate all SMs\n")
+        
+        print("Metric: achieved_occupancy")
+        print("  Target: >0.5 (50%)")
+        print("  Blackwell: 64 warps per SM (max)")
+        print("  Balance: Occupancy vs register/shared memory usage\n")
+        
+        print("\n💾 Cache Hierarchy (Blackwell)")
+        print("-" * 80)
+        print("L1 Cache: 256 KB per SM (shared with SMEM)")
+        print("  Metric: l1tex__data_bank_conflicts_pipe_lsu.sum")
+        print("  Target: 0 bank conflicts")
+        print("  Optimize: Pad shared memory to avoid conflicts\n")
+        
+        print("L2 Cache: ~100 MB total")
+        print("  Metric: l2_cache_hit_rate")
+        print("  Target: >80% for reused data")
+        print("  128-byte cache lines optimized for HBM3e")
+        print("  L2 promotion: Use CU_TENSOR_MAP_L2_PROMOTION_L2_128B\n")
+        
+        print("\n🎯 Performance Targets for Blackwell B200")
+        print("-" * 80)
+        print("FP8 Tensor Cores:  ~1200 TFLOPS")
+        print("FP16 Tensor Cores: ~600 TFLOPS")
+        print("FP32:              ~80 TFLOPS")
+        print("HBM3e Bandwidth:   7.8 TB/s peak (aim for >7 TB/s)")
+        print("NVLink 5.0:        1800 GB/s per GPU pair")
+        print("SM Count:          148 SMs")
+        print("Max Occupancy:     64 warps/SM * 148 SMs = 9,472 warps")
+        
+        print("\n" + "=" * 80)
+
+
+# ============================================================================
+# 7. HBM3e Memory Pattern Analysis
+# ============================================================================
+
+class HBM3eMemoryAnalyzer:
+    """
+    Analyzer for HBM3e memory access patterns on Blackwell.
+    
+    HBM3e Characteristics:
+    - 7.8 TB/s peak bandwidth
+    - 128-byte cache lines
+    - 256-byte optimal burst size
+    - 178 GB capacity on B200
+    - 16 memory channels
+    """
+    
+    @staticmethod
+    def analyze_memory_pattern(
+        dram_read_throughput: float,
+        dram_write_throughput: float,
+        l2_read_sectors: int,
+        l2_write_sectors: int,
+        kernel_duration_ns: float,
+    ) -> dict:
+        """
+        Analyze HBM3e memory access pattern from Nsight Compute metrics.
+        
+        Args:
+            dram_read_throughput: GB/s
+            dram_write_throughput: GB/s
+            l2_read_sectors: Number of L2 sectors read (128B each)
+            l2_write_sectors: Number of L2 sectors written (128B each)
+            kernel_duration_ns: Kernel duration in nanoseconds
+            
+        Returns:
+            Dictionary with analysis results
+        """
+        # Constants
+        HBM3E_PEAK_BW = 7800  # GB/s
+        SECTOR_SIZE = 128  # bytes
+        OPTIMAL_BURST = 256  # bytes
+        
+        # Compute metrics
+        total_throughput = dram_read_throughput + dram_write_throughput
+        bw_utilization = (total_throughput / HBM3E_PEAK_BW) * 100
+        
+        # Bytes transferred
+        dram_read_bytes = dram_read_throughput * (kernel_duration_ns / 1e9)
+        dram_write_bytes = dram_write_throughput * (kernel_duration_ns / 1e9)
+        total_bytes = dram_read_bytes + dram_write_bytes
+        
+        # L2 sector analysis
+        l2_read_bytes = l2_read_sectors * SECTOR_SIZE
+        l2_write_bytes = l2_write_sectors * SECTOR_SIZE
+        
+        # Alignment analysis
+        avg_bytes_per_read_sector = dram_read_bytes / l2_read_sectors if l2_read_sectors > 0 else 0
+        avg_bytes_per_write_sector = dram_write_bytes / l2_write_sectors if l2_write_sectors > 0 else 0
+        
+        # Burst efficiency (how close to 256-byte optimal burst)
+        read_burst_efficiency = min(avg_bytes_per_read_sector / OPTIMAL_BURST, 1.0) * 100 if avg_bytes_per_read_sector > 0 else 0
+        write_burst_efficiency = min(avg_bytes_per_write_sector / OPTIMAL_BURST, 1.0) * 100 if avg_bytes_per_write_sector > 0 else 0
+        
+        # Classification
+        if bw_utilization > 90:
+            classification = "Excellent - Near HBM3e peak"
+        elif bw_utilization > 70:
+            classification = "Good - High HBM3e utilization"
+        elif bw_utilization > 50:
+            classification = "Moderate - Room for improvement"
+        else:
+            classification = "Low - Memory pattern issues likely"
+        
+        analysis = {
+            'bandwidth_utilization_pct': bw_utilization,
+            'total_throughput_gbps': total_throughput,
+            'dram_read_throughput_gbps': dram_read_throughput,
+            'dram_write_throughput_gbps': dram_write_throughput,
+            'total_bytes': total_bytes,
+            'avg_bytes_per_read_sector': avg_bytes_per_read_sector,
+            'avg_bytes_per_write_sector': avg_bytes_per_write_sector,
+            'read_burst_efficiency_pct': read_burst_efficiency,
+            'write_burst_efficiency_pct': write_burst_efficiency,
+            'classification': classification,
+            'aligned_to_128b': avg_bytes_per_read_sector >= 128 and avg_bytes_per_write_sector >= 128,
+            'optimal_256b_bursts': read_burst_efficiency > 90 and write_burst_efficiency > 90,
+        }
+        
+        return analysis
+    
+    @staticmethod
+    def print_optimization_recommendations(analysis: dict):
+        """Print optimization recommendations based on analysis."""
+        print("\n" + "=" * 80)
+        print("HBM3e Memory Optimization Recommendations")
+        print("=" * 80)
+        
+        bw_util = analysis['bandwidth_utilization_pct']
+        
+        print(f"\nCurrent Status: {analysis['classification']}")
+        print(f"Bandwidth Utilization: {bw_util:.1f}% of 7.8 TB/s peak")
+        
+        if bw_util < 90:
+            print("\n📈 Recommendations to improve HBM3e bandwidth:")
+            
+            if not analysis['aligned_to_128b']:
+                print("\n1. ❌ MEMORY ALIGNMENT ISSUE")
+                print("   Problem: Not aligned to 128-byte cache lines")
+                print("   Solution:")
+                print("     - Use float4 (16B) or larger vectorized loads")
+                print("     - Align data structures to 128-byte boundaries")
+                print("     - Use __align__(128) for key data structures")
+                print("   Example:")
+                print("     __align__(128) float data[N];")
+                print("     float4* data4 = reinterpret_cast<float4*>(data);")
+            
+            if not analysis['optimal_256b_bursts']:
+                print("\n2. ⚠️  BURST SIZE NOT OPTIMAL")
+                print("   Problem: Not achieving 256-byte optimal bursts")
+                print("   Solution:")
+                print("     - Process 8x float4 (256 bytes) per thread")
+                print("     - Use cache streaming modifiers (.cs)")
+                print("     - Unroll loops for burst access")
+                print("   Example:")
+                print("     #pragma unroll")
+                print("     for (int i = 0; i < 8; i++) {")
+                print("         data[i] = __ldcs(&src[tid * 8 + i]);  // 256B burst")
+                print("     }")
+            
+            if bw_util < 50:
+                print("\n3. 🔴 LOW BANDWIDTH UTILIZATION")
+                print("   Possible causes:")
+                print("     - Insufficient parallelism (too few threads)")
+                print("     - Memory access stride issues")
+                print("     - Waiting for compute (not memory-bound)")
+                print("   Solutions:")
+                print("     - Increase grid size to saturate 148 SMs")
+                print("     - Check occupancy (target >50%)")
+                print("     - Profile to identify bottleneck")
+        else:
+            print("\n✅ Excellent HBM3e utilization!")
+            print("   Memory access pattern is well-optimized for Blackwell")
+        
+        print("\n" + "=" * 80)
+    
+    @staticmethod
+    def print_hbm3e_best_practices():
+        """Print HBM3e optimization best practices."""
+        print("=" * 80)
+        print("HBM3e Best Practices for Blackwell B200")
+        print("=" * 80)
+        
+        print("\n1. 📐 Alignment (128-byte cache lines)")
+        print("   ✓ Align all data structures to 128 bytes")
+        print("   ✓ Use __align__(128) attribute")
+        print("   ✓ Ensure stride access is aligned")
+        
+        print("\n2. 📦 Burst Access (256-byte optimal)")
+        print("   ✓ Read/write 256 bytes per thread iteration")
+        print("   ✓ Use 8x float4 (or 4x double4)")
+        print("   ✓ Unroll loops for burst optimization")
+        
+        print("\n3. 🔄 Vectorization")
+        print("   ✓ Use float4/int4 for 16-byte loads")
+        print("   ✓ Prefer vectorized over scalar loads")
+        print("   ✓ Check compiler generates ld.global.v4")
+        
+        print("\n4. 💨 Cache Streaming")
+        print("   ✓ Use __ldcs() for streaming loads (bypass L1)")
+        print("   ✓ Use __stcs() for streaming stores")
+        print("   ✓ Good for write-only or read-once patterns")
+        
+        print("\n5. 🎯 L2 Cache Optimization")
+        print("   ✓ 128-byte cache lines match HBM3e")
+        print("   ✓ Use CU_TENSOR_MAP_L2_PROMOTION_L2_128B")
+        print("   ✓ Target >80% L2 hit rate for reused data")
+        
+        print("\n6. 📊 Parallelism")
+        print("   ✓ Launch enough blocks for 148 SMs")
+        print("   ✓ Each SM can handle multiple blocks")
+        print("   ✓ Grid size >> 148 for load balancing")
+        
+        print("\n7. 🔍 Profiling")
+        print("   ✓ Use Nsight Compute to check:")
+        print("     - dram__throughput (target >90%)")
+        print("     - l2_cache_hit_rate (target >80%)")
+        print("     - lts__t_sectors (check 128B alignment)")
+        
+        print("\n" + "=" * 80)
+        
+        print("\nCode Example - Optimal HBM3e Access:")
+        print("-" * 80)
+        print("""
+__global__ void hbm3e_optimal_copy(const float4* __restrict__ src,
+                                     float4* __restrict__ dst, size_t n) {
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = gridDim.x * blockDim.x;
+    
+    // Process 256 bytes per iteration (8x float4)
+    for (size_t i = tid * 8; i < n; i += stride * 8) {
+        #pragma unroll
+        for (int j = 0; j < 8; j++) {
+            // Cache streaming for write-only pattern
+            float4 data = __ldcs(&src[i + j]);
+            __stcs(&dst[i + j], data);
+        }
+    }
+}
+
+// Launch with enough blocks to saturate 148 SMs
+dim3 grid(148 * 4);   // 4 blocks per SM
+dim3 block(512);       // 512 threads per block
+hbm3e_optimal_copy<<<grid, block>>>(src, dst, n / 4);
+""")
+        
+        print("=" * 80)
+
+
+def run_complete_blackwell_analysis(
+    nsys_report: str,
+    ncu_report: str,
+):
+    """
+    Run complete Blackwell performance analysis.
+    
+    Combines Nsight Systems and Nsight Compute reports for comprehensive analysis.
+    
+    Args:
+        nsys_report: Path to Nsight Systems report (.qdrep or .sqlite)
+        ncu_report: Path to Nsight Compute report (.ncu-rep)
+    """
+    print("=" * 80)
+    print("Complete Blackwell B200 Performance Analysis")
+    print("=" * 80)
+    
+    print("\n1. Timeline Analysis (Nsight Systems):")
+    print("-" * 80)
+    NsightSystemsProfiler.analyze_blackwell_metrics(nsys_report)
+    
+    print("\n2. Kernel Analysis (Nsight Compute):")
+    print("-" * 80)
+    NsightComputeProfiler.analyze_blackwell_kernel(ncu_report)
+    
+    print("\n3. Blackwell Specific Metrics:")
+    print("-" * 80)
+    BlackwellMetricsGuide.print_metric_guide()
+    
+    print("\n4. HBM3e Memory Optimization:")
+    print("-" * 80)
+    HBM3eMemoryAnalyzer.print_hbm3e_best_practices()
+    
+    print("\n" + "=" * 80)
+    print("Analysis Complete")
+    print("=" * 80)
+    print("\nNext Steps:")
+    print("  1. Review bandwidth utilization (target >90%)")
+    print("  2. Check tensor core utilization (target >70%)")
+    print("  3. Verify memory access patterns (256-byte bursts)")
+    print("  4. Optimize based on bottleneck identified")
+    print("  5. Re-profile and compare improvements")
+
+
+# ============================================================================
 # Example Usage
 # ============================================================================
 
@@ -457,4 +1043,3 @@ if __name__ == "__main__":
     
     print("\n Profiling example complete!")
     print("Check ./example_profiling for results")
-

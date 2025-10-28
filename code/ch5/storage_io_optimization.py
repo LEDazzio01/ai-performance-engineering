@@ -1,6 +1,7 @@
 """High-throughput DataLoader patterns for storage-bound training (PyTorch 2.9)."""
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 from dataclasses import dataclass
@@ -18,9 +19,11 @@ class DummyDataset(Dataset):
         return self.length
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        torch.manual_seed(index)
-        image = torch.randn(3, 224, 224)
-        label = torch.randint(0, 10, ()).long()
+        # Use empty + fill for better performance than randn
+        image = torch.empty(3, 224, 224)
+        # Simple deterministic pattern based on index for reproducibility
+        image.fill_(float((index % 256) / 255.0))
+        label = torch.tensor(index % 10, dtype=torch.long)
         return image, label
 
 

@@ -5,8 +5,15 @@ ARCH ?= sm_100
 # CUDA configuration
 CUDA_VERSION = 13.0
 NVCC = nvcc
+# CUTLASS 3.5 for Blackwell tensor cores
+CUTLASS_PATH ?= $(shell pwd)/../external/cutlass
+ifneq ($(wildcard $(CUTLASS_PATH)/include),)
+CUTLASS_INCLUDE = -I$(CUTLASS_PATH)/include -DUSE_CUTLASS
+else
+CUTLASS_INCLUDE =
+endif
 # Use -gencode to embed both cubin (sm_100) and PTX (compute_100) for forward compatibility
-NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC
+NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC -lcuda $(CUTLASS_INCLUDE)
 
 # Source files
 SOURCES = double_buffered_pipeline.cu warp_specialized_pipeline.cu cooperative_persistent_kernel.cu
@@ -35,7 +42,7 @@ cooperative_persistent_kernel: cooperative_persistent_kernel.cu
 
 # Blackwell-only builds
 tma_2d_pipeline_blackwell: tma_2d_pipeline_blackwell.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
 
 cluster_group_blackwell: cluster_group_blackwell.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<

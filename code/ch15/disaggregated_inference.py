@@ -1,3 +1,4 @@
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx

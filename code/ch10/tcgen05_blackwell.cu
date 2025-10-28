@@ -90,31 +90,32 @@ __global__ void simple_fp16_gemm_blackwell(
     
     // Tile loop over K dimension
     for (int k_tile = 0; k_tile < K; k_tile += TILE_K) {
+        int linear_tid = threadIdx.y * blockDim.x + threadIdx.x;
+        int threads_per_block = blockDim.x * blockDim.y;
+
         // Load A tile into shared memory
-        #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                int a_row = by * TILE_M + ty * 8 + i;
-                int a_col = k_tile + tx * 8 + j;
-                if (a_row < M && a_col < K) {
-                    As[ty * 8 + i][tx * 8 + j] = A[a_row * K + a_col];
-                } else {
-                    As[ty * 8 + i][tx * 8 + j] = __float2half(0.0f);
-                }
+        for (int idx = linear_tid; idx < TILE_M * TILE_K; idx += threads_per_block) {
+            int local_row = idx / TILE_K;
+            int local_col = idx % TILE_K;
+            int a_row = by * TILE_M + local_row;
+            int a_col = k_tile + local_col;
+            if (a_row < M && a_col < K) {
+                As[local_row][local_col] = A[a_row * K + a_col];
+            } else {
+                As[local_row][local_col] = __float2half(0.0f);
             }
         }
-        
+
         // Load B tile into shared memory
-        #pragma unroll
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                int b_row = k_tile + ty * 8 + i;
-                int b_col = bx * TILE_N + tx * 8 + j;
-                if (b_row < K && b_col < N) {
-                    Bs[ty * 8 + i][tx * 8 + j] = B[b_row * N + b_col];
-                } else {
-                    Bs[ty * 8 + i][tx * 8 + j] = __float2half(0.0f);
-                }
+        for (int idx = linear_tid; idx < TILE_K * TILE_N; idx += threads_per_block) {
+            int local_row = idx / TILE_N;
+            int local_col = idx % TILE_N;
+            int b_row = k_tile + local_row;
+            int b_col = bx * TILE_N + local_col;
+            if (b_row < K && b_col < N) {
+                Bs[local_row][local_col] = B[b_row * N + b_col];
+            } else {
+                Bs[local_row][local_col] = __float2half(0.0f);
             }
         }
         
@@ -386,4 +387,3 @@ int main() {
     
     return 0;
 }
-

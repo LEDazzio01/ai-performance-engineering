@@ -66,25 +66,28 @@ bool detect_grace_cpu() {
     FILE* f = popen("uname -m", "r");
     if (f) {
         char arch[64];
+        bool is_arm = false;
         if (fgets(arch, sizeof(arch), f)) {
-            pclose(f);
             if (strstr(arch, "aarch64") || strstr(arch, "arm64")) {
-                // Further verify it's Grace Neoverse
-                FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
-                if (cpuinfo) {
-                    char line[256];
-                    while (fgets(line, sizeof(line), cpuinfo)) {
-                        if (strstr(line, "Neoverse") || strstr(line, "0xd40")) {
-                            fclose(cpuinfo);
-                            return true;
-                        }
-                    }
-                    fclose(cpuinfo);
-                }
-                return true;  // At least ARM
+                is_arm = true;
             }
         }
         pclose(f);
+        if (is_arm) {
+            // Further verify it's Grace Neoverse
+            FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
+            if (cpuinfo) {
+                char line[256];
+                while (fgets(line, sizeof(line), cpuinfo)) {
+                    if (strstr(line, "Neoverse") || strstr(line, "0xd40")) {
+                        fclose(cpuinfo);
+                        return true;
+                    }
+                }
+                fclose(cpuinfo);
+            }
+            return true;  // At least ARM
+        }
     }
     #endif
     return false;
@@ -260,12 +263,21 @@ void demonstrate_page_migration() {
     
     printf("Allocated %.2f MB managed memory\n", size / (1024.0 * 1024.0));
     
+    // CUDA 13.0 API: Set up memory locations
+    struct cudaMemLocation gpuLoc;
+    gpuLoc.type = cudaMemLocationTypeDevice;
+    gpuLoc.id = 0;
+    
+    struct cudaMemLocation cpuLoc;
+    cpuLoc.type = cudaMemLocationTypeHost;
+    cpuLoc.id = 0;
+    
     // Strategy 1: No hints (baseline)
     {
         auto start = std::chrono::high_resolution_clock::now();
         
         // Touch all pages on GPU (triggers migration)
-        cudaMemPrefetchAsync(managed_data, size, 0);
+        cudaMemPrefetchAsync(managed_data, size, gpuLoc, 0, 0);
         CUDA_CHECK(cudaDeviceSynchronize());
         
         auto end = std::chrono::high_resolution_clock::now();
@@ -275,7 +287,7 @@ void demonstrate_page_migration() {
     }
     
     // Reset to CPU
-    cudaMemPrefetchAsync(managed_data, size, cudaCpuDeviceId);
+    cudaMemPrefetchAsync(managed_data, size, cpuLoc, 0, 0);
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Strategy 2: With prefetch hint (optimized for NVLink-C2C)
@@ -283,7 +295,7 @@ void demonstrate_page_migration() {
         auto start = std::chrono::high_resolution_clock::now();
         
         // Prefetch with hint for bulk transfer
-        cudaMemPrefetchAsync(managed_data, size, 0);
+        cudaMemPrefetchAsync(managed_data, size, gpuLoc, 0, 0);
         CUDA_CHECK(cudaDeviceSynchronize());
         
         auto end = std::chrono::high_resolution_clock::now();
@@ -297,17 +309,17 @@ void demonstrate_page_migration() {
     {
         // Advise that this memory will be accessed mostly from GPU
         CUDA_CHECK(cudaMemAdvise(managed_data, size, 
-                                 cudaMemAdviseSetPreferredLocation, 0));
+                                 cudaMemAdviseSetPreferredLocation, gpuLoc));
         CUDA_CHECK(cudaMemAdvise(managed_data, size,
-                                 cudaMemAdviseSetAccessedBy, 0));
+                                 cudaMemAdviseSetAccessedBy, gpuLoc));
         
         // Reset to CPU
-        cudaMemPrefetchAsync(managed_data, size, cudaCpuDeviceId);
+        cudaMemPrefetchAsync(managed_data, size, cpuLoc, 0, 0);
         CUDA_CHECK(cudaDeviceSynchronize());
         
         auto start = std::chrono::high_resolution_clock::now();
         
-        cudaMemPrefetchAsync(managed_data, size, 0);
+        cudaMemPrefetchAsync(managed_data, size, gpuLoc, 0, 0);
         CUDA_CHECK(cudaDeviceSynchronize());
         
         auto end = std::chrono::high_resolution_clock::now();
@@ -500,8 +512,8 @@ void demonstrate_gb200_coherent_memory(const SystemInfo& info) {
     CUDA_CHECK(cudaDeviceSynchronize());
     end = std::chrono::high_resolution_clock::now();
     
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    double bandwidth_gbs = (2 * size / (duration.count() / 1e6)) / (1024.0 * 1024.0 * 1024.0);
+    auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    double bandwidth_gbs = (2 * size / (duration_us.count() / 1e6)) / (1024.0 * 1024.0 * 1024.0);
     printf("   CPU write + GPU read: %.2f GB/s\n", bandwidth_gbs);
     
     CUDA_CHECK(cudaFree(coherent_data));

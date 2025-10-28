@@ -10,6 +10,7 @@ Requirements:
 
 Expected Runtime: ~5-10 seconds on 2 GPUs
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.distributed as dist
@@ -470,4 +471,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

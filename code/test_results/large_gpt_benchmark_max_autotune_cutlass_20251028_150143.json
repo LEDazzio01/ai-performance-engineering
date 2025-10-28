@@ -1,0 +1,62 @@
+{
+  "timestamp": "2025-10-28T15:11:40Z",
+  "device": "cuda:0",
+  "devices": "cuda:0",
+  "dtype": "float16",
+  "warmup": 3,
+  "iters": 6,
+  "compile_mode": "max-autotune",
+  "fp8_weights": false,
+  "parameters_billion": 39.479681024,
+  "param_memory_gb": 78.959362048,
+  "results": [
+    {
+      "config": "Batch=4, Seq=2048",
+      "batch": 4,
+      "seq_len": 2048,
+      "eager_ms": 512.767372999709,
+      "eager_tps": 15976.055481214577,
+      "compiled_ms": 512.7368081666646,
+      "compiled_tps": 15977.007832324765,
+      "speedup": 1.0000596111544122,
+      "eager_peak_mem_gb": 80.588242944,
+      "compiled_peak_mem_gb": 82.467356672,
+      "notes": [
+        "Activation footprint ~ 0.13 GB",
+        "Tensor-parallel GPUs: 1"
+      ]
+    },
+    {
+      "config": "Batch=2, Seq=4096",
+      "batch": 2,
+      "seq_len": 4096,
+      "eager_ms": 533.8552275000742,
+      "eager_tps": 15344.98414178938,
+      "compiled_ms": 532.8519539992461,
+      "compiled_tps": 15373.876249333582,
+      "speedup": 1.0018828372370565,
+      "eager_peak_mem_gb": 159.55630592,
+      "compiled_peak_mem_gb": 163.717121024,
+      "notes": [
+        "Activation footprint ~ 0.13 GB",
+        "Tensor-parallel GPUs: 1"
+      ]
+    },
+    {
+      "config": "Batch=1, Seq=8192",
+      "batch": 1,
+      "seq_len": 8192,
+      "eager_ms": 575.5000685009387,
+      "eager_tps": 14234.576932959371,
+      "compiled_ms": 577.6646609992895,
+      "compiled_tps": 14181.237927604638,
+      "speedup": 0.9962528562945043,
+      "eager_peak_mem_gb": 159.55630592,
+      "compiled_peak_mem_gb": 159.172527104,
+      "notes": [
+        "Activation footprint ~ 0.13 GB",
+        "Tensor-parallel GPUs: 1"
+      ]
+    }
+  ]
+}

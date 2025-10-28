@@ -57,14 +57,15 @@ echo ""
 # Set environment variables for optimal PyTorch profiling
 export CUDA_LAUNCH_BLOCKING=0
 export CUDA_CACHE_DISABLE=0
-export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
+export PYTORCH_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
 export TORCH_CUDNN_V8_API_ENABLED=1
 export TORCH_SHOW_CPP_STACKTRACES=1
 
 # Enhanced environment variables for latest features
 export TORCH_CUDNN_V8_API_DISABLED=0
 export CUDA_DEVICE_MAX_CONNECTIONS=1
-export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
+export PYTORCH_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
+unset PYTORCH_CUDA_ALLOC_CONF 2>/dev/null || true
 
 # Create timestamp for this profiling session
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

@@ -5,6 +5,7 @@ Demonstrates multi-node distributed training optimizations for Blackwell
 B200/B300 GPUs with NVLink-C2C and NCCL. Includes tensor parallelism,
 FSDP, and gradient compression for multi-node scaling.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import torch
@@ -906,4 +907,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -1,0 +1,29 @@
+[
+  {
+    "name": "gpt_large_fp8_auto",
+    "command": [
+      "python",
+      "ch16/test_gpt_large_optimized.py",
+      "--fp8-mode",
+      "auto",
+      "--tensor-parallel-gpus",
+      "1",
+      "--skip-compile"
+    ],
+    "output_json": "benchmark_results/gpt_large_fp8_auto.json"
+  },
+  {
+    "name": "moe_benchmark",
+    "command": [
+      "python",
+      "ch16/moe_performance_benchmark.py",
+      "--num-experts",
+      "16",
+      "--top-k",
+      "2",
+      "--iters",
+      "10"
+    ],
+    "output_json": "benchmark_results/moe_benchmark.json"
+  }
+]

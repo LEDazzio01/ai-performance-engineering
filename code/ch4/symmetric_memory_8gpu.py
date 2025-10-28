@@ -11,6 +11,7 @@ Symmetric memory enables:
 3. Custom reduction kernels with direct buffer access
 4. Integration with torch.compile for fused operations
 
+
 Hardware:
 - 8x Blackwell B200 GPUs
 - NVLink 5.0: 1800 GB/s bidirectional per GPU pair
@@ -34,6 +35,7 @@ Usage:
     # Test with 2-4 GPUs
     torchrun --nproc_per_node=4 symmetric_memory_8gpu.py
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import time
@@ -474,4 +476,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

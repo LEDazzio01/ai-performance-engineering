@@ -4,6 +4,7 @@
 Analyze CPU/GPU topology, memory bandwidth, and interconnect characteristics
 for NVIDIA Blackwell-based systems.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 from typing import Any, Dict
@@ -83,11 +84,14 @@ def get_gpu_info() -> Dict[str, Any]:
 
 def get_system_info() -> Dict[str, Any]:
     """Get comprehensive system information."""
+    core_util = psutil.cpu_percent(interval=0.1, percpu=True)
+    overall_util = sum(core_util) / len(core_util) if core_util else psutil.cpu_percent(interval=None)
+
     cpu_info = {
         "physical_cores": psutil.cpu_count(logical=False),
         "logical_cores": psutil.cpu_count(logical=True),
-        "cpu_percent": psutil.cpu_percent(interval=1, percpu=True),
-        "overall_percent": psutil.cpu_percent(interval=1),
+        "cpu_percent": core_util,
+        "overall_percent": overall_util,
     }
 
     memory = psutil.virtual_memory()
@@ -157,6 +161,28 @@ def benchmark_memory_bandwidth() -> None:
 
     print("\n=== Memory Bandwidth Benchmark ===")
 
+    copy_sizes_gb = [2, 4, 8]
+    for size_gb in copy_sizes_gb:
+        size_bytes = int(size_gb * (1024 ** 3))
+        num_elements = size_bytes // 2  # float16
+        src = torch.empty(num_elements, device="cuda", dtype=torch.float16)
+        dst = torch.empty_like(src)
+        torch.cuda.synchronize()
+
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        iterations = 50
+
+        start.record()
+        for _ in range(iterations):
+            dst.copy_(src)
+        end.record()
+        torch.cuda.synchronize()
+
+        elapsed_ms = start.elapsed_time(end)
+        bandwidth_gbps = (size_bytes * iterations / elapsed_ms) / 1e6
+        print(f"Copy {size_gb:2d} GB: {bandwidth_gbps / 1024:.2f} TB/s")
+
     sizes = [1024, 2048, 4096, 8192, 16384]
 
     for size in sizes:
@@ -181,13 +207,13 @@ def benchmark_memory_bandwidth() -> None:
             bytes_transferred = 2 * size * size * 4
             bandwidth_gbps = (bytes_transferred / avg_time) / 1e9
 
-            print(f"Size {size}x{size}: {avg_time:.4f}s, {bandwidth_gbps:.1f} GB/s")
+            print(f"GEMM {size}x{size}: {avg_time:.4f}s, {bandwidth_gbps:.1f} GB/s")
 
         except RuntimeError as err:
             if "out of memory" in str(err):
-                print(f"Size {size}x{size}: OOM")
+                print(f"GEMM {size}x{size}: OOM")
             else:
-                print(f"Size {size}x{size}: Error - {err}")
+                print(f"GEMM {size}x{size}: Error - {err}")
 
 
 def benchmark_tensor_operations() -> None:

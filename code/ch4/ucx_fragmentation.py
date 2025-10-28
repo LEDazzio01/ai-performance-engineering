@@ -1,3 +1,4 @@
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 # ucx_fragmentation.py
 import torch
 import torch.distributed as dist

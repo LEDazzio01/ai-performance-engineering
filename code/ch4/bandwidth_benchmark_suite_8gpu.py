@@ -32,6 +32,7 @@ Usage:
     # Save results to file
     torchrun --nproc_per_node=8 bandwidth_benchmark_suite_8gpu.py --output results.json
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import time
@@ -516,4 +517,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

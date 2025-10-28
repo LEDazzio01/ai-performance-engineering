@@ -24,6 +24,7 @@ Async-TP currently requires:
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import argparse
 import os

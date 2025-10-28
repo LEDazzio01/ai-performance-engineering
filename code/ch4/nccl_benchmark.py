@@ -3,6 +3,7 @@
 Comprehensive NCCL benchmark for testing different collective operations
 and communication patterns with PyTorch 2.9 and CUDA 13.0.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 import os
 import time
 import argparse

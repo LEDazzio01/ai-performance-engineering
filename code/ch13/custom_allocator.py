@@ -1,3 +1,4 @@
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx
@@ -53,6 +54,7 @@ def demonstrate_custom_allocator():
         if allocator_config:
             # Set custom allocator configuration
             os.environ.update(allocator_config)
+            os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
@@ -83,7 +85,7 @@ def demonstrate_custom_allocator():
     
     # Test with custom configuration
     custom_config = {
-        "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128,garbage_collection_threshold:0.6"
+        "PYTORCH_ALLOC_CONF": "max_split_size_mb:128,garbage_collection_threshold:0.6"
     }
     custom_alloc, custom_reserved = test_allocation_pattern(
         "Custom Configuration", custom_config

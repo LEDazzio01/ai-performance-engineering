@@ -44,7 +44,7 @@ spec:
       value: "3"
     - name: NCCL_DEBUG
       value: "INFO"
-    - name: PYTORCH_CUDA_ALLOC_CONF
+    - name: PYTORCH_ALLOC_CONF
       value: "max_split_size_mb:512"
     
     securityContext:

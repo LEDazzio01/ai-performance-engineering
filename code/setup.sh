@@ -4,13 +4,15 @@
 # ========================================
 #
 # This script installs EVERYTHING you need:
-#   1. PyTorch 2.9 nightly with CUDA 13.0
-#   2. CUDA 13.0 toolchain (nvcc, libraries)
-#   3. NVIDIA Nsight Systems 2025.3.2 (for timeline profiling)
-#   4. NVIDIA Nsight Compute 2025.3.1 (for kernel metrics)
-#   5. All Python dependencies from requirements_latest.txt
-#   6. System tools (numactl, perf, htop, etc.)
-#   7. Configures NVIDIA drivers for profiling
+#   1. NVIDIA Driver 580+ (auto-upgrades if needed)
+#   2. Python 3.11 (PyTorch 2.9 compatible)
+#   3. CUDA 13.0 repository and toolchain
+#   4. PyTorch 2.9 nightly with CUDA 13.0 support
+#   5. NVIDIA Nsight Systems 2025.3.2 (for timeline profiling)
+#   6. NVIDIA Nsight Compute 2025.3.1 (for kernel metrics)
+#   7. All Python dependencies from requirements_latest.txt
+#   8. System tools (numactl, perf, htop, etc.)
+#   9. Configures NVIDIA drivers for profiling
 #
 # Requirements:
 #   - Ubuntu 22.04+ (tested on 22.04)
@@ -21,16 +23,29 @@
 # Usage:
 #   sudo ./setup.sh
 #
-# Duration: 10-20 minutes
+# Duration: 10-20 minutes (first run may require reboot for driver upgrade)
 #
 # What it does:
-#   - Updates apt packages
-#   - Installs CUDA 13.0 toolkit
+#   - Adds official NVIDIA CUDA 13.0 repository
+#   - Configures APT to prefer official NVIDIA packages
+#   - Fixes Python APT module (python3-apt) compatibility
+#   - Disables problematic command-not-found APT hook
+#   - Removes duplicate deadsnakes repository entries
+#   - Upgrades Python to 3.11 (required by PyTorch 2.9)
+#   - Auto-upgrades NVIDIA driver to 580+ if needed (will prompt reboot)
+#   - Installs CUDA 13.0 toolkit and libraries
 #   - Installs latest Nsight tools (2025.x)
-#   - Installs PyTorch 2.9 nightly
+#   - Installs PyTorch 2.9 nightly with CUDA 13.0
+#   - Removes conflicting system packages (python3-optree, etc.)
 #   - Installs nvidia-ml-py (replaces deprecated pynvml)
 #   - Configures NVIDIA kernel modules for profiling
+#   - Fixes hardware info script compatibility
 #   - Runs validation tests
+#
+# Notes:
+#   - If driver upgrade is needed, script will exit and ask you to reboot
+#   - After reboot, simply re-run: sudo ./setup.sh
+#   - The script is idempotent and safe to re-run
 #
 # After running this script, you can:
 #   - Run examples: python3 ch1/performance_basics.py
@@ -44,16 +59,20 @@ set -e  # Exit on any error
 echo "🚀 AI Performance Engineering Setup Script"
 echo "=========================================="
 echo "This script will install:"
+echo "  • NVIDIA Driver 580+ (auto-upgrade if needed)"
+echo "  • Python 3.11 (PyTorch 2.9 compatible)"
+echo "  • CUDA 13.0 repository and toolchain"
 echo "  • PyTorch 2.9 nightly with CUDA 13.0"
-echo "  • CUDA 13.0 toolchain and development tools"
 echo "  • NVIDIA Nsight Systems 2025.3.2 (latest)"
 echo "  • NVIDIA Nsight Compute 2025.3.1 (latest)"
 echo "  • All project dependencies"
 echo "  • System tools (numactl, perf, etc.)"
 echo ""
+echo "Note: If driver upgrade is needed, you'll be prompted to reboot."
+echo ""
 
 PROJECT_ROOT="$(dirname "$(realpath "$0")")"
-REQUIRED_DRIVER_VERSION="575.57"
+REQUIRED_DRIVER_VERSION="580.65.06"
 echo "📁 Project root: $PROJECT_ROOT"
 cd "$PROJECT_ROOT"
 
@@ -90,15 +109,13 @@ if command -v nvidia-smi &> /dev/null; then
 
     DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -n 1 | tr -d ' ')
     if [[ -n "$DRIVER_VERSION" ]]; then
-        python3 - "$DRIVER_VERSION" "$REQUIRED_DRIVER_VERSION" <<'PY'
-import sys
-from packaging import version
-current = version.parse(sys.argv[1])
-required = version.parse(sys.argv[2])
-if current < required:
-    print(f"⚠️  NVIDIA driver {current} is older than required {required} for CUDA 13.0/PyTorch 2.9. "
-          "Upgrade to nvidia-driver-580 (or newer) and reboot, then rerun this setup.")
-PY
+        DRIVER_MAJOR=$(echo "$DRIVER_VERSION" | cut -d. -f1)
+        if [ "$DRIVER_MAJOR" -lt 580 ]; then
+            echo "⚠️  Current NVIDIA driver: $DRIVER_VERSION"
+            echo "ℹ️  CUDA 13.0 requires driver 580+. This script will upgrade it automatically."
+        else
+            echo "✅ NVIDIA driver version: $DRIVER_VERSION (compatible with CUDA 13.0)"
+        fi
     fi
 else
     echo "❌ NVIDIA GPU not detected. Please ensure NVIDIA drivers are installed."
@@ -132,15 +149,129 @@ fi
 # Update system packages
 echo ""
 echo "📦 Updating system packages..."
+
+# Fix apt_pkg module before apt update (if Python was upgraded)
+if ! python3 -c "import apt_pkg" 2>/dev/null; then
+    echo "🔧 Fixing apt_pkg module..."
+    apt install -y --reinstall python3-apt 2>/dev/null || true
+fi
+
+# Disable command-not-found APT hook if it's causing issues with Python upgrade
+if [ -f /etc/apt/apt.conf.d/50command-not-found ] && ! /usr/lib/cnf-update-db 2>/dev/null; then
+    echo "🔧 Disabling problematic command-not-found APT hook..."
+    rm -f /etc/apt/apt.conf.d/50command-not-found
+fi
+
+# Clean up duplicate deadsnakes repository if it exists
+if [ -f /etc/apt/sources.list.d/deadsnakes.list ] && [ -f /etc/apt/sources.list.d/deadsnakes-ubuntu-ppa-jammy.list ]; then
+    echo "🔧 Removing duplicate deadsnakes repository..."
+    rm -f /etc/apt/sources.list.d/deadsnakes.list
+fi
+
+apt update || {
+    echo "⚠️  apt update had errors, but continuing..."
+}
+
+# Install required packages for adding repositories
+apt install -y wget curl software-properties-common
+
+# Add NVIDIA CUDA 13.0 repository
+echo ""
+echo "🔐 Adding NVIDIA CUDA 13.0 repository..."
+
+# Check if CUDA repository is already configured
+if [ ! -f /usr/share/keyrings/cuda-archive-keyring.gpg ] && [ ! -f /etc/apt/sources.list.d/cuda-ubuntu2204-x86_64.list ]; then
+    CUDA_REPO_PKG="cuda-keyring_1.1-1_all.deb"
+    if [ ! -f "/tmp/$CUDA_REPO_PKG" ]; then
+        wget -P /tmp https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/$CUDA_REPO_PKG
+    fi
+    dpkg -i /tmp/$CUDA_REPO_PKG
+    echo "✅ NVIDIA CUDA repository added"
+else
+    echo "✅ NVIDIA CUDA repository already configured"
+fi
+
+# Configure APT to prefer official NVIDIA packages over Lambda Labs or other repos
+echo ""
+echo "🔧 Configuring APT preferences for NVIDIA packages..."
+cat > /etc/apt/preferences.d/nvidia-official <<'APT_PREF'
+# Prefer official NVIDIA packages over Lambda Labs
+Package: nvidia-*
+Pin: origin archive.lambdalabs.com
+Pin-Priority: 100
+
+Package: nvidia-*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 600
+
+Package: nvidia-*
+Pin: release o=Ubuntu
+Pin-Priority: 600
+
+# Also apply to libnvidia packages
+Package: libnvidia-*
+Pin: origin archive.lambdalabs.com
+Pin-Priority: 100
+
+Package: libnvidia-*
+Pin: origin developer.download.nvidia.com
+Pin-Priority: 600
+
+Package: libnvidia-*
+Pin: release o=Ubuntu
+Pin-Priority: 600
+APT_PREF
+
 apt update
 
-# Install Python and pip if not present
+# Install Python 3.11 or newer (PyTorch 2.9 supports Python 3.10, 3.11, 3.12)
 echo ""
-echo "🐍 Installing Python and pip..."
-apt install -y python3 python3-pip python3-venv python3-dev
+echo "🐍 Installing Python 3.11..."
+
+# Check if Python 3.11 is already installed
+if ! command -v python3.11 &> /dev/null; then
+    apt install -y software-properties-common
+    
+    # Check if deadsnakes PPA is already added
+    if ! grep -q "deadsnakes/ppa" /etc/apt/sources.list.d/*.list 2>/dev/null; then
+        add-apt-repository -y ppa:deadsnakes/ppa
+    else
+        echo "✅ deadsnakes PPA already configured"
+    fi
+    
+    apt update || true
+    apt install -y python3.11 python3.11-dev python3.11-venv python3-pip
+    echo "✅ Python 3.11 installed"
+else
+    CURRENT_PY311=$(python3.11 --version 2>&1 | awk '{print $2}')
+    echo "✅ Python 3.11 already installed (version $CURRENT_PY311)"
+    # Still ensure dev packages are present
+    apt install -y python3.11-dev python3.11-venv python3-pip
+fi
+
+# Set Python 3.11 as default if not already
+CURRENT_PY3=$(python3 --version 2>&1 | awk '{print $2}')
+if [[ ! "$CURRENT_PY3" =~ ^3\.11\. ]]; then
+    echo "Setting Python 3.11 as default..."
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    update-alternatives --set python3 /usr/bin/python3.11
+else
+    echo "✅ Python 3.11 is already the default"
+fi
+
+# Ensure pip is installed for Python 3.11
+if ! python3.11 -m pip --version &> /dev/null; then
+    echo "Installing pip for Python 3.11..."
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11
+fi
 
 # Upgrade pip
 python3 -m pip install --upgrade pip setuptools packaging
+
+# Fix python3-apt for the new Python version
+echo ""
+echo "🔧 Fixing Python APT module..."
+apt install -y --reinstall python3-apt
 
 # Remove distro flatbuffers package whose invalid version breaks pip metadata
 if dpkg -s python3-flatbuffers >/dev/null 2>&1; then
@@ -148,10 +279,66 @@ if dpkg -s python3-flatbuffers >/dev/null 2>&1; then
     apt remove -y python3-flatbuffers
 fi
 
+# Upgrade NVIDIA driver to 580+ if needed (required for CUDA 13.0)
+echo ""
+echo "🔍 Checking NVIDIA driver version..."
+if command -v nvidia-smi &> /dev/null; then
+    CURRENT_DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits | head -n 1 | tr -d ' ')
+    DRIVER_MAJOR=$(echo "$CURRENT_DRIVER" | cut -d. -f1)
+    
+    if [ "$DRIVER_MAJOR" -lt 580 ]; then
+        echo "⚠️  Current driver ($CURRENT_DRIVER) is too old for CUDA 13.0"
+        echo "📦 Upgrading to NVIDIA driver 580 (open kernel modules)..."
+        
+        # Remove old driver packages that might conflict
+        echo "Removing old NVIDIA driver packages..."
+        apt remove -y nvidia-driver-* nvidia-dkms-* nvidia-kernel-common-* \
+            libnvidia-compute-* libnvidia-extra-* nvidia-utils-* \
+            python3-jax-cuda* python3-torch-cuda python3-torchvision-cuda 2>/dev/null || true
+        apt autoremove -y
+        
+        # Install new driver
+        echo "Installing NVIDIA driver 580..."
+        if apt install -y nvidia-driver-580-open; then
+            echo "✅ NVIDIA driver 580 installed successfully"
+            echo ""
+            echo "╔════════════════════════════════════════════════════════════╗"
+            echo "║  ⚠️  REBOOT REQUIRED                                       ║"
+            echo "║                                                            ║"
+            echo "║  The NVIDIA driver has been upgraded to version 580.      ║"
+            echo "║  Please reboot your system and re-run this script.        ║"
+            echo "║                                                            ║"
+            echo "║  After reboot:                                             ║"
+            echo "║    1. Run: nvidia-smi                                      ║"
+            echo "║    2. Verify driver version is 580+                        ║"
+            echo "║    3. Re-run: sudo ./setup.sh                              ║"
+            echo "╚════════════════════════════════════════════════════════════╝"
+            echo ""
+            exit 0
+        else
+            echo "❌ Failed to install NVIDIA driver 580"
+            echo "Please manually install the driver and reboot before continuing"
+            exit 1
+        fi
+    else
+        echo "✅ NVIDIA driver $CURRENT_DRIVER is compatible with CUDA 13.0"
+    fi
+fi
+
 # Install CUDA 13.0 toolchain
 echo ""
 echo "🔧 Installing CUDA 13.0 toolchain..."
 apt install -y cuda-toolkit-13-0
+
+# Install NCCL 2.28.7 for Blackwell optimizations
+echo ""
+echo "📦 Installing NCCL 2.28.7 (Blackwell-optimized)..."
+apt install -y libnccl2=2.28.7-1+cuda13.0 libnccl-dev=2.28.7-1+cuda13.0
+
+# Install NVSHMEM 3.4.5 for CUDA 13 (enables SymmetricMemory fast paths)
+echo ""
+echo "🔁 Installing NVSHMEM 3.4.5 runtime and headers (CUDA 13)..."
+apt install -y nvshmem-cuda-13 libnvshmem3-cuda-13 libnvshmem3-dev-cuda-13 libnvshmem3-static-cuda-13
 
 # Install CUDA sanitizers and debugging tools (compute-sanitizer, cuda-memcheck, etc.)
 echo ""
@@ -303,7 +490,7 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
             nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
             numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
             matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
-            jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 \
+            jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 pytest==8.3.4 \
             transformers==4.40.2 datasets==2.18.0 accelerate==0.29.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
             onnx==1.19.0 onnxruntime-gpu==1.23.0 \
             py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
@@ -317,13 +504,24 @@ else
         nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
         numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
         matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
-        jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 \
+        jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 pytest==8.3.4 \
         transformers==4.40.2 datasets==2.18.0 accelerate==0.29.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
         onnx==1.19.0 onnxruntime-gpu==1.23.0 \
         py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
         optuna==4.5.0 hyperopt==0.2.7 ray==2.49.2 \
         dask==2025.9.1 xarray==2025.6.1
 fi
+
+# Remove conflicting system packages that interfere with PyTorch
+echo ""
+echo "🔧 Removing conflicting system packages..."
+# Remove python3-optree which conflicts with torch.compile
+if dpkg -s python3-optree >/dev/null 2>&1; then
+    echo "Removing python3-optree (conflicts with torch.compile)..."
+    apt remove -y python3-optree python3-keras 2>/dev/null || true
+fi
+# Clean up other conflicting Lambda Labs packages
+apt autoremove -y 2>/dev/null || true
 
 # Fix hardware info script compatibility
 echo ""
@@ -540,7 +738,7 @@ export NCCL_P2P_DISABLE=0
 export NCCL_SHM_DISABLE=0
 export TORCH_CUDNN_V8_API_ENABLED=1
 export TORCH_CUDNN_V8_API_DISABLED=0
-export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
+export PYTORCH_ALLOC_CONF=max_split_size_mb:128,expandable_segments:True
 export TORCH_SHOW_CPP_STACKTRACES=1
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
@@ -552,9 +750,16 @@ export TORCH_LOGS="+dynamo"
 export CUDA_HOME=/usr/local/cuda-13.0
 export PATH=$CUDA_HOME/bin:$PATH
 export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+# Force system NCCL 2.28.7 (Blackwell-optimized with NVLS support)
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libnccl.so.2:$LD_PRELOAD
 EOF
 
 echo "✅ Environment variables added to ~/.bashrc"
+
+# Source the environment variables for current session
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libnccl.so.2:$LD_PRELOAD
+echo "✅ NCCL 2.28.7 activated for current session"
 
 # Comprehensive setup verification
 echo ""
@@ -574,6 +779,23 @@ if not torch.cuda.is_available():
 print(f'  CUDA version: {torch.version.cuda}')
 print(f'  GPU count: {torch.cuda.device_count()}')
 print(f'  GPU name: {torch.cuda.get_device_name(0)}')
+
+# Check NCCL version
+try:
+    import ctypes
+    libnccl = ctypes.CDLL('/usr/lib/x86_64-linux-gnu/libnccl.so.2')
+    version = ctypes.c_int()
+    libnccl.ncclGetVersion(ctypes.byref(version))
+    v_code = version.value
+    major = v_code // 10000
+    minor = (v_code % 10000) // 100
+    patch = v_code % 100
+    print(f'  NCCL version: {major}.{minor}.{patch}')
+    if major == 2 and minor >= 28:
+        print('  ✅ NVLS (NVLink SHARP) supported')
+except Exception as e:
+    print(f'  ⚠️  Could not verify NCCL version: {e}')
+
 print('✅ PyTorch and CUDA working correctly')
 "
 
@@ -669,6 +891,35 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Step 11: Install CUTLASS 3.5 for Blackwell
+echo ""
+echo "📦 Step 11: Installing CUTLASS 3.5 for Blackwell Tensor Cores..."
+echo "================================================================="
+CUTLASS_DIR="$PROJECT_ROOT/external/cutlass"
+if [ ! -d "$CUTLASS_DIR" ]; then
+    echo "Cloning CUTLASS 3.5..."
+    mkdir -p "$PROJECT_ROOT/external"
+    cd "$PROJECT_ROOT/external"
+    git clone --branch v3.5.0 --depth 1 https://github.com/NVIDIA/cutlass.git
+    cd "$PROJECT_ROOT"
+    echo "✅ CUTLASS 3.5 installed to $CUTLASS_DIR"
+else
+    echo "✅ CUTLASS already installed at $CUTLASS_DIR"
+fi
+
+# Create environment variable for CUTLASS path
+if ! grep -q "CUTLASS_PATH" ~/.bashrc; then
+    echo "" >> ~/.bashrc
+    echo "# CUTLASS 3.5 for Blackwell" >> ~/.bashrc
+    echo "export CUTLASS_PATH=$CUTLASS_DIR" >> ~/.bashrc
+    echo "export CPLUS_INCLUDE_PATH=\$CUTLASS_PATH/include:\$CPLUS_INCLUDE_PATH" >> ~/.bashrc
+fi
+export CUTLASS_PATH="$CUTLASS_DIR"
+export CPLUS_INCLUDE_PATH="$CUTLASS_PATH/include:$CPLUS_INCLUDE_PATH"
+
+echo "✅ CUTLASS 3.5 configured"
+echo ""
+
 # Test 4: Hardware info script
 echo ""
 echo "🔧 Testing hardware detection..."
@@ -687,11 +938,16 @@ fi
 echo ""
 echo "🔗 Testing NUMA binding..."
 if [ -f "$PROJECT_ROOT/ch3/bind_numa_affinity.py" ]; then
+    # Temporarily disable exit-on-error for this test
+    set +e
     python3 "$PROJECT_ROOT/ch3/bind_numa_affinity.py" > /dev/null 2>&1
-    if [ $? -eq 0 ]; then
+    NUMA_EXIT_CODE=$?
+    set -e
+    
+    if [ $NUMA_EXIT_CODE -eq 0 ]; then
         echo "✅ NUMA binding working"
     else
-        echo "⚠️  NUMA binding had issues (expected in containers)"
+        echo "⚠️  NUMA binding had issues (expected in containers or without distributed launch)"
     fi
 else
     echo "ℹ️  NUMA binding script not present, skipping."
@@ -699,6 +955,23 @@ fi
 
 echo ""
 echo "🎉 All critical tests passed! Setup is working correctly."
+
+# Restart services impacted by NVSHMEM/CUDA installs (e.g., glances monitoring)
+echo ""
+echo "🔄 Restarting background services impacted by driver/tool updates..."
+if command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-units --type=service --all | grep -q "^glances.service"; then
+        if systemctl is-active --quiet glances.service; then
+            systemctl restart glances.service && echo "✅ glances.service restarted"
+        else
+            systemctl restart glances.service >/dev/null 2>&1 && echo "✅ glances.service restarted (was inactive)" || echo "⚠️  Unable to restart glances.service (not running)"
+        fi
+    else
+        echo "ℹ️  glances.service not present, skipping."
+    fi
+else
+    echo "ℹ️  systemctl not available; please restart glances service manually if applicable."
+fi
 
 # Final summary
 echo ""
@@ -708,6 +981,8 @@ echo ""
 echo "✅ Installed:"
 echo "  • PyTorch 2.9 nightly with CUDA 13.0"
 echo "  • CUDA 13.0 toolchain and development tools"
+echo "  • NCCL 2.28.7 (Blackwell-optimized with NVLS support)"
+echo "  • NVSHMEM 3.4.5 runtime and headers (CUDA 13)"
 echo "  • NVIDIA Nsight Systems (latest available)"
 echo "  • NVIDIA Nsight Compute (latest available)"
 echo "  • All project dependencies"

@@ -18,7 +18,7 @@ NVSHMEM_INCLUDE = -I$(NVSHMEM_HOME)/include
 NVSHMEM_LIB = -L$(NVSHMEM_HOME)/lib -lnvshmem
 
 # Targets
-NVSHMEM_TARGETS = nvshmem_8gpu_examples nvshmem_advanced_8gpu
+NVSHMEM_TARGETS = nvshmem_8gpu_examples nvshmem_advanced_8gpu nvshmem_multinode_example nvshmem_pipeline_patterns nvshmem_tensor_parallel
 
 # Check if NVSHMEM is available
 HAS_NVSHMEM := $(shell test -d $(NVSHMEM_HOME) && echo yes || echo no)
@@ -34,6 +34,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make nvshmem    - Compile NVSHMEM examples (requires NVSHMEM)"
 	@echo "  make clean      - Clean build artifacts"
+	@echo "  make nvshmem    - Build all NVSHMEM examples (single & multi-node)"
 	@echo ""
 	@echo "NVSHMEM status: $(HAS_NVSHMEM)"
 ifeq ($(HAS_NVSHMEM),no)
@@ -57,7 +58,29 @@ ifeq ($(HAS_NVSHMEM),yes)
 else
 	$(NVCC) $(CUDA_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
+endif
+
+# Multi-node hierarchical example
+nvshmem_multinode_example: nvshmem_multinode_example.cu
+ifeq ($(HAS_NVSHMEM),yes)
+	$(NVCC) $(CUDA_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	@echo "✓ Multi-node example compiled with NVSHMEM support"
+	@echo "  Run: nvshmemrun -np <world> ./nvshmem_multinode_example --gpus-per-node 8"
+else
+	$(NVCC) $(CUDA_FLAGS) $< -o $@
+	@echo "Compiled in educational mode (no NVSHMEM library)"
 	@echo "This version shows API patterns but won't execute communication"
+endif
+
+# Lock-free queue + double-buffer pipeline demos
+nvshmem_pipeline_patterns: nvshmem_pipeline_patterns.cu
+ifeq ($(HAS_NVSHMEM),yes)
+	$(NVCC) $(CUDA_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -o $@
+	@echo "✓ Pipeline patterns compiled with NVSHMEM support"
+	@echo "  Run: nvshmemrun -np 2 ./nvshmem_pipeline_patterns"
+else
+	$(NVCC) $(CUDA_FLAGS) $< -o $@
+	@echo "Compiled in educational mode (no NVSHMEM library)"
 endif
 
 # Advanced NVSHMEM patterns (production-quality)
@@ -67,6 +90,17 @@ ifeq ($(HAS_NVSHMEM),yes)
 	@echo "✓ Advanced patterns compiled with NVSHMEM support"
 	@echo "  Run: nvshmemrun -np 8 ./nvshmem_advanced_8gpu"
 	@echo "  Includes: Ring AllReduce, Double-Buffered, Recursive H/D"
+else
+	$(NVCC) $(CUDA_FLAGS) $< -o $@
+	@echo "Compiled in educational mode (no NVSHMEM library)"
+endif
+
+# Tensor parallel kernels (NEW)
+nvshmem_tensor_parallel: nvshmem_tensor_parallel.cu
+ifeq ($(HAS_NVSHMEM),yes)
+	$(NVCC) $(CUDA_FLAGS) -DUSE_NVSHMEM $(NVSHMEM_INCLUDE) $< $(NVSHMEM_LIB) -lcuda -o $@
+	@echo "✓ Tensor parallel kernels compiled with NVSHMEM support"
+	@echo "  Run: nvshmemrun -np 8 ./nvshmem_tensor_parallel --test all"
 else
 	$(NVCC) $(CUDA_FLAGS) $< -o $@
 	@echo "Compiled in educational mode (no NVSHMEM library)"
@@ -83,4 +117,3 @@ install-help:
 	@echo "  2. Extract and install to /usr/local/nvshmem"
 	@echo "  3. Set environment variable: export NVSHMEM_HOME=/usr/local/nvshmem"
 	@echo "  4. Run: make nvshmem"
-

@@ -194,7 +194,7 @@ CONFIG_BY_EXAMPLE: Dict[str, ProfilerOverrides] = {
         nsys_trace=["cuda", "nvtx", "osrt", "cublas", "cudnn"],
         pytorch_modes=["distributed"],
     ),
-    "ch13_train_deepseek_v3": _overrides_from_lists(
+    "ch13_train_deepseek_coder": _overrides_from_lists(
         ncu_metrics=[
             "sm__sass_thread_inst_executed_op_fp32_pred_on.sum",
             "sm__sass_thread_inst_executed_op_fp16_pred_on.sum",

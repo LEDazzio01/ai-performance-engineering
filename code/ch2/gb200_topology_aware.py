@@ -21,6 +21,7 @@ Requirements:
 - PyTorch 2.9+
 - GB200/GB300 superchip (graceful fallback on other systems)
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import platform
@@ -389,4 +390,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

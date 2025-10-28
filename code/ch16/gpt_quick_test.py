@@ -3,6 +3,7 @@
 Quick GPT-style model test - NO HEAVY COMPILATION
 Shows realistic torch.compile speedup on B200
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
@@ -68,9 +69,9 @@ def main():
     
     # Test different sizes to find sweet spot
     configs = [
-        (12, 2048, 16, 1024),   # 12 layers, batch 16, seq 1024
-        (24, 2048, 8, 1024),    # 24 layers, batch 8, seq 1024
-        (32, 2048, 4, 1024),    # 32 layers, batch 4, seq 1024
+        (32, 4096, 8, 2048),    # ~10B params - minimum for B200
+        (48, 5120, 4, 2048),    # ~15B params
+        (64, 6144, 2, 2048),    # ~24B params - good B200 showcase
     ]
     
     for n_layers, d_model, batch, seq_len in configs:
@@ -114,4 +115,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

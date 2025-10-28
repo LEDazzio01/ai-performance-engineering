@@ -56,7 +56,7 @@ def get_gpu_info() -> Dict[str, Any]:
     compute_capability = f"{device_props.major}.{device_props.minor}"
 
     is_blackwell = device_props.major == 10
-    memory_bandwidth_tbps = 8.0 if is_blackwell else None
+    memory_bandwidth_tbps = 7.8 if is_blackwell else None
 
     return {
         "name": device_props.name,
@@ -131,15 +131,15 @@ def demonstrate_blackwell_features() -> None:
     gpu_info = get_gpu_info()
 
     if gpu_info.get("architecture") == "Blackwell B200/B300":
-        print("✓ This is a Blackwell B200/B300 GPU")
-        print(f"✓ Compute Capability: {gpu_info['compute_capability']} (SM100)")
-        print(f"✓ Memory: {gpu_info['total_memory_gb']:.1f} GB")
-        print(f"✓ Memory Bandwidth: {gpu_info['memory_bandwidth_tbps']} TB/s")
-        print("✓ 5th Generation Tensor Cores")
-        print("✓ TMA (Tensor Memory Accelerator)")
-        print("✓ NVLink-C2C (Direct GPU-to-GPU communication)")
-        print("✓ Unified Memory Architecture")
-        print(f"✓ Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
+        print(" This is a Blackwell B200/B300 GPU")
+        print(f" Compute Capability: {gpu_info['compute_capability']} (SM100)")
+        print(f" Memory: {gpu_info['total_memory_gb']:.1f} GB")
+        print(f" Memory Bandwidth: {gpu_info['memory_bandwidth_tbps']} TB/s")
+        print(" 5th Generation Tensor Cores")
+        print(" TMA (Tensor Memory Accelerator)")
+        print(" NVLink-C2C (Direct GPU-to-GPU communication)")
+        print(" Unified Memory Architecture")
+        print(f" Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
     else:
         print("This is not a Blackwell B200/B300 GPU")
         print(f"GPU: {gpu_info['name']}")
@@ -286,9 +286,9 @@ def demonstrate_profiling_capabilities() -> None:
 
     try:
         from torch.profiler import ProfilerActivity, profile  # noqa: F401
-        print("\n✓ PyTorch Profiler is available")
+        print("\n PyTorch Profiler is available")
     except ImportError:
-        print("\n✗ PyTorch Profiler not available")
+        print("\n PyTorch Profiler not available")
 
 
 def demonstrate_system_monitoring() -> None:
@@ -396,15 +396,15 @@ def main() -> None:
     print("-" * 40)
     if "error" not in gpu_info:
         if gpu_info.get("architecture") == "Blackwell B200/B300":
-            print("✓ This is a Blackwell B200/B300 GPU")
-            print(f"✓ Compute Capability: {gpu_info['compute_capability']} (SM100)")
-            print(f"✓ Memory: {gpu_info['total_memory_gb']:.1f} GB HBM3e")
-            print(f"✓ Memory Bandwidth: {gpu_info['memory_bandwidth_tbps']} TB/s")
-            print("✓ 5th Generation Tensor Cores")
-            print("✓ TMA (Tensor Memory Accelerator)")
-            print("✓ NVLink-C2C (Direct GPU-to-GPU communication)")
-            print("✓ Unified Memory Architecture")
-            print(f"✓ Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
+            print(" This is a Blackwell B200/B300 GPU")
+            print(f" Compute Capability: {gpu_info['compute_capability']} (SM100)")
+            print(f" Memory: {gpu_info['total_memory_gb']:.1f} GB HBM3e")
+            print(f" Memory Bandwidth: {gpu_info['memory_bandwidth_tbps']} TB/s")
+            print(" 5th Generation Tensor Cores")
+            print(" TMA (Tensor Memory Accelerator)")
+            print(" NVLink-C2C (Direct GPU-to-GPU communication)")
+            print(" Unified Memory Architecture")
+            print(f" Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
         else:
             print("This is not a Blackwell B200/B300 GPU")
             print(f"GPU: {gpu_info['name']}")

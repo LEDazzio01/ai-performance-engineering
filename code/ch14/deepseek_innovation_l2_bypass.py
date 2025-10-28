@@ -18,6 +18,7 @@ Technical Details:
 - `ld.global.cs` - cache streaming (evict first, for streaming data)
 - `ld.global.cv` - cache volatile (bypass all caches)
 
+
 DeepSeek's Innovation:
 1. Use `.cs` (streaming) for activation loads (read once)
 2. Use `.ca` (cache all) for weight loads (reused many times)
@@ -27,6 +28,7 @@ DeepSeek's Innovation:
 Hardware: NVIDIA B200 (SM 10.0, 178 GB HBM3e, 5th-gen Tensor Cores)
 Reference: DeepSeek-V3 Technical Report, Section 4.2
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import triton
@@ -349,4 +351,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

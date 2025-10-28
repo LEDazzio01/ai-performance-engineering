@@ -5,6 +5,7 @@ Inspecting torch.compile Generated Code
 Shows how to dump and inspect compiled kernels to understand
 what optimizations torch.compile applies to transformer blocks.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
@@ -220,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

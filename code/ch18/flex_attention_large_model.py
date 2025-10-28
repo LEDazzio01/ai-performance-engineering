@@ -13,11 +13,13 @@ Test configurations:
 
 Hardware: NVIDIA B200 (SM 10.0, 178 GB HBM3e)
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import time
+from typing import Dict, Tuple
 
 
 def configure_for_flex_attention():
@@ -74,7 +76,7 @@ class TransformerBlock(nn.Module):
         
         return x
     
-    def forward_with_flex_attention(self, x, window_size=1024):
+    def forward_with_flex_attention(self, x, window_size=1024, block_mask=None):
         """Forward pass with FlexAttention"""
         residual = x
         x = self.norm1(x)
@@ -85,10 +87,10 @@ class TransformerBlock(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]
         
         # FlexAttention with sliding window
-        def sliding_window(b, h, q_idx, kv_idx):
-            return (q_idx - kv_idx).abs() <= window_size
-        
-        block_mask = create_block_mask(sliding_window, batch, self.n_heads, seq_len, seq_len)
+        if block_mask is None:
+            def sliding_window(b, h, q_idx, kv_idx):
+                return (q_idx - kv_idx).abs() <= window_size
+            block_mask = create_block_mask(sliding_window, batch, self.n_heads, seq_len, seq_len)
         attn_out = flex_attention(q, k, v, block_mask=block_mask)
         attn_out = attn_out.transpose(1, 2).reshape(batch, seq_len, self.d_model)
         x = self.out_proj(attn_out) + residual
@@ -128,10 +130,22 @@ class FlexAttentionModel(nn.Module):
             for _ in range(n_layers)
         ])
         self.window_size = window_size
-        
+        self._mask_cache: Dict[Tuple[int, int, int], torch.Tensor] = {}
+    
     def forward(self, x):
+        batch = x.size(0)
+        seq_len = x.size(1)
+        device_index = x.device.index if x.device.index is not None else -1
+        cache_key = (device_index, batch, seq_len)
+        block_mask = self._mask_cache.get(cache_key)
+        if block_mask is None or block_mask.device != x.device:
+            def sliding_window(b, h, q_idx, kv_idx):
+                return (q_idx - kv_idx).abs() <= self.window_size
+            block_mask = create_block_mask(sliding_window, batch, self.blocks[0].n_heads, seq_len, seq_len).to(x.device)
+            self._mask_cache[cache_key] = block_mask
+
         for block in self.blocks:
-            x = block.forward_with_flex_attention(x, self.window_size)
+            x = block.forward_with_flex_attention(x, self.window_size, block_mask=block_mask)
         return x
 
 
@@ -312,4 +326,3 @@ if __name__ == "__main__":
     import sys
     # Success if we got 2x on any configuration
     sys.exit(0 if max_speedup >= 2.0 else 1)
-

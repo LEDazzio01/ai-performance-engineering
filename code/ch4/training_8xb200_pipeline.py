@@ -29,8 +29,10 @@ Usage:
     # For TP=4, DP=2 (recommended for 20-100B models)
     torchrun --nproc_per_node=8 training_8xb200_pipeline.py --tp-size 4
 
+
 Author: AI Performance Engineering Team
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import time
@@ -289,7 +291,10 @@ def train_step(
     labels = batch["labels"]
     
     # Forward
-    logits = model(input_ids)
+    autocast_enabled = input_ids.device.type == "cuda"
+    autocast_dtype = torch.bfloat16 if autocast_enabled else None
+    with torch.autocast("cuda", dtype=autocast_dtype, enabled=autocast_enabled):
+        logits = model(input_ids)
     
     # Compute loss
     loss = torch.nn.functional.cross_entropy(
@@ -347,7 +352,7 @@ def train(
     
     for batch in dataloader:
         # Move to device
-        batch = {k: v.cuda() for k, v in batch.items()}
+        batch = {k: v.cuda(non_blocking=True) for k, v in batch.items()}
         
         # Training step
         step_start = time.time()

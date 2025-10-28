@@ -12,6 +12,7 @@ Requirements:
 Expected Runtime: ~2-5 seconds (educational/demo only, no heavy computation)
 Note: NVSHMEM plugin availability depends on the specific Triton build and system configuration.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import triton

@@ -35,6 +35,7 @@ This module demonstrates concepts and provides PyTorch alternatives.
 
 Author: AI Performance Engineering Team
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.distributed as dist
@@ -475,4 +476,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

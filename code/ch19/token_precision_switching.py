@@ -1,6 +1,7 @@
 """Chapter 19: Token precision switching and cache quantization helpers."""
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import logging
 import math

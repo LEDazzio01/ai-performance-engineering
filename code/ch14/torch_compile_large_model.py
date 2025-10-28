@@ -12,6 +12,7 @@ Key insight: torch.compile benefits scale with model size!
 
 Hardware: NVIDIA B200 (178 GB memory available)
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
@@ -316,4 +317,3 @@ if __name__ == "__main__":
     
     import sys
     sys.exit(0 if speedup >= 1.15 else 1)
-

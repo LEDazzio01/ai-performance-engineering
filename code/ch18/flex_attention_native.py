@@ -5,6 +5,7 @@ Demonstrates correct FlexAttention usage with torch.compile for optimal
 performance. FlexAttention must be compiled to generate fused kernels;
 without compilation it materializes the full attention matrix.
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
@@ -64,9 +65,19 @@ class FlexAttentionCORRECT(nn.Module):
     def __init__(self, window_size=2048):
         super().__init__()
         self.window_size = window_size
+        # Create mask function at init time to avoid torch.compile issues
+        def _sliding_window(b, h, q_idx, kv_idx):
+            return (q_idx - kv_idx).abs() <= window_size
+        self.mask_fn = _sliding_window
         
     def forward(self, Q, K, V):
-        return flex_attention(Q, K, V)
+        B, H, T, D = Q.shape
+        
+        # Create block mask using pre-defined function
+        block_mask = create_block_mask(self.mask_fn, B, H, T, T)
+        
+        # Will be compiled by torch.compile wrapper - generates fused kernel!
+        return flex_attention(Q, K, V, block_mask=block_mask)
 
 
 def benchmark_attention(model, Q, K, V, name, num_warmup=50, num_iters=200):
@@ -195,4 +206,3 @@ if __name__ == "__main__":
     # Exit with appropriate code
     import sys
     sys.exit(0 if speedup >= 1.5 else 1)
-

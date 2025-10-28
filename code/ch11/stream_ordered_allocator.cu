@@ -153,13 +153,15 @@ void configure_blackwell_memory_pool() {
     #if CUDART_VERSION >= 13000
     if (prop.major == 10) {
         // Blackwell-specific: align to 256-byte bursts
-        uint64_t granularity = 256;
-        cudaMemPoolSetAttribute(
-            mempool,
-            cudaMemPoolAttrReservedMemGranularity,
-            &granularity
-        );
-        printf("✓ Blackwell HBM3e granularity: 256 bytes\n");
+        // Note: cudaMemPoolAttrReservedMemGranularity may not be available in all CUDA versions
+        // Commenting out for compatibility with CUDA 13.0
+        // uint64_t granularity = 256;
+        // cudaMemPoolSetAttribute(
+        //     mempool,
+        //     cudaMemPoolAttrReservedMemGranularity,
+        //     &granularity
+        // );
+        printf("✓ Blackwell HBM3e granularity: default (granularity setting skipped for CUDA 13.0 compatibility)\n");
     }
     #endif
     

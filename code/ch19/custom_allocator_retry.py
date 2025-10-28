@@ -1,6 +1,7 @@
 """Dynamic allocator retry helper for Chapter 19."""
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import argparse
 import gc

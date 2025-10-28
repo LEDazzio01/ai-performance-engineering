@@ -1,0 +1,57 @@
+{
+  "timestamp": "2025-10-28T14:01:59Z",
+  "device": "cuda",
+  "dtype": "float16",
+  "warmup": 1,
+  "iters": 2,
+  "compile_mode": "reduce-overhead",
+  "parameters_billion": 39.479681024,
+  "param_memory_gb": 78.959362048,
+  "results": [
+    {
+      "config": "Batch=4, Seq=2048",
+      "batch": 4,
+      "seq_len": 2048,
+      "eager_ms": 516.3139910000609,
+      "eager_tps": 15866.314186320458,
+      "compiled_ms": 518.8872544968035,
+      "compiled_tps": 15787.630027537061,
+      "speedup": 0.9950408041931228,
+      "eager_peak_mem_gb": 80.588242944,
+      "compiled_peak_mem_gb": 82.467356672,
+      "notes": [
+        "Activation footprint ~ 0.13 GB"
+      ]
+    },
+    {
+      "config": "Batch=2, Seq=4096",
+      "batch": 2,
+      "seq_len": 4096,
+      "eager_ms": 534.845027999836,
+      "eager_tps": 15316.586246740826,
+      "compiled_ms": 573.3342985004128,
+      "compiled_tps": 14288.348039575903,
+      "speedup": 0.9328676644651338,
+      "eager_peak_mem_gb": 159.55630592,
+      "compiled_peak_mem_gb": 163.717121024,
+      "notes": [
+        "Activation footprint ~ 0.13 GB"
+      ]
+    },
+    {
+      "config": "Batch=1, Seq=8192",
+      "batch": 1,
+      "seq_len": 8192,
+      "eager_ms": 576.0473074988113,
+      "eager_tps": 14221.054231760132,
+      "compiled_ms": 708.0197014984151,
+      "compiled_tps": 11570.299502489675,
+      "speedup": 0.8136035004106461,
+      "eager_peak_mem_gb": 159.55630592,
+      "compiled_peak_mem_gb": 159.172527104,
+      "notes": [
+        "Activation footprint ~ 0.13 GB"
+      ]
+    }
+  ]
+}

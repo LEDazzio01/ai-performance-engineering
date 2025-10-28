@@ -13,6 +13,7 @@ Performance Targets (B200):
 - 2x faster than baseline
 - 50% memory reduction
 - 16K context support
+
 - <10ms latency per token
 
 Requirements:
@@ -22,9 +23,11 @@ Requirements:
 
 Author: Blackwell Optimization Project
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.attention.flex_attention import (
     flex_attention,
     create_block_mask,
@@ -40,6 +43,34 @@ try:
 except AttributeError:
     FP8_AVAILABLE = False
     FP8_E4M3 = torch.float16
+
+
+if flex_attention is not None:
+    def _flex_attention_wrapper(query, key, value, block_mask):
+        return flex_attention(query, key, value, block_mask=block_mask)
+else:
+    _flex_attention_wrapper = None
+
+
+if _flex_attention_wrapper is not None and hasattr(torch, "compile"):
+    try:
+        _FLEX_ATTENTION_FN = torch.compile(
+            _flex_attention_wrapper,
+            mode="reduce-overhead",
+            fullgraph=True,
+            dynamic=True,
+        )
+    except Exception:  # pragma: no cover - fallback to eager flex
+        _FLEX_ATTENTION_FN = _flex_attention_wrapper
+else:
+    _FLEX_ATTENTION_FN = _flex_attention_wrapper
+
+if (
+    _FLEX_ATTENTION_FN is _flex_attention_wrapper
+    and flex_attention is not None
+    and hasattr(flex_attention, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG")
+):
+    flex_attention._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
 
 
 # ============================================================================
@@ -87,7 +118,7 @@ class DynamicQuantizedKVCache:
         
         # Scaling factors for FP8 quantization
         if FP8_AVAILABLE:
-            self.scales = torch.ones(num_layers, 2, device=device)
+            self.scales = torch.ones(num_layers, 2, max_batch_size, device=device)
         else:
             self.scales = None
         
@@ -108,6 +139,7 @@ class DynamicQuantizedKVCache:
         key: torch.Tensor,
         value: torch.Tensor,
         batch_idx: int = 0,
+        batch_indices: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Update KV cache for a layer
@@ -121,40 +153,68 @@ class DynamicQuantizedKVCache:
         Returns:
             Updated (key, value) tensors from cache
         """
-        new_seq_len = key.shape[2]
-        current_len = self.seq_lens[batch_idx].item()
+        if batch_indices is None:
+            batch_indices = torch.tensor(
+                [batch_idx], device=self.seq_lens.device, dtype=torch.long
+            )
+        else:
+            if not torch.is_tensor(batch_indices):
+                batch_indices = torch.tensor(batch_indices, device=self.seq_lens.device)
+            else:
+                batch_indices = batch_indices.to(self.seq_lens.device, dtype=torch.long)
+            if batch_indices.dim() == 0:
+                batch_indices = batch_indices.unsqueeze(0)
         
-        # Quantize if using FP8
-        if FP8_AVAILABLE and key.dtype != FP8_E4M3:
-            # Compute scale
-            k_scale = key.abs().max()
-            v_scale = value.abs().max()
+        assert key.shape[0] == batch_indices.numel(), (
+            f"Batch size mismatch: key batch={key.shape[0]}, "
+            f"indices={batch_indices.numel()}"
+        )
+        
+        updated_keys = []
+        updated_vals = []
+        
+        for local_idx, cache_idx in enumerate(batch_indices.tolist()):
+            cache_idx_int = int(cache_idx)
+            current_len = int(self.seq_lens[cache_idx_int].item())
+            k_slice = key[local_idx]
+            v_slice = value[local_idx]
+            new_seq_len = k_slice.shape[1]
             
-            # Store scales
-            self.scales[layer_idx, 0] = k_scale
-            self.scales[layer_idx, 1] = v_scale
+            end_pos = current_len + new_seq_len
+            if end_pos > self.max_seq_len:
+                raise ValueError(
+                    f"KV cache overflow: requested {end_pos}, "
+                    f"max={self.max_seq_len}"
+                )
             
-            # Quantize
-            key = (key / k_scale).to(FP8_E4M3)
-            value = (value / v_scale).to(FP8_E4M3)
+            if FP8_AVAILABLE and k_slice.dtype != FP8_E4M3:
+                k_scale = k_slice.abs().max()
+                v_scale = v_slice.abs().max()
+                self.scales[layer_idx, 0, cache_idx_int] = k_scale
+                self.scales[layer_idx, 1, cache_idx_int] = v_scale
+                k_store = (k_slice / k_scale).to(FP8_E4M3)
+                v_store = (v_slice / v_scale).to(FP8_E4M3)
+            else:
+                k_store = k_slice
+                v_store = v_slice
+            
+            self.cache[layer_idx, 0, cache_idx_int, :, current_len:end_pos, :] = k_store
+            self.cache[layer_idx, 1, cache_idx_int, :, current_len:end_pos, :] = v_store
+            self.seq_lens[cache_idx_int] = end_pos
+            
+            cached_key = self.cache[layer_idx, 0, cache_idx_int, :, :end_pos, :]
+            cached_value = self.cache[layer_idx, 1, cache_idx_int, :, :end_pos, :]
+            
+            if FP8_AVAILABLE:
+                k_scale = self.scales[layer_idx, 0, cache_idx_int]
+                v_scale = self.scales[layer_idx, 1, cache_idx_int]
+                cached_key = cached_key.to(torch.float32) * k_scale
+                cached_value = cached_value.to(torch.float32) * v_scale
+            
+            updated_keys.append(cached_key.unsqueeze(0))
+            updated_vals.append(cached_value.unsqueeze(0))
         
-        # Update cache
-        end_pos = current_len + new_seq_len
-        self.cache[layer_idx, 0, batch_idx, :, current_len:end_pos, :] = key[0]
-        self.cache[layer_idx, 1, batch_idx, :, current_len:end_pos, :] = value[0]
-        
-        # Update sequence length
-        self.seq_lens[batch_idx] = end_pos
-        
-        # Return full cached tensors (dequantized if needed)
-        cached_key = self.cache[layer_idx, 0, batch_idx, :, :end_pos, :]
-        cached_value = self.cache[layer_idx, 1, batch_idx, :, :end_pos, :]
-        
-        if FP8_AVAILABLE:
-            cached_key = cached_key.to(torch.float32) * self.scales[layer_idx, 0]
-            cached_value = cached_value.to(torch.float32) * self.scales[layer_idx, 1]
-        
-        return cached_key.unsqueeze(0), cached_value.unsqueeze(0)
+        return torch.cat(updated_keys, dim=0), torch.cat(updated_vals, dim=0)
     
     def clear(self, batch_idx: Optional[int] = None):
         """Clear cache"""
@@ -164,6 +224,12 @@ class DynamicQuantizedKVCache:
         else:
             self.cache[:, :, batch_idx].zero_()
             self.seq_lens[batch_idx] = 0
+
+    def get_memory_usage(self, batch_idx: Optional[int] = None) -> int:
+        """Return memory footprint in bytes."""
+        if batch_idx is None:
+            return self.cache.numel() * self.cache.element_size()
+        return self.cache[:, :, batch_idx].numel() * self.cache.element_size()
 
 
 # ============================================================================
@@ -192,12 +258,14 @@ class OptimizedDecoderLayer(nn.Module):
         num_heads: int,
         window_size: int = 2048,
         device: str = "cuda",
+        use_flex_attention: bool = True,
     ):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.head_dim = d_model // num_heads
         self.window_size = window_size
+        self.use_flex_attention = use_flex_attention
         
         # Projections
         self.q_proj = nn.Linear(d_model, d_model, device=device)
@@ -210,6 +278,7 @@ class OptimizedDecoderLayer(nn.Module):
             return q_idx - kv_idx <= window_size
         
         self.block_mask_fn = sliding_window
+        self.flex_attention_fn = _FLEX_ATTENTION_FN if self.use_flex_attention else None
         
     def forward(
         self,
@@ -249,21 +318,20 @@ class OptimizedDecoderLayer(nn.Module):
         if kv_cache is not None:
             key, value = kv_cache.update(layer_idx, key, value)
         
-        # Create block mask for FlexAttention
         total_len = key.shape[2]
-        block_mask = create_block_mask(
-            self.block_mask_fn,
-            B=batch_size,
-            H=self.num_heads,
-            Q_LEN=seq_len,
-            KV_LEN=total_len,
-        )
-        
-        # FlexAttention (PyTorch 2.9)
-        attn_output = flex_attention(
-            query, key, value,
-            block_mask=block_mask,
-        )
+        if self.flex_attention_fn is not None:
+            block_mask = create_block_mask(
+                self.block_mask_fn,
+                B=batch_size,
+                H=self.num_heads,
+                Q_LEN=seq_len,
+                KV_LEN=total_len,
+            )
+            attn_output = self.flex_attention_fn(query, key, value, block_mask)
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                query, key, value, dropout_p=0.0, is_causal=False
+            )
         
         # Reshape and project
         attn_output = attn_output.transpose(1, 2).contiguous()
@@ -920,4 +988,3 @@ if __name__ == "__main__":
             print("✓ 900 GB/s NVLink-C2C bandwidth")
             print("✓ 480GB-1TB CPU memory for KV cache")
             print("Run with --gb200 for CPU offloading demo")
-

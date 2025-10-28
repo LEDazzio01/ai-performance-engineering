@@ -18,6 +18,7 @@ Training benchmark (end-to-end):
 
 Hardware: NVIDIA B200 (SM 10.0, 178 GB HBM3e)
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
@@ -407,4 +408,3 @@ if __name__ == "__main__":
     
     import sys
     sys.exit(0 if speedup >= 1.2 else 1)
-

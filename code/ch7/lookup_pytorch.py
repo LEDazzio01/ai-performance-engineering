@@ -4,6 +4,7 @@ This replicates the Chapter 7 guidance with simple timing.
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time
 import torch

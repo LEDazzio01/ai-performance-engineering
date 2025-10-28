@@ -1,0 +1,74 @@
+{
+  "command": [
+    "torchrun",
+    "--standalone",
+    "--nproc_per_node=8",
+    "/tmp/load_entry.py",
+    "--duration",
+    "120",
+    "--target-qps",
+    "350",
+    "--tick-interval",
+    "0.02",
+    "--output-json",
+    "benchmark_runs/inference_load_test_20251028_160649.json"
+  ],
+  "samples": 132,
+  "duration": 65.54516077041626,
+  "total_power": {
+    "min_watts": 1553.4320000000002,
+    "max_watts": 4052.5589999999997,
+    "avg_watts": 1609.84075
+  },
+  "energy_joules": 105532.45689325212,
+  "per_device": [
+    {
+      "gpu_index": 0,
+      "min_watts": 195.742,
+      "max_watts": 501.837,
+      "avg_watts": 202.79082575757576
+    },
+    {
+      "gpu_index": 1,
+      "min_watts": 193.192,
+      "max_watts": 512.853,
+      "avg_watts": 200.50298484848486
+    },
+    {
+      "gpu_index": 2,
+      "min_watts": 195.258,
+      "max_watts": 510.472,
+      "avg_watts": 202.49041666666668
+    },
+    {
+      "gpu_index": 3,
+      "min_watts": 193.031,
+      "max_watts": 504.696,
+      "avg_watts": 200.10105303030304
+    },
+    {
+      "gpu_index": 4,
+      "min_watts": 189.971,
+      "max_watts": 499.686,
+      "avg_watts": 196.87607575757576
+    },
+    {
+      "gpu_index": 5,
+      "min_watts": 193.529,
+      "max_watts": 505.728,
+      "avg_watts": 200.5348712121212
+    },
+    {
+      "gpu_index": 6,
+      "min_watts": 196.429,
+      "max_watts": 498.256,
+      "avg_watts": 203.4235984848485
+    },
+    {
+      "gpu_index": 7,
+      "min_watts": 195.966,
+      "max_watts": 519.031,
+      "avg_watts": 203.12092424242425
+    }
+  ]
+}

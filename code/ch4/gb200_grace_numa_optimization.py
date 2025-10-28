@@ -31,6 +31,7 @@ Usage:
     from ch4.gb200_grace_numa_optimization import setup_grace_affinity
     setup_grace_affinity(gpu_id=0, num_workers=8)
 """
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import platform
@@ -476,4 +477,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

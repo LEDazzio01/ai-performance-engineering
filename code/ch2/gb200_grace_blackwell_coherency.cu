@@ -144,8 +144,11 @@ double benchmark_unified_memory_zerocopy(size_t size_mb) {
         cpu_end - cpu_start).count();
     
     // Prefetch to GPU (uses NVLink-C2C on GB200/GB300)
+    struct cudaMemLocation gpuLoc;
+    gpuLoc.type = cudaMemLocationTypeDevice;
+    gpuLoc.id = 0;
     auto transfer_start = std::chrono::high_resolution_clock::now();
-    CUDA_CHECK(cudaMemPrefetchAsync(unified_data, size, 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(unified_data, size, gpuLoc, 0, 0));
     CUDA_CHECK(cudaDeviceSynchronize());
     auto transfer_end = std::chrono::high_resolution_clock::now();
     auto transfer_time = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -181,8 +184,14 @@ void benchmark_coherent_access(size_t size_mb) {
     CUDA_CHECK(cudaMallocManaged(&data, size));
     
     // Set preferred location for optimal access
-    CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetPreferredLocation, 0));
-    CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetAccessedBy, cudaCpuDeviceId));
+    struct cudaMemLocation gpuLoc;
+    gpuLoc.type = cudaMemLocationTypeDevice;
+    gpuLoc.id = 0;
+    struct cudaMemLocation cpuLoc;
+    cpuLoc.type = cudaMemLocationTypeHost;
+    cpuLoc.id = 0;
+    CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetPreferredLocation, gpuLoc));
+    CUDA_CHECK(cudaMemAdvise(data, size, cudaMemAdviseSetAccessedBy, cpuLoc));
     
     // Initialize on CPU
     for (size_t i = 0; i < n_elements; i++) {
@@ -190,7 +199,7 @@ void benchmark_coherent_access(size_t size_mb) {
     }
     
     // Prefetch to GPU
-    CUDA_CHECK(cudaMemPrefetchAsync(data, size, 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(data, size, gpuLoc, 0, 0));
     CUDA_CHECK(cudaDeviceSynchronize());
     
     auto start = std::chrono::high_resolution_clock::now();
@@ -311,8 +320,11 @@ void compare_traditional_vs_unified(size_t size_mb) {
         unified_data[i] = (float)i;
     }
     
+    struct cudaMemLocation gpuLoc2;
+    gpuLoc2.type = cudaMemLocationTypeDevice;
+    gpuLoc2.id = 0;
     auto unified_start = std::chrono::high_resolution_clock::now();
-    CUDA_CHECK(cudaMemPrefetchAsync(unified_data, size, 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(unified_data, size, gpuLoc2, 0, 0));
     CUDA_CHECK(cudaDeviceSynchronize());
     auto unified_end = std::chrono::high_resolution_clock::now();
     auto unified_time = std::chrono::duration_cast<std::chrono::microseconds>(

@@ -12,6 +12,7 @@ Key Features:
 - Tensor Core Engine (TCE) for collectives
 - Optimized algorithms for Blackwell topology
 
+
 Requirements:
 - PyTorch 2.9+
 - NCCL 2.28+
@@ -24,6 +25,7 @@ Usage:
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import os
 import torch
@@ -679,4 +681,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

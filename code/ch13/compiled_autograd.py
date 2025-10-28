@@ -7,6 +7,7 @@ Requires PyTorch 2.9+ and CUDA 13.0+.
 """
 
 from __future__ import annotations
+import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
 import torch.nn as nn
@@ -343,4 +344,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
