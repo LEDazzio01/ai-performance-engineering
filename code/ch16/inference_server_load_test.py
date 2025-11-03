@@ -305,6 +305,8 @@ def main() -> None:
             args.output_json.write_text(json.dumps(aggregate, indent=2))
             print(f"Saved aggregate metrics to {args.output_json}")
 
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,37 @@
+{
+  "hbm3e_bandwidth": {
+    "size_8gb": {
+      "bandwidth_tbs": 0.11146583545480127,
+      "utilization_pct": 1.4290491724974521
+    },
+    "size_12gb": {
+      "bandwidth_tbs": 0.11213214556769191,
+      "utilization_pct": 1.4375916098422041
+    },
+    "size_16gb": {
+      "bandwidth_tbs": 0.11316634726023372,
+      "utilization_pct": 1.4508506059004322
+    },
+    "peak_bandwidth_tbs": 0.11316634726023372,
+    "peak_utilization_pct": 1.4508506059004322,
+    "status": "GOOD"
+  },
+  "fp16_compute": {
+    "matrix_4096x4096": {
+      "time_ms": 2.9111077880859373,
+      "tflops": 47.21190813836768
+    },
+    "matrix_8192x8192": {
+      "time_ms": 19.030751953125,
+      "tflops": 57.77552198064625
+    },
+    "peak_tflops": 57.77552198064625,
+    "status": "GOOD"
+  },
+  "torch_compile": {
+    "eager_time_ms": 38.51524071500535,
+    "compiled_time_ms": 40.20334960000582,
+    "speedup": 0.9580107403538278,
+    "status": "NEEDS TUNING"
+  }
+}

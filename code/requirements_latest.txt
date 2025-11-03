@@ -6,8 +6,10 @@
 --index-url https://download.pytorch.org/whl/cu130
 --extra-index-url https://pypi.org/simple
 torch==2.9.0+cu130
-torchvision==0.24.0+cu130
-torchaudio==2.9.0+cu130
+torchvision==0.24.0+cu130; platform_machine != "aarch64"
+torchvision==0.24.0; platform_machine == "aarch64"
+torchaudio==2.9.0+cu130; platform_machine != "aarch64"
+torchaudio==2.9.0; platform_machine == "aarch64"
 
 # Optional: install upstream Triton if you author custom GPU kernels outside of
 # TorchInductor (PyTorch bundles its own runtime already).
@@ -53,8 +55,6 @@ sentencepiece==0.2.0
 tokenizers==0.19.1
 
 # Optional model serving & optimization
-onnx==1.19.0
-onnxruntime-gpu==1.23.0
 torchtitan>=0.2.0  # Async Tensor Parallelism demos (requires CUDA build)
 
 # Profiling & diagnostics
@@ -72,6 +72,7 @@ ray==2.49.2
 # Scalable data utilities
 dask==2025.9.1
 xarray==2025.6.1
+fsspec[http]==2024.6.1  # keep compatible with datasets 2.21.0
 
 # Notes
 # - Install DeepSpeed/Fairscale or other distributed frameworks separately as needed.

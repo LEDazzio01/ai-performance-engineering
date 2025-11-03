@@ -28,6 +28,12 @@ DeepSeek's Innovation:
 Hardware: NVIDIA B200 (SM 10.0, 178 GB HBM3e, 5th-gen Tensor Cores)
 Reference: DeepSeek-V3 Technical Report, Section 4.2
 """
+import sys
+import os
+
+# Add parent directory to path to import arch_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch

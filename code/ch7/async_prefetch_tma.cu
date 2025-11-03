@@ -6,7 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "../cuda13_feature_examples.cuh"
+#include "../common/headers/arch_detection.cuh"
+#include "../common/headers/tma_helpers.cuh"
 
 #if CUDART_VERSION >= 13000
 #include <cuda.h>
@@ -16,15 +17,14 @@
 #endif
 
 namespace cde = cuda::device::experimental;
-using cuda13_examples::check_cuda;
-using cuda13_examples::device_supports_tma;
-using cuda13_examples::load_cuTensorMapEncodeTiled;
-using cuda13_examples::make_1d_tensor_map;
+using cuda_tma::check_cuda;
+using cuda_tma::device_supports_tma;
+using cuda_tma::load_cuTensorMapEncodeTiled;
+using cuda_tma::make_1d_tensor_map;
 
-constexpr int TILE_SIZE = 1024;
 constexpr int PIPELINE_STAGES = 2;
-constexpr std::size_t BYTES_PER_TILE = static_cast<std::size_t>(TILE_SIZE) * sizeof(float);
 
+template <int TILE_SIZE>
 __global__ void async_prefetch_fallback_kernel(
     const float* data,
     float* out,
@@ -49,18 +49,21 @@ __global__ void async_prefetch_fallback_kernel(
 
 #if TMA_CUDA13_AVAILABLE
 
+template <int TILE_SIZE>
 __global__ void async_prefetch_tma_kernel(
     const __grid_constant__ CUtensorMap in_desc,
     const __grid_constant__ CUtensorMap out_desc,
     int total_tiles) {
     __shared__ alignas(128) float stage_buffers[PIPELINE_STAGES][TILE_SIZE];
-    __shared__ cuda::barrier<cuda::thread_scope_block> stage_barriers[PIPELINE_STAGES];
+    using block_barrier = cuda::barrier<cuda::thread_scope_block>;
+    __shared__ alignas(block_barrier) unsigned char stage_barrier_storage[PIPELINE_STAGES][sizeof(block_barrier)];
 
     const int pipeline_stages = PIPELINE_STAGES;
 
     if (threadIdx.x == 0) {
         for (int stage = 0; stage < pipeline_stages; ++stage) {
-            init(&stage_barriers[stage], blockDim.x);
+            auto* bar_ptr = reinterpret_cast<block_barrier*>(stage_barrier_storage[stage]);
+            init(bar_ptr, blockDim.x);
         }
         cde::fence_proxy_async_shared_cta();
     }
@@ -73,7 +76,8 @@ __global__ void async_prefetch_tma_kernel(
             return;
         }
         const int stage = tile_idx % pipeline_stages;
-        auto& bar = stage_barriers[stage];
+        auto* bar_ptr = reinterpret_cast<block_barrier*>(stage_barrier_storage[stage]);
+        auto& bar = *bar_ptr;
 
         if (threadIdx.x == 0) {
             cde::cp_async_bulk_tensor_1d_global_to_shared(
@@ -81,7 +85,10 @@ __global__ void async_prefetch_tma_kernel(
                 &in_desc,
                 tile_idx * TILE_SIZE,
                 bar);
-            tokens[stage] = cuda::device::barrier_arrive_tx(bar, 1, BYTES_PER_TILE);
+            tokens[stage] = cuda::device::barrier_arrive_tx(
+                bar,
+                1,
+                static_cast<std::size_t>(TILE_SIZE) * sizeof(float));
         } else {
             tokens[stage] = bar.arrive();
         }
@@ -94,7 +101,8 @@ __global__ void async_prefetch_tma_kernel(
 
     for (int tile = 0; tile < total_tiles; ++tile) {
         const int stage = tile % pipeline_stages;
-        auto& bar = stage_barriers[stage];
+        auto* bar_ptr = reinterpret_cast<block_barrier*>(stage_barrier_storage[stage]);
+        auto& bar = *bar_ptr;
 
         bar.wait(std::move(tokens[stage]));
         __syncthreads();
@@ -124,6 +132,44 @@ __global__ void async_prefetch_tma_kernel(
 
 }
 
+template <int TILE_SIZE>
+void launch_tma_prefetch_kernel(
+    const CUtensorMap& in_desc,
+    const CUtensorMap& out_desc,
+    int tiles) {
+    async_prefetch_tma_kernel<TILE_SIZE><<<1, 256>>>(in_desc, out_desc, tiles);
+    check_cuda(cudaGetLastError(), "async_prefetch_tma_kernel launch");
+    check_cuda(cudaDeviceSynchronize(), "kernel sync");
+}
+
+template <int TILE_SIZE>
+void launch_fallback_kernel(
+    const float* d_in,
+    float* d_out,
+    int tiles) {
+    const int threads = 256;
+    const std::size_t smem_bytes = static_cast<std::size_t>(TILE_SIZE) * sizeof(float);
+    async_prefetch_fallback_kernel<TILE_SIZE><<<1, threads, smem_bytes>>>(d_in, d_out, tiles);
+    check_cuda(cudaGetLastError(), "async_prefetch_fallback_kernel launch");
+    check_cuda(cudaDeviceSynchronize(), "fallback kernel sync");
+}
+
+template <typename LaunchFn256, typename LaunchFn512, typename LaunchFn1024>
+void dispatch_by_tile_size(int tile_size, LaunchFn256 launch256, LaunchFn512 launch512, LaunchFn1024 launch1024) {
+    switch (tile_size) {
+        case 1024:
+            launch1024();
+            break;
+        case 512:
+            launch512();
+            break;
+        case 256:
+        default:
+            launch256();
+            break;
+    }
+}
+
 int main() {
     std::printf("=== CUDA 13 TMA 1D Prefetch ===\n\n");
 
@@ -147,15 +193,23 @@ int main() {
         std::printf("ℹ️  ENABLE_BLACKWELL_TMA not set (or descriptor API unavailable); using cuda::memcpy_async fallback.\n");
     }
 
-    constexpr int tiles = 64;
-    constexpr int total = tiles * TILE_SIZE;
-    const std::size_t bytes = static_cast<std::size_t>(total) * sizeof(float);
+    const cuda_arch::TMALimits limits = cuda_arch::get_tma_limits();
+    const int tile_size = static_cast<int>(std::min<uint32_t>(limits.max_1d_box_size, 1024u));
+    if (tile_size <= 0) {
+        std::printf("⚠️  Invalid TMA limits reported; falling back to cuda::memcpy_async.\n");
+        enable_tma = false;
+    }
+    std::printf("Selected TMA tile size: %d element(s)\n\n", tile_size);
+
+    constexpr int kTiles = 64;
+    const int total_elements = tile_size * kTiles;
+    const std::size_t bytes = static_cast<std::size_t>(total_elements) * sizeof(float);
 
     float* h_in = nullptr;
     float* h_out = nullptr;
     check_cuda(cudaMallocHost(&h_in, bytes), "cudaMallocHost h_in");
     check_cuda(cudaMallocHost(&h_out, bytes), "cudaMallocHost h_out");
-    for (int i = 0; i < total; ++i) {
+    for (int i = 0; i < total_elements; ++i) {
         h_in[i] = static_cast<float>(i);
     }
 
@@ -171,23 +225,33 @@ int main() {
     CUtensorMap in_desc{};
     CUtensorMap out_desc{};
     if (enable_tma) {
-        enable_tma = make_1d_tensor_map(in_desc, encode, d_in, total, TILE_SIZE) &&
-                     make_1d_tensor_map(out_desc, encode, d_out, total, TILE_SIZE);
+        enable_tma = make_1d_tensor_map(in_desc, encode, d_in, total_elements, tile_size) &&
+                     make_1d_tensor_map(out_desc, encode, d_out, total_elements, tile_size);
         if (!enable_tma) {
             std::printf("⚠️  Falling back to cuda::memcpy_async implementation (TMA descriptor unavailable).\n");
         }
     }
 
+    auto launch_tma = [&]() {
+        dispatch_by_tile_size(
+            tile_size,
+            [&]() { launch_tma_prefetch_kernel<256>(in_desc, out_desc, kTiles); },
+            [&]() { launch_tma_prefetch_kernel<512>(in_desc, out_desc, kTiles); },
+            [&]() { launch_tma_prefetch_kernel<1024>(in_desc, out_desc, kTiles); });
+    };
+
+    auto launch_fallback = [&]() {
+        dispatch_by_tile_size(
+            tile_size,
+            [&]() { launch_fallback_kernel<256>(d_in, d_out, kTiles); },
+            [&]() { launch_fallback_kernel<512>(d_in, d_out, kTiles); },
+            [&]() { launch_fallback_kernel<1024>(d_in, d_out, kTiles); });
+    };
+
     if (enable_tma) {
-        async_prefetch_tma_kernel<<<1, 256>>>(in_desc, out_desc, tiles);
-        check_cuda(cudaGetLastError(), "async_prefetch_tma_kernel launch");
-        check_cuda(cudaDeviceSynchronize(), "kernel sync");
+        launch_tma();
     } else {
-        const int threads = 256;
-        const size_t smem_bytes = TILE_SIZE * sizeof(float);
-        async_prefetch_fallback_kernel<<<1, threads, smem_bytes>>>(d_in, d_out, tiles);
-        check_cuda(cudaGetLastError(), "async_prefetch_fallback_kernel launch");
-        check_cuda(cudaDeviceSynchronize(), "fallback kernel sync");
+        launch_fallback();
     }
 
     check_cuda(cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost), "copy output");

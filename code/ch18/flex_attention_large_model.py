@@ -27,7 +27,7 @@ def configure_for_flex_attention():
     # NEW PyTorch 2.9 API (no warnings!)
     torch.set_float32_matmul_precision('high')
     torch.backends.cudnn.conv.fp32_precision = 'tf32'
-    torch.backends.cuda.matmul.fp32_precision = 'high'
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
     torch._inductor.config.triton.cudagraphs = True

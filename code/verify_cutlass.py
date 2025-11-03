@@ -7,6 +7,18 @@ Quick test to ensure CUTLASS backend is properly configured and functional.
 import arch_config  # Must import first to configure CUTLASS
 import torch
 import torch.nn as nn
+from importlib import metadata as importlib_metadata
+
+
+def _version_tuple(version_str: str):
+    parts = []
+    for token in version_str.split("."):
+        numeric = "".join(ch for ch in token if ch.isdigit())
+        if numeric:
+            parts.append(int(numeric))
+        else:
+            parts.append(0)
+    return tuple(parts)
 
 def main():
     print("=" * 80)
@@ -30,6 +42,16 @@ def main():
     except ImportError as e:
         print(f"  ❌ cutlass import failed: {e}")
         return False
+
+    try:
+        cutlass_pkg_version = importlib_metadata.version("nvidia-cutlass-dsl")
+        print(f"  nvidia-cutlass-dsl version: {cutlass_pkg_version}")
+        if _version_tuple(cutlass_pkg_version) < (4, 2, 0):
+            print("  ⚠️  CUTLASS DSL < 4.2 detected; upgrade recommended for Blackwell kernels.")
+    except importlib_metadata.PackageNotFoundError:
+        print("  ⚠️  nvidia-cutlass-dsl package not found; CUTLASS kernels may be unavailable.")
+    except Exception as e:  # pragma: no cover
+        print(f"  ⚠️  Unable to determine CUTLASS version: {e}")
     
     try:
         import cuda.bindings
@@ -71,4 +93,3 @@ def main():
 if __name__ == "__main__":
     success = main()
     exit(0 if success else 1)
-

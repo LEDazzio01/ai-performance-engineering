@@ -4,6 +4,7 @@ Blackwell validation suite covering PyTorch 2.9, CUDA 13.0, and Triton 3.5 featu
 """
 
 import torch
+from arch_config import ArchitectureConfig
 import torch.distributed as dist
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
@@ -70,8 +71,9 @@ def test_architecture_detection():
     gpu_name = device_props.name
     print(f"GPU: {gpu_name}")
     print(f"Compute Capability: {compute_capability}")
-    if compute_capability == "10.0":
-        print(" Detected Blackwell B200/B300")
+    arch_cfg = ArchitectureConfig()
+    if arch_cfg.arch in {"blackwell", "grace_blackwell"}:
+        print(f" Detected {arch_cfg.get_architecture_name()}")
     else:
         print(f" Non-Blackwell GPU detected (compute capability {compute_capability})")
 

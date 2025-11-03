@@ -169,6 +169,8 @@ public:
         } else {
             condition = 2;  // Large batch path
         }
+
+        std::printf("Selected batch path %d for size %d\n", condition, actual_batch_size);
         
         // Update condition (CUDA 13 API)
         // This tells the graph which path to execute
@@ -368,4 +370,3 @@ int main() {
     
     return 0;
 }
-

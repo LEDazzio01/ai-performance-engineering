@@ -25,7 +25,7 @@ progress() {
 }
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HARNESS="$CODE_ROOT/scripts/profile_harness.py"
+HARNESS="$CODE_ROOT/scripts/harness/profile_harness.py"
 SESSION_ROOT="$CODE_ROOT/profile_runs/harness"
 mkdir -p "$SESSION_ROOT"
 

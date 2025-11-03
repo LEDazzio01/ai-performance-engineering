@@ -29,6 +29,8 @@
 #include <cstdio>
 #include <vector>
 
+#include "../common/headers/arch_detection.cuh"
+
 namespace cg = cooperative_groups;
 
 // Kernel that sums values across blocks in a cluster using block-scoped shared arrays
@@ -75,59 +77,55 @@ __global__ void cluster_sum_kernel(const float *in, float *out, int elems_per_bl
 // Blackwell Thread Block Cluster Information
 // ============================================================================
 
-void print_blackwell_cluster_info() {
-    printf("\n=== Blackwell Thread Block Clusters ===\n");
-    
-    cudaDeviceProp prop;
+void print_cluster_info() {
+    const auto& limits = cuda_arch::get_architecture_limits();
+
+    printf("\n=== Thread Block Cluster Capabilities ===\n");
+
+    cudaDeviceProp prop{};
     cudaGetDeviceProperties(&prop, 0);
-    
+
     printf("GPU: %s\n", prop.name);
-    printf("Compute Capability: %d.%d\n", prop.major, prop.minor);
-    
-    if (prop.major == 10 && prop.minor == 0) {
-        printf("✓ Blackwell B200/B300 detected\n\n");
-        
-        printf("Cluster Capabilities:\n");
-        printf("  Max CTAs per cluster: 8 (vs 4 on Hopper)\n");
-        printf("  Distributed Shared Memory: 2 MB total\n");
-        printf("  Per-block shared memory: 256 KB\n");
-        printf("  Total SMs: 148 (better load balancing)\n");
-        
-        printf("\nBlackwell Advantages:\n");
-        printf("  1. 2x more CTAs per cluster\n");
-        printf("  2. Larger distributed shared memory\n");
-        printf("  3. Better scheduling on 148 SMs\n");
-        printf("  4. Reduced global memory traffic\n");
-        
-        printf("\nUse Cases:\n");
-        printf("  - Large matrix operations (GEMM)\n");
-        printf("  - Stencil computations\n");
-        printf("  - Graph algorithms\n");
-        printf("  - Sparse matrix operations\n");
-        
-        printf("\nProgramming Model:\n");
-        printf("  1. Create cluster with cudaLaunchAttributeClusterDimension\n");
-        printf("  2. Use cg::this_cluster() in kernel\n");
-        printf("  3. cluster.sync() for barrier\n");
-        printf("  4. cluster.block_rank() for coordination\n");
-    } else {
-        printf("⚠ Not Blackwell - cluster support may be limited\n");
-        printf("  Blackwell SM 10.0 provides:\n");
-        printf("  - 8 CTAs per cluster (vs 4)\n");
-        printf("  - 2 MB distributed shared memory\n");
+    printf("Compute Capability: %d.%d\n\n", prop.major, prop.minor);
+
+    if (!limits.supports_clusters) {
+        printf("⚠️  This device does not expose Thread Block Cluster support.\n");
+        printf("    Clusters require Hopper (SM 9.0) or newer hardware.\n");
+        return;
     }
+
+    printf("Cluster capabilities:\n");
+    printf("  Max CTAs per cluster : %d\n", limits.max_cluster_size);
+    printf("  Max shared memory / block : %.1f KB\n", limits.max_shared_mem_per_block / 1024.0);
+    printf("  Max threads / block : %d\n", limits.max_threads_per_block);
+
+    if (prop.major >= 10) {
+        printf("\nBlackwell notes:\n");
+        printf("  • Up to 8 CTAs per cluster (2× Hopper)\n");
+        printf("  • Distributed shared memory improves cross-CTA communication\n");
+        printf("  • Designed for 148-SM parts with improved scheduling\n");
+    } else if (prop.major == 9) {
+        printf("\nHopper notes:\n");
+        printf("  • Up to 4 CTAs per cluster\n");
+        printf("  • Distributed shared memory available\n");
+    }
+
+    printf("\nProgramming tips:\n");
+    printf("  1. Configure clusters with cudaLaunchAttributeClusterDimension.\n");
+    printf("  2. Use cg::this_cluster() for cluster-wide synchronization.\n");
+    printf("  3. Choose cluster sizes that divide the grid when possible.\n");
 }
 
 int main() {
-    printf("=== Thread Block Clusters on Blackwell ===\n\n");
-    
-    // Print cluster information
-    print_blackwell_cluster_info();
-    
+    printf("=== Thread Block Clusters ===\n\n");
+
+    const auto& limits = cuda_arch::get_architecture_limits();
+    print_cluster_info();
+
     printf("\n=== Running Cluster Sum Example ===\n");
-    
-    constexpr int cluster_size = 2;
-    int num_blocks = 8; // total CTAs in the grid (must be >= cluster_size)
+
+    const int cluster_size = limits.supports_clusters ? limits.max_cluster_size : 1;
+    int num_blocks = std::max(cluster_size * 2, 8);
     int elems_per_block = 1 << 20; // 1M elements per block
     int threads = 256;
     size_t total_elems = size_t(num_blocks) * elems_per_block;
@@ -147,15 +145,18 @@ int main() {
     cfg.dynamicSmemBytes = threads * sizeof(float);
 
     cudaLaunchAttribute attr[1];
-    attr[0].id = cudaLaunchAttributeClusterDimension;
-    attr[0].val.clusterDim.x = cluster_size;
-    attr[0].val.clusterDim.y = 1;
-    attr[0].val.clusterDim.z = 1;
-
-    cfg.attrs = attr;
-    cfg.numAttrs = 1;
-
-    cudaFuncSetAttribute(cluster_sum_kernel, cudaFuncAttributeNonPortableClusterSizeAllowed, 1);
+    if (limits.supports_clusters) {
+        attr[0].id = cudaLaunchAttributeClusterDimension;
+        attr[0].val.clusterDim.x = cluster_size;
+        attr[0].val.clusterDim.y = 1;
+        attr[0].val.clusterDim.z = 1;
+        cfg.attrs = attr;
+        cfg.numAttrs = 1;
+        cudaFuncSetAttribute(cluster_sum_kernel, cudaFuncAttributeNonPortableClusterSizeAllowed, 1);
+    } else {
+        cfg.attrs = nullptr;
+        cfg.numAttrs = 0;
+    }
 
     cudaError_t err = cudaLaunchKernelEx(&cfg, cluster_sum_kernel, d_in, d_out, elems_per_block);
     if (err != cudaSuccess) {
@@ -179,7 +180,7 @@ int main() {
     double expected_block = static_cast<double>(elems_per_block);
     double expected_cluster_total = expected_block * cluster_size;
 
-    printf("cluster_group_blackwell completed.\n");
+    printf("cluster_group demo completed.\n");
     int sample_block = (num_blocks > 1) ? 1 : 0;
     printf(" - Partial sum (block %d): %.2f (expected %.2f)\n", sample_block, h_out[sample_block], expected_block);
     printf(" - Cluster total (cluster 0): %.2f (expected %.2f)\n", h_out[0], expected_cluster_total);
@@ -188,11 +189,12 @@ int main() {
     cudaFree(d_out);
     
     printf("\n=== Summary ===\n");
-    printf("✓ Thread Block Clusters with up to 8 CTAs (Blackwell)\n");
-    printf("✓ Distributed Shared Memory (DSMEM) - 2 MB total\n");
-    printf("✓ Cluster-wide synchronization\n");
-    printf("✓ Optimized for Blackwell's 148 SMs\n");
-    printf("\nBlackwell provides 2x more CTAs per cluster than Hopper!\n");
+    if (limits.supports_clusters) {
+        printf("✓ Cluster launch succeeded with %d CTAs per cluster\n", cluster_size);
+    } else {
+        printf("ℹ️  Device lacks cluster support; executed as independent CTAs\n");
+    }
+    printf("\n");
     
     return 0;
 }

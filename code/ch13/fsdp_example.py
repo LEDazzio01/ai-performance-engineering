@@ -1,4 +1,5 @@
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import arch_config  # noqa: F401 - Configure architecture optimizations
+from arch_config import ArchitectureConfig
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx
@@ -21,35 +22,25 @@ try:
 except (ImportError, AttributeError):
     FSDP_AVAILABLE = False
 
+_ARCH_CFG = ArchitectureConfig()
+
+
 def get_architecture():
     """Detect and return the current GPU architecture."""
     if not torch.cuda.is_available():
         return "cpu"
-
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-    return "blackwell" if compute_capability == "10.0" else "other"
+    return _ARCH_CFG.arch
 
 
 def get_architecture_info():
     """Get detailed architecture information."""
-    arch = get_architecture()
-    if arch == "blackwell":
-        return {
-            "name": "Blackwell B200/B300",
-            "compute_capability": "10.0",
-            "sm_version": "sm_100",
-            "memory_bandwidth": "7.8 TB/s",
-            "tensor_cores": "5th Gen",
-            "features": ["HBM3e", "TMA", "NVLink-C2C"]
-        }
     return {
-        "name": "Other",
-        "compute_capability": "Unknown",
-        "sm_version": "Unknown",
-        "memory_bandwidth": "Unknown",
-        "tensor_cores": "Unknown",
-        "features": []
+        "name": _ARCH_CFG.get_architecture_name(),
+        "compute_capability": _ARCH_CFG.config.get("compute_capability", "Unknown"),
+        "sm_version": _ARCH_CFG.config.get("sm_version", "sm_unknown"),
+        "memory_bandwidth": _ARCH_CFG.config.get("memory_bandwidth", "Unknown"),
+        "tensor_cores": _ARCH_CFG.config.get("tensor_cores", "Unknown"),
+        "features": _ARCH_CFG.config.get("features", []),
     }
 
 class TransformerBlock(nn.Module):
@@ -109,11 +100,11 @@ def detect_8xb200():
     # B200 has 180 GB memory
     memory_gb = props.total_memory / (1024**3)
     
-    is_b200 = (compute_capability == "10.0" and 
+    is_sm100 = (compute_capability == "10.0" and 
                170 < memory_gb < 190 and  # Allow some variance
                num_gpus == 8)
     
-    return is_b200
+    return is_sm100
 
 def detect_gb200_gb300():
     """Detect if running on GB200/GB300 Grace-Blackwell Superchip."""
@@ -123,14 +114,14 @@ def detect_gb200_gb300():
     is_arm = platform.machine() in ['aarch64', 'arm64']
     
     # Check for Blackwell GPUs
-    has_b200 = False
+    has_sm100 = False
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         compute_capability = f"{props.major}.{props.minor}"
-        has_b200 = compute_capability == "10.0"
+        has_sm100 = compute_capability == "10.0"
     
     # GB200/GB300 = Grace CPU + Blackwell GPU
-    return is_arm and has_b200
+    return is_arm and has_sm100
 
 def setup_distributed():
     """Initialize distributed training."""
@@ -653,12 +644,11 @@ Monitoring Commands:
 # Architecture-specific optimizations
 if torch.cuda.is_available():
     device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
 
     inductor = getattr(torch, "_inductor", None)
     triton_cfg = getattr(getattr(inductor, "config", None), "triton", None) if inductor else None
 
-    if compute_capability == "10.0" and triton_cfg is not None:  # Blackwell B200/B300
+    if _ARCH_CFG.arch in {"blackwell", "grace_blackwell"} and triton_cfg is not None:
         try:
             if hasattr(triton_cfg, "use_blackwell_optimizations"):
                 triton_cfg.use_blackwell_optimizations = True

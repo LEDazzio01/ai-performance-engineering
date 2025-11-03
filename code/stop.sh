@@ -51,11 +51,11 @@ progress 2 "$TOTAL_STEPS" "Terminating profiler daemons"
 
 if command -v pkill >/dev/null 2>&1; then
   # Profile harness and Nsight helpers occasionally spawn extra workers.
-  if pkill -f profile_harness.py >/dev/null 2>&1; then
+  if pkill -f "profile_harness.py" >/dev/null 2>&1; then
     echo "Issued pkill for profile_harness.py"
     found=1
   fi
-  if pkill -f master_profile.py >/dev/null 2>&1; then
+  if pkill -f "master_profile.py" >/dev/null 2>&1; then
     echo "Issued pkill for master_profile.py"
     found=1
   fi

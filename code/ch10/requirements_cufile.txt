@@ -1,0 +1,41 @@
+# Requirements for cuFile (GPUDirect Storage) Example
+# 
+# This example demonstrates REAL cuFile API usage for GPUDirect Storage
+# on CUDA 13.0+ systems with GDS support (B200/B300 + NVMe)
+
+# CUDA Python bindings with cuFile support (CUDA 13.0+)
+# Note: This requires CUDA 13.0+ to be installed on the system
+cuda-python>=13.0.0
+
+# PyTorch for GPU tensor operations
+torch>=2.0.0
+
+# NumPy for data generation
+numpy>=1.24.0
+
+# Installation notes:
+# ====================
+# 
+# 1. Install CUDA 13.0+ toolkit:
+#    - Download from: https://developer.nvidia.com/cuda-downloads
+#    - Ensure GDS is enabled during installation
+# 
+# 2. Install Python packages:
+#    pip install -r requirements_cufile.txt
+# 
+# 3. Verify GDS is enabled:
+#    - Check /etc/cufile.json exists
+#    - Run: cufile_sample_00 (from CUDA samples)
+# 
+# 4. Hardware requirements:
+#    - NVIDIA B200/B300 GPU (or A100/H100 with GDS support)
+#    - NVMe SSD on supported PCIe configuration
+#    - GDS-capable system (see NVIDIA GDS documentation)
+# 
+# Fallback behavior:
+# ==================
+# If GDS is not available, the example will:
+# - Use traditional CPU-mediated path
+# - Display simulated GDS performance characteristics
+# - Serve as educational comparison
+

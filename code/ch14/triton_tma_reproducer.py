@@ -43,6 +43,12 @@ WORKAROUND:
 ===============================================================================
 """
 
+# CRITICAL: Import arch_config first to apply Triton SM 12.1 patch
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import arch_config  # noqa: F401 - Patches Triton to support SM 12.1
+
 import torch
 import triton
 import triton.language as tl
@@ -312,8 +318,13 @@ def print_environment_info():
     print(f"Total GPU Memory:       {device_props.total_memory / 1e9:.1f} GB")
     print(f"SMs:                    {device_props.multi_processor_count}")
     
-    if device_props.major != 10 or device_props.minor != 0:
-        print("\n⚠️  WARNING: This bug specifically affects Blackwell (SM 10.0)")
+    if device_props.major == 10 and device_props.minor == 0:
+        print("\n✓ Blackwell SM 10.0 detected - this is the primary target for the bug")
+    elif device_props.major == 12 and device_props.minor == 1:
+        print("\n✓ Blackwell GB10 (SM 12.1) detected - testing for same bug")
+        print("  This is a newer Blackwell variant that may also be affected")
+    else:
+        print("\n⚠️  WARNING: This bug specifically affects Blackwell (SM 10.0/12.1)")
         print("    Your GPU may not reproduce the issue")
         return False
     

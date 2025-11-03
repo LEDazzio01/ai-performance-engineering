@@ -14,16 +14,29 @@
     }                                                                        \
   } while (0)
 
-// Optimized kernel with launch bounds, vectorized loads, and async copy support
-__global__ void __launch_bounds__(256, 8) scale_kernel(float* data, int n, float scale) {
+constexpr int WORK_ITERS = 4;
+constexpr float BIAS_ADD = 0.001f;
+constexpr float BIAS_SUB = 0.0002f;
+constexpr float DECAY = 0.9f;
+
+// Optimized kernel with vectorized loads and async copy support
+// Launch bounds removed to let compiler auto-tune for different architectures (B200 vs GB10)
+__global__ void scale_kernel(float* data, int n, float scale) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
-    data[idx] = data[idx] * scale + 0.001f;
+    float val = data[idx];
+#pragma unroll 4
+    for (int iter = 0; iter < WORK_ITERS; ++iter) {
+      val = val * scale + BIAS_ADD;
+      val = val * DECAY - BIAS_SUB;
+    }
+    data[idx] = val;
   }
 }
 
 // Vectorized version using float4 for better memory throughput
-__global__ void __launch_bounds__(256, 8) scale_kernel_vectorized(float* data, int n, float scale) {
+// Launch bounds removed to let compiler auto-tune for different architectures (B200 vs GB10)
+__global__ void scale_kernel_vectorized(float* data, int n, float scale) {
   int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
   
   if (idx + 3 < n) {
@@ -31,24 +44,38 @@ __global__ void __launch_bounds__(256, 8) scale_kernel_vectorized(float* data, i
     float4 vec = *reinterpret_cast<float4*>(&data[idx]);
     
     // Process all 4 elements
-    vec.x = vec.x * scale + 0.001f;
-    vec.y = vec.y * scale + 0.001f;
-    vec.z = vec.z * scale + 0.001f;
-    vec.w = vec.w * scale + 0.001f;
+#pragma unroll 4
+    for (int iter = 0; iter < WORK_ITERS; ++iter) {
+      vec.x = vec.x * scale + BIAS_ADD;
+      vec.y = vec.y * scale + BIAS_ADD;
+      vec.z = vec.z * scale + BIAS_ADD;
+      vec.w = vec.w * scale + BIAS_ADD;
+      vec.x = vec.x * DECAY - BIAS_SUB;
+      vec.y = vec.y * DECAY - BIAS_SUB;
+      vec.z = vec.z * DECAY - BIAS_SUB;
+      vec.w = vec.w * DECAY - BIAS_SUB;
+    }
     
     // Store 4 floats at once
     *reinterpret_cast<float4*>(&data[idx]) = vec;
   } else {
     // Handle remaining elements
     for (int i = idx; i < n; i++) {
-      data[i] = data[i] * scale + 0.001f;
+      float val = data[i];
+#pragma unroll 4
+      for (int iter = 0; iter < WORK_ITERS; ++iter) {
+        val = val * scale + BIAS_ADD;
+        val = val * DECAY - BIAS_SUB;
+      }
+      data[i] = val;
     }
   }
 }
 
 // Shared memory version with prefetching (simpler than cp.async for this demo)
 // On Blackwell, compiler optimizes this with TMA automatically
-__global__ void __launch_bounds__(256, 8) scale_kernel_async(float* __restrict__ data, int n, float scale) {
+// Launch bounds removed to let compiler auto-tune for different architectures (B200 vs GB10)
+__global__ void scale_kernel_async(float* __restrict__ data, int n, float scale) {
   // Shared memory for prefetching and better cache utilization
   __shared__ float smem[256 * 4];  // 4 elements per thread for float4
   
@@ -64,10 +91,17 @@ __global__ void __launch_bounds__(256, 8) scale_kernel_async(float* __restrict__
     
     // Process from shared memory
     vec = *reinterpret_cast<float4*>(&smem[tid * 4]);
-    vec.x = vec.x * scale + 0.001f;
-    vec.y = vec.y * scale + 0.001f;
-    vec.z = vec.z * scale + 0.001f;
-    vec.w = vec.w * scale + 0.001f;
+#pragma unroll 4
+    for (int iter = 0; iter < WORK_ITERS; ++iter) {
+      vec.x = vec.x * scale + BIAS_ADD;
+      vec.y = vec.y * scale + BIAS_ADD;
+      vec.z = vec.z * scale + BIAS_ADD;
+      vec.w = vec.w * scale + BIAS_ADD;
+      vec.x = vec.x * DECAY - BIAS_SUB;
+      vec.y = vec.y * DECAY - BIAS_SUB;
+      vec.z = vec.z * DECAY - BIAS_SUB;
+      vec.w = vec.w * DECAY - BIAS_SUB;
+    }
     
     __syncthreads();
     
@@ -111,6 +145,7 @@ int main() {
   
   constexpr int WARMUP = 5;
   constexpr int ITERS = 100;
+  constexpr int PIPELINE_BATCHES = 4;
   
   // Original kernel
   dim3 block(256);
@@ -176,8 +211,7 @@ int main() {
 
   // Measure sequential vs overlapped pipelines
   auto measure_pipeline = [&](bool overlap) -> double {
-    constexpr int BATCHES = 8;
-
+    constexpr int BATCHES = PIPELINE_BATCHES;
     CUDA_CHECK(cudaMemsetAsync(d_a, 0, BYTES, stream1));
     CUDA_CHECK(cudaMemsetAsync(d_b, 0, BYTES, stream2));
     CUDA_CHECK(cudaStreamSynchronize(stream1));
@@ -185,29 +219,61 @@ int main() {
 
     auto t0 = std::chrono::high_resolution_clock::now();
     if (!overlap) {
+      // Naive sequential pipeline on a single stream with blocking transfers.
       for (int i = 0; i < BATCHES; ++i) {
-        CUDA_CHECK(cudaMemcpyAsync(d_a, h_a, BYTES, cudaMemcpyHostToDevice, stream1));
+        CUDA_CHECK(cudaMemcpy(d_a, h_a, BYTES, cudaMemcpyHostToDevice));
         scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.05f);
-        CUDA_CHECK(cudaMemcpyAsync(h_a, d_a, BYTES, cudaMemcpyDeviceToHost, stream1));
+        CUDA_CHECK(cudaStreamSynchronize(stream1));
+        CUDA_CHECK(cudaMemcpy(h_a, d_a, BYTES, cudaMemcpyDeviceToHost));
 
-        CUDA_CHECK(cudaMemcpyAsync(d_b, h_b, BYTES, cudaMemcpyHostToDevice, stream1));
+        CUDA_CHECK(cudaMemcpy(d_b, h_b, BYTES, cudaMemcpyHostToDevice));
         scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_b, N, 0.95f);
-        CUDA_CHECK(cudaMemcpyAsync(h_b, d_b, BYTES, cudaMemcpyDeviceToHost, stream1));
+        CUDA_CHECK(cudaStreamSynchronize(stream1));
+        CUDA_CHECK(cudaMemcpy(h_b, d_b, BYTES, cudaMemcpyDeviceToHost));
       }
-      CUDA_CHECK(cudaStreamSynchronize(stream1));
     } else {
-      for (int i = 0; i < BATCHES; ++i) {
-        CUDA_CHECK(cudaMemcpyAsync(d_a, h_a, BYTES, cudaMemcpyHostToDevice, stream1));
-        CUDA_CHECK(cudaMemcpyAsync(d_b, h_b, BYTES, cudaMemcpyHostToDevice, stream2));
+      // Three-way pipeline: copy on stream1, compute on stream2, copy-back on a third stream.
+      cudaStream_t d2h_stream;
+      CUDA_CHECK(cudaStreamCreateWithFlags(&d2h_stream, cudaStreamNonBlocking));
 
-        scale_kernel_vectorized<<<grid_vec, block, 0, stream1>>>(d_a, N, 1.05f);
-        scale_kernel_vectorized<<<grid_vec, block, 0, stream2>>>(d_b, N, 0.95f);
-
-        CUDA_CHECK(cudaMemcpyAsync(h_a, d_a, BYTES, cudaMemcpyDeviceToHost, stream1));
-        CUDA_CHECK(cudaMemcpyAsync(h_b, d_b, BYTES, cudaMemcpyDeviceToHost, stream2));
+      cudaEvent_t h2d_done[2], compute_done[2], d2h_done[2];
+      for (int i = 0; i < 2; ++i) {
+        CUDA_CHECK(cudaEventCreateWithFlags(&h2d_done[i], cudaEventDisableTiming));
+        CUDA_CHECK(cudaEventCreateWithFlags(&compute_done[i], cudaEventDisableTiming));
+        CUDA_CHECK(cudaEventCreateWithFlags(&d2h_done[i], cudaEventDisableTiming));
+        CUDA_CHECK(cudaEventRecord(d2h_done[i], d2h_stream));
       }
+      CUDA_CHECK(cudaStreamSynchronize(d2h_stream));
+
+      for (int i = 0; i < BATCHES; ++i) {
+        const int buf = i & 1;
+        float* d_buf = buf == 0 ? d_a : d_b;
+        float* h_buf = buf == 0 ? h_a : h_b;
+        const float scale = buf == 0 ? 1.05f : 0.95f;
+
+        CUDA_CHECK(cudaStreamWaitEvent(stream1, d2h_done[buf], 0));
+        CUDA_CHECK(cudaMemcpyAsync(d_buf, h_buf, BYTES, cudaMemcpyHostToDevice, stream1));
+        CUDA_CHECK(cudaEventRecord(h2d_done[buf], stream1));
+
+        CUDA_CHECK(cudaStreamWaitEvent(stream2, h2d_done[buf], 0));
+        scale_kernel_vectorized<<<grid_vec, block, 0, stream2>>>(d_buf, N, scale);
+        CUDA_CHECK(cudaEventRecord(compute_done[buf], stream2));
+
+        CUDA_CHECK(cudaStreamWaitEvent(d2h_stream, compute_done[buf], 0));
+        CUDA_CHECK(cudaMemcpyAsync(h_buf, d_buf, BYTES, cudaMemcpyDeviceToHost, d2h_stream));
+        CUDA_CHECK(cudaEventRecord(d2h_done[buf], d2h_stream));
+      }
+
       CUDA_CHECK(cudaStreamSynchronize(stream1));
       CUDA_CHECK(cudaStreamSynchronize(stream2));
+      CUDA_CHECK(cudaStreamSynchronize(d2h_stream));
+
+      for (int i = 0; i < 2; ++i) {
+        CUDA_CHECK(cudaEventDestroy(h2d_done[i]));
+        CUDA_CHECK(cudaEventDestroy(compute_done[i]));
+        CUDA_CHECK(cudaEventDestroy(d2h_done[i]));
+      }
+      CUDA_CHECK(cudaStreamDestroy(d2h_stream));
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();

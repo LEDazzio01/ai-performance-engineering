@@ -1,35 +1,56 @@
-# Architecture switching support
-# Target architecture: Blackwell B200/B300 (SM100)
-ARCH ?= sm_100
+include ../common/cuda_arch.mk
 
-# CUDA configuration
-CUDA_VERSION = 13.0
-NVCC = nvcc
-# Use -gencode to embed both cubin (sm_100) and PTX (compute_100) for forward compatibility
-NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
+SUFFIX = $(TARGET_SUFFIX)
 
-# Targets
-TARGETS = basic_streams stream_ordered_allocator warp_specialized_pipeline_multistream
+# Base targets
+BASE_TARGETS = basic_streams stream_ordered_allocator warp_specialized_pipeline_multistream warp_specialized_two_pipelines_multistream
+TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
 # Default target
 all: $(TARGETS)
 	@echo "Building all examples with $(ARCH) architecture (CUDA $(CUDA_VERSION))"
-	@echo "✓ Targeting Blackwell B200/B300 (Compute Capability 10.0)"
+	@echo "✓ Targeting $(ARCH_NAME)"
 
-# Build individual targets
-basic_streams: basic_streams.cu
+# Pattern rule for building targets with architecture suffix
+%$(SUFFIX): %.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
-stream_ordered_allocator: stream_ordered_allocator.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
-
-warp_specialized_pipeline_multistream: warp_specialized_pipeline_multistream.cu
+# Special rule for warp_specialized_two_pipelines_multistream (uses _driver.cu)
+warp_specialized_two_pipelines_multistream$(SUFFIX): warp_specialized_two_pipelines_multistream_driver.cu warp_specialized_kernel_two_pipelines_multistream.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
 # Architecture-specific targets
 blackwell: ARCH=sm_100
-blackwell: $(TARGETS)
-	@echo "Built for Blackwell B200/B300"
+blackwell: clean all
+	@echo "✓ Built for Blackwell B200/B300 (discrete GPU)"
+
+grace-blackwell: ARCH=sm_121
+grace-blackwell: clean all
+	@echo "✓ Built for Grace-Blackwell GB10 (integrated superchip)"
+
+# Build BOTH versions for comparison benchmarking
+compare: clean
+	@echo "========================================"
+	@echo "Building BOTH architectures for comparison..."
+	@echo "========================================"
+	@for arch in $(ARCH_LIST); do \
+		echo ""; \
+		echo ">>> Building $${arch}..."; \
+		$(MAKE) ARCH=$${arch} all; \
+		if [ "$${arch}" = "sm_100" ]; then \
+			echo "✓ Blackwell B200 binaries built with _sm100 suffix"; \
+		else \
+			echo "✓ Grace-Blackwell GB10 binaries built with _sm121 suffix"; \
+		fi; \
+		echo ""; \
+	done
+	@echo ""
+	@echo "========================================"
+	@echo "Ready to benchmark! Run both versions:"
+	@echo "  ./basic_streams_sm100  (discrete Blackwell)"
+	@echo "  ./basic_streams_sm121  (Grace-Blackwell superchip)"
+	@echo "========================================"
 
 # Enhanced profiling targets
 profile-nsys: $(TARGETS)
@@ -76,7 +97,26 @@ profile-all: $(TARGETS)
 	done
 
 clean:
-	rm -f $(TARGETS) *.o *.so *.a
+	rm -f *_sm100 *_sm121 *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
 
-.PHONY: all $(TARGETS) blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all clean
+# Run benchmarks comparing both architectures
+benchmark-compare: compare
+	@echo ""
+	@echo "========================================"
+	@echo "Running Performance Comparison..."
+	@echo "========================================"
+	@echo ""
+	@echo "--- Blackwell B200 (discrete GPU) ---"
+	@./basic_streams_sm100 | tee benchmark_sm100.log
+	@echo ""
+	@echo "--- Grace-Blackwell GB10 (superchip) ---"
+	@./basic_streams_sm121 | tee benchmark_sm121.log
+	@echo ""
+	@echo "========================================"
+	@echo "Benchmark logs saved:"
+	@echo "  benchmark_sm100.log - Discrete Blackwell"
+	@echo "  benchmark_sm121.log - Grace-Blackwell superchip"
+	@echo "========================================"
+
+.PHONY: all blackwell grace-blackwell compare benchmark-compare profile-nsys profile-ncu profile-hta profile-perf profile-all clean

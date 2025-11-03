@@ -175,6 +175,67 @@ apt update || {
 # Install required packages for adding repositories
 apt install -y wget curl software-properties-common
 
+# Install NVIDIA DCGM (Data Center GPU Manager) for monitoring stack
+echo ""
+echo "📡 Installing NVIDIA DCGM components..."
+if ! dpkg -s datacenter-gpu-manager >/dev/null 2>&1; then
+    apt install -y datacenter-gpu-manager
+    echo "✅ NVIDIA DCGM installed"
+else
+    echo "✅ NVIDIA DCGM already present"
+fi
+
+if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^nvidia-dcgm.service'; then
+    systemctl enable nvidia-dcgm >/dev/null 2>&1 || true
+    systemctl restart nvidia-dcgm >/dev/null 2>&1 || systemctl start nvidia-dcgm >/dev/null 2>&1 || true
+    echo "✅ nvidia-dcgm service enabled"
+else
+    echo "⚠️  nvidia-dcgm systemd unit not found; ensure the DCGM daemon is running on this host."
+fi
+
+python3 <<'PY'
+import os
+import shutil
+import site
+import sys
+
+candidates = [
+    "/usr/share/dcgm/bindings/python3",
+    "/usr/share/dcgm/bindings/python",
+    "/usr/share/dcgm/python3",
+    "/usr/share/dcgm/python",
+    "/usr/lib/dcgm/python3",
+    "/usr/lib/dcgm/python",
+]
+
+dest = None
+for path in site.getsitepackages():
+    if path.startswith("/usr/lib") or path.startswith("/usr/local/lib"):
+        dest = path
+        break
+
+if dest is None:
+    print("⚠️  Unable to locate site-packages directory; skipping DCGM Python binding install.")
+    sys.exit(0)
+
+for cand in candidates:
+    if not os.path.isdir(cand):
+        continue
+    for entry in os.listdir(cand):
+        if entry == "__pycache__":
+            continue
+        src = os.path.join(cand, entry)
+        dst = os.path.join(dest, entry)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+    print(f"✅ DCGM Python bindings installed to {dest}")
+    break
+else:
+    print("⚠️  DCGM Python bindings not found; pydcgm import may fail.")
+PY
+
 # Add NVIDIA CUDA 13.0 repository
 echo ""
 echo "🔐 Adding NVIDIA CUDA 13.0 repository..."
@@ -446,6 +507,78 @@ echo "✅ Updated /usr/bin/nvcc symlink to CUDA 13.0"
 # Source the CUDA environment for current session
 source /etc/profile.d/cuda-13.0.sh
 
+# Persist CUDA toolchain settings for the remainder of the script
+export CUDA_HOME=/usr/local/cuda-13.0
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+echo ""
+echo "🔍 Verifying CUDA toolchain after installation..."
+if ! nvcc --version >/tmp/nvcc_version.txt 2>&1; then
+    cat /tmp/nvcc_version.txt
+    echo "❌ nvcc not available even after CUDA install. Aborting."
+    exit 1
+fi
+cat /tmp/nvcc_version.txt
+rm -f /tmp/nvcc_version.txt
+
+python3 - <<'PY'
+import sys
+try:
+    import torch
+except Exception as exc:
+    print(f"❌ Failed to import torch for CUDA verification: {exc}")
+    sys.exit(1)
+
+cuda_ver = getattr(torch.version, "cuda", None)
+print(f"✅ torch.version.cuda = {cuda_ver}")
+if not cuda_ver:
+    print("⚠️  PyTorch build does not have CUDA enabled")
+PY
+
+# Install runtime monitoring/precision dependencies that require CUDA headers
+echo ""
+echo "📦 Installing CUDA-dependent Python packages (prometheus-client, lmcache, transformer-engine)..."
+
+# Ensure NumPy is present for torch's extension helper before building any wheels
+python3 -m pip install --no-cache-dir --upgrade --ignore-installed numpy || true
+
+install_cuda_package() {
+    local package_spec="$1"
+    echo "➡️  Installing $package_spec"
+    if python3 -m pip install \
+        --no-cache-dir --upgrade --ignore-installed --prefer-binary "$package_spec"; then
+echo "✅ Installed $package_spec"
+return 0
+fi
+
+    echo "⚠️  Installing numpy inside pip build environment to satisfy torch setup requirements..."
+    python3 -m pip install --no-cache-dir --upgrade --ignore-installed numpy || true
+
+    echo "⚠️  Initial install of $package_spec failed, retrying without build isolation..."
+    if python3 -m pip install \
+        --no-cache-dir --upgrade --ignore-installed --no-build-isolation --prefer-binary "$package_spec"; then
+        echo "✅ Installed $package_spec (no-build-isolation)"
+        return 0
+    fi
+
+    echo "❌ Failed to install $package_spec"
+    return 1
+}
+
+install_cuda_package "prometheus-client==0.21.0"
+
+echo ""
+echo "➡️  Installing lmcache==0.3.8 (requires setuptools-scm version override)..."
+if ! SETUPTOOLS_SCM_PRETEND_VERSION=0.3.8 \
+        python3 -m pip install \
+        --no-cache-dir --upgrade --ignore-installed --no-build-isolation --prefer-binary \
+        lmcache==0.3.8; then
+    echo "❌ Failed to install lmcache==0.3.8 even with version override. Please verify CUDA toolkit and setuptools-scm."
+fi
+
+install_cuda_package "transformer-engine"
+
 # Clean up
 cd /
 rm -rf "$TEMP_DIR"
@@ -510,6 +643,32 @@ else
         py-spy==0.4.1 memory-profiler==0.61.0 line-profiler==5.0.0 pyinstrument==5.1.1 snakeviz==2.2.2 \
         optuna==4.5.0 hyperopt==0.2.7 ray==2.49.2 \
         dask==2025.9.1 xarray==2025.6.1
+fi
+
+# Ensure monitoring/runtime extras are available even if requirements were cached
+echo ""
+echo "📦 Ensuring monitoring/runtime extras (Prometheus, LMCache, Transformer Engine)..."
+python3 -m pip install --no-input --upgrade --ignore-installed prometheus-client==0.21.0 lmcache==0.3.9
+
+# Transformer Engine build requires CUDNN headers shipped with the Python wheel.
+CUDA_ROOT=/usr/local/cuda-13.0
+CUDNN_INCLUDE_DIR=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/include
+CUDNN_LIBRARY_DIR=/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib
+export CPATH="${CUDNN_INCLUDE_DIR}:${CPATH:-}"
+export LIBRARY_PATH="${CUDNN_LIBRARY_DIR}:${LIBRARY_PATH:-}"
+
+# Remove conflicting binary wheels before installing the source build.
+python3 -m pip uninstall -y transformer_engine transformer-engine transformer_engine_cu12 transformer-engine-cu12 transformer-engine-cu13 >/dev/null 2>&1 || true
+
+python3 -m pip install --no-input --upgrade --ignore-installed pybind11
+if TORCH_CUDA_ARCH_LIST=120 \
+   CUDNN_INCLUDE_DIR="${CUDNN_INCLUDE_DIR}" \
+   CUDNN_LIBRARY_DIR="${CUDNN_LIBRARY_DIR}" \
+   python3 -m pip install --no-input --upgrade --ignore-installed --no-build-isolation \
+       git+https://github.com/NVIDIA/TransformerEngine.git; then
+    echo "✅ Transformer Engine installed (FP8 kernels ready where supported)"
+else
+    echo "⚠️  Transformer Engine installation failed or is unsupported on this host; FP8 execution will fall back to AMP."
 fi
 
 # Remove conflicting system packages that interfere with PyTorch

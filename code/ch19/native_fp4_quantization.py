@@ -343,6 +343,7 @@ def benchmark_fp4_vs_baselines():
     print("FP16 Baseline")
     print("=" * 80)
     mlp_fp16 = FP4MLP(d_model, d_ff, dtype=dtype).to(device)
+    # Note: FP16 version doesn't need quantization
     
     # Warmup
     for _ in range(10):

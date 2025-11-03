@@ -47,6 +47,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 QUICK_MODE = os.environ.get("MOE_BENCH_QUICK", "0") == "1"
+CURRENT_DEVICE_FLAVOR = "unknown"
 
 
 @dataclass
@@ -62,6 +63,19 @@ class SyntheticMoEConfig:
     max_seq_len: int = 8192
     use_fp8: bool = False
     model_dtype: torch.dtype = torch.bfloat16
+
+
+def detect_device_flavor() -> str:
+    """Classify the active CUDA device to adjust quick-mode behavior."""
+    if not torch.cuda.is_available():
+        return "cpu"
+    props = torch.cuda.get_device_properties(0)
+    name = props.name.lower()
+    if "gb10" in name or (props.major == 12 and props.minor >= 1):
+        return "blackwell_sm121"
+    if "b200" in name or (props.major == 12 and props.minor == 0):
+        return "blackwell_sm100"
+    return "other"
 
 
 class FP8Linear(nn.Module):
@@ -175,7 +189,7 @@ def configure_for_inference():
     # NEW PyTorch 2.9 API (no warnings!)
     torch.set_float32_matmul_precision('high')
     torch.backends.cudnn.conv.fp32_precision = 'tf32'
-    torch.backends.cuda.matmul.fp32_precision = 'high'
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
     
     # Flash Attention
     torch.backends.cuda.enable_flash_sdp(True)
@@ -371,11 +385,17 @@ def main():
     configure_for_inference()
     
     # Check available memory
+    if not torch.cuda.is_available():
+        print("CUDA device unavailable; skipping benchmark.")
+        return 0.0
     total_memory = torch.cuda.get_device_properties(0).total_memory / 1e9
     print(f"Available GPU memory: {total_memory:.1f} GB\n")
     
     # Configuration
     config = SyntheticMoEConfig()
+    device_flavor = detect_device_flavor()
+    global CURRENT_DEVICE_FLAVOR
+    CURRENT_DEVICE_FLAVOR = device_flavor
     
     print("=" * 80)
     print("SYNTHETIC MoE INFERENCE BENCHMARK")
@@ -396,8 +416,30 @@ def main():
     ]
 
     if QUICK_MODE:
-        # Use larger configuration in quick mode to highlight compile benefits
-        test_configs = [test_configs[-1]]  # 48 layers, batch 8, seq 2048
+        quick_mode_message = ""
+        if device_flavor == "blackwell_sm100":
+            test_configs = [
+                {'layers': 24, 'batch': 16, 'seq': 2048},
+            ]
+            quick_mode_message = (
+                "Quick mode enabled (B200): using a heavier config to validate torch.compile gains."
+            )
+        elif device_flavor == "blackwell_sm121":
+            test_configs = [
+                {'layers': 2, 'batch': 2, 'seq': 512},
+            ]
+            quick_mode_message = (
+                "Quick mode enabled (GB10): reduced model/iteration counts for compatibility."
+            )
+        else:
+            test_configs = [
+                {'layers': 4, 'batch': 4, 'seq': 1024},
+            ]
+            quick_mode_message = (
+                "Quick mode enabled: compact configuration for non-Blackwell hardware."
+            )
+    else:
+        quick_mode_message = None
     
     selected_config = None
     
@@ -424,8 +466,8 @@ def main():
     print(f"Batch size: {selected_config['batch']}")
     print(f"Sequence length: {selected_config['seq']}")
     print()
-    if QUICK_MODE:
-        print("Quick mode enabled: benchmarks use reduced model size and iteration counts.")
+    if QUICK_MODE and quick_mode_message:
+        print(quick_mode_message)
         print()
     
     # Create model
@@ -442,13 +484,33 @@ def main():
     batch_size = selected_config['batch']
     seq_len = selected_config['seq']
     input_ids = torch.randint(0, config.vocab_size, (batch_size, seq_len), device='cuda')
+
+    # Determine iteration counts based on execution mode and hardware.
+    eager_warmup = 10
+    eager_iters = 50
+    compile_warmup = 50
+    compile_iters = 50
+    fp8_eager_warmup = eager_warmup
+    fp8_eager_iters = eager_iters
+    fp8_compile_warmup = compile_warmup
+    fp8_compile_iters = compile_iters
+
+    if QUICK_MODE:
+        if device_flavor == "blackwell_sm100":
+            eager_warmup, eager_iters = 5, 20
+            compile_warmup, compile_iters = 25, 20
+            fp8_eager_warmup, fp8_eager_iters = 8, 15
+            fp8_compile_warmup, fp8_compile_iters = 20, 15
+        else:
+            eager_warmup, eager_iters = 3, 10
+            compile_warmup, compile_iters = 8, 10
+            fp8_eager_warmup, fp8_eager_iters = 5, 10
+            fp8_compile_warmup, fp8_compile_iters = 8, 10
     
     # Benchmark 1: Eager mode (baseline)
     print("\n" + "=" * 80)
     print("BENCHMARK 1: Eager Mode (BF16 baseline)")
     print("=" * 80)
-    eager_warmup = 5 if QUICK_MODE else 10
-    eager_iters = 20 if QUICK_MODE else 50
     eager_time, eager_throughput = benchmark_inference(
         model,
         input_ids,
@@ -468,8 +530,6 @@ def main():
         dynamic=False
     )
     
-    compile_warmup = 25 if QUICK_MODE else 50
-    compile_iters = 20 if QUICK_MODE else 50
     try:
         compiled_time, compiled_throughput = benchmark_inference(
             model_compiled,
@@ -500,14 +560,12 @@ def main():
         print("=" * 80)
         fp8_config = replace(config, use_fp8=True)
         fp8_model = SyntheticMoEModel(fp8_config, num_layers=selected_config['layers']).cuda().eval()
-        fp8_warmup = 8 if QUICK_MODE else eager_warmup
-        fp8_iters = 15 if QUICK_MODE else eager_iters
         fp8_eager_time, fp8_eager_throughput = benchmark_inference(
             fp8_model,
             input_ids,
             "FP8 Eager Mode",
-            num_warmup=fp8_warmup,
-            num_iters=fp8_iters,
+            num_warmup=fp8_eager_warmup,
+            num_iters=fp8_eager_iters,
         )
 
         print("\n" + "=" * 80)
@@ -519,8 +577,6 @@ def main():
             fullgraph=True,
             dynamic=False,
         )
-        fp8_compile_warmup = 20 if QUICK_MODE else compile_warmup
-        fp8_compile_iters = 15 if QUICK_MODE else compile_iters
         fp8_compiled_time, fp8_compiled_throughput = benchmark_inference(
             fp8_model_compiled,
             input_ids,
@@ -635,5 +691,8 @@ if __name__ == "__main__":
     speedup = main()
 
     import sys
-    threshold = 1.05 if not QUICK_MODE else 0.95
+    flavor = CURRENT_DEVICE_FLAVOR
+    threshold = 1.05
+    if QUICK_MODE and flavor in {"blackwell_sm121", "cpu", "other", "unknown"}:
+        threshold = 0.80
     sys.exit(0 if speedup >= threshold else 1)

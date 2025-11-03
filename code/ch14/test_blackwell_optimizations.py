@@ -4,11 +4,23 @@ Test script to validate Blackwell optimizations maintain correctness.
 
 This script verifies that all optimizations produce numerically correct results
 compared to PyTorch baseline implementations.
+
+⚠️  EXPECTED TO FAIL ON GB10 (SM 12.1):
+    CUDA 13.0's assembler doesn't support 'tensormap.replace' instruction for sm_121.
+    This is a known limitation - TMA works on GB10 hardware but needs CUDA 13.1+.
+    See: GB10_WAITING_ON.md for details on what we're waiting for from NVIDIA.
+    
+    Regular Triton kernels (without TMA) work perfectly on GB10 with arch_config.py.
 """
+import sys
+import os
+
+# Add parent directory to path to import arch_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
-import sys
 
 print("Testing Blackwell Optimizations...")
 print("=" * 70)

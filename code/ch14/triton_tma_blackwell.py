@@ -4,6 +4,11 @@ Triton 3.5 TMA (Tensor Memory Accelerator) for Blackwell GPUs
 Demonstrates TMA descriptor support for bulk memory transfers on Blackwell.
 Requires SM 10.0, CUDA 13+, and Triton 3.5+.
 
+⚠️  GB10 (SM 12.1) NOTE:
+    This code will FAIL on GB10 with: "Instruction 'tensormap.replace' not 
+    supported on .target 'sm_121'". CUDA 13.0 doesn't support TMA instructions
+    for sm_121. See GB10_WAITING_ON.md. Regular Triton works fine on GB10.
+
 Blackwell B200 Optimizations:
 - 32-byte aligned tensor descriptors for 256-bit loads
 - Cache eviction policies (evict_first/evict_last) for L2 optimization

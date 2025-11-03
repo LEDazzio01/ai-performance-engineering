@@ -5,13 +5,39 @@
 
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
-#include <stdio.h>
+#include <cstdio>
+#include <cstdlib>
 
 #if defined(CUDART_VERSION) && (CUDART_VERSION >= 13000)
 #include "../common/cuda13_teasers.cuh"
 #endif
 
 namespace cg = cooperative_groups;
+
+#define CUDA_CHECK(call)                                                      \
+  do {                                                                        \
+    cudaError_t status = (call);                                              \
+    if (status != cudaSuccess) {                                              \
+      std::fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__,      \
+                   cudaGetErrorString(status));                               \
+      std::exit(EXIT_FAILURE);                                                \
+    }                                                                         \
+  } while (0)
+
+constexpr cudaError_t kUnsupportedErrors[] = {
+    cudaErrorNotSupported,
+    cudaErrorNotPermitted,
+    cudaErrorInvalidDeviceFunction
+};
+
+inline bool is_feature_unsupported(cudaError_t err) {
+    for (auto code : kUnsupportedErrors) {
+        if (err == code) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // Child kernel launched by parent
 __global__ void childKernel(float* data, int start, int count, float scale) {
@@ -123,7 +149,7 @@ __global__ void workKernelLow(float* data, int N) {
     }
 }
 
-void demonstrateBasicDynamicParallelism() {
+bool demonstrateBasicDynamicParallelism() {
     printf("=== Basic Dynamic Parallelism ===\n");
     
     const int N = 10000;
@@ -135,15 +161,15 @@ void demonstrateBasicDynamicParallelism() {
         h_data[i] = (float)rand() / RAND_MAX;
     }
     
-    float *d_data;
-    int *d_launch_count;
-    cudaMalloc(&d_data, bytes);
-    cudaMalloc(&d_launch_count, sizeof(int));
+    float *d_data = nullptr;
+    int *d_launch_count = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_data, bytes));
+    CUDA_CHECK(cudaMalloc(&d_launch_count, sizeof(int)));
     
-    cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice));
     
     int zero = 0;
-    cudaMemcpy(d_launch_count, &zero, sizeof(int), cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMemcpy(d_launch_count, &zero, sizeof(int), cudaMemcpyHostToDevice));
     
     printf("Launching parent kernel with %d elements...\n", N);
     
@@ -152,25 +178,63 @@ void demonstrateBasicDynamicParallelism() {
     dim3 parent_block(256);
     
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
     
-    cudaEventRecord(start);
+    CUDA_CHECK(cudaEventRecord(start));
     parentKernel<<<parent_grid, parent_block>>>(d_data, N, d_launch_count);
-    cudaEventRecord(stop);
-    
-    // Wait for all kernels (parent and children) to complete
-    cudaDeviceSynchronize();
-    cudaEventSynchronize(stop);
+    CUDA_CHECK(cudaEventRecord(stop));
+
+    cudaError_t launch_err = cudaGetLastError();
+    if (is_feature_unsupported(launch_err)) {
+        printf("⚠️  Skipping basic dynamic parallelism demo: %s\n", cudaGetErrorString(launch_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaFree(d_launch_count);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (launch_err != cudaSuccess) {
+        printf("CUDA error launching parent kernel: %s\n", cudaGetErrorString(launch_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaFree(d_launch_count);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+
+    cudaError_t sync_err = cudaDeviceSynchronize();
+    if (is_feature_unsupported(sync_err)) {
+        printf("⚠️  Device cannot execute dynamic parallelism workload (%s); skipping demo\n",
+               cudaGetErrorString(sync_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaFree(d_launch_count);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (sync_err != cudaSuccess) {
+        printf("CUDA error syncing parent kernel: %s\n", cudaGetErrorString(sync_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaFree(d_launch_count);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    CUDA_CHECK(cudaEventSynchronize(stop));
     
     float elapsed_ms;
-    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
     
     // Check results
     int launch_count;
-    cudaMemcpy(&launch_count, d_launch_count, sizeof(int), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(&launch_count, d_launch_count, sizeof(int), cudaMemcpyDeviceToHost));
     
-    cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost));
     
     printf("Execution time: %.2f ms\n", elapsed_ms);
     printf("Child kernels launched: %d\n", launch_count);
@@ -182,9 +246,11 @@ void demonstrateBasicDynamicParallelism() {
     cudaFree(d_launch_count);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    return true;
 }
 
-void demonstrateRecursiveLaunches() {
+bool demonstrateRecursiveLaunches() {
     printf("\n=== Recursive Dynamic Parallelism ===\n");
     
     const int N = 8192;
@@ -196,9 +262,9 @@ void demonstrateRecursiveLaunches() {
         h_data[i] = 1.0f;
     }
     
-    float *d_data;
-    cudaMalloc(&d_data, bytes);
-    cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice);
+    float *d_data = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_data, bytes));
+    CUDA_CHECK(cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice));
     
     printf("Starting recursive kernel with depth %d...\n", max_depth);
     
@@ -206,20 +272,55 @@ void demonstrateRecursiveLaunches() {
     dim3 block(256);
     
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
     
-    cudaEventRecord(start);
+    CUDA_CHECK(cudaEventRecord(start));
     recursiveKernel<<<grid, block>>>(d_data, N, 0, max_depth);
-    cudaEventRecord(stop);
-    
-    cudaDeviceSynchronize();
-    cudaEventSynchronize(stop);
+    CUDA_CHECK(cudaEventRecord(stop));
+
+    cudaError_t launch_err = cudaGetLastError();
+    if (is_feature_unsupported(launch_err)) {
+        printf("⚠️  Skipping recursive dynamic parallelism demo: %s\n", cudaGetErrorString(launch_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (launch_err != cudaSuccess) {
+        printf("CUDA error launching recursive kernel: %s\n", cudaGetErrorString(launch_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+
+    cudaError_t sync_err = cudaDeviceSynchronize();
+    if (is_feature_unsupported(sync_err)) {
+        printf("⚠️  Device cannot execute recursive DP workload (%s); skipping demo\n",
+               cudaGetErrorString(sync_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (sync_err != cudaSuccess) {
+        printf("CUDA error syncing recursive kernel: %s\n", cudaGetErrorString(sync_err));
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    CUDA_CHECK(cudaEventSynchronize(stop));
     
     float elapsed_ms;
-    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
     
-    cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost));
     
     printf("Execution time: %.2f ms\n", elapsed_ms);
     printf("Final values: %.6f, %.6f, %.6f\n", h_data[0], h_data[N/2], h_data[N-1]);
@@ -231,9 +332,11 @@ void demonstrateRecursiveLaunches() {
     cudaFree(d_data);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    return true;
 }
 
-void demonstrateDeviceGraphLaunch() {
+bool demonstrateDeviceGraphLaunch() {
     printf("\n=== Device-Initiated Graph Launch ===\n");
     
     const int N = 1024;
@@ -244,18 +347,18 @@ void demonstrateDeviceGraphLaunch() {
         h_data[i] = (float)i / N;
     }
     
-    float *d_data;
-    cudaMalloc(&d_data, bytes);
-    cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice);
+    float *d_data = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_data, bytes));
+    CUDA_CHECK(cudaMemcpy(d_data, h_data, bytes, cudaMemcpyHostToDevice));
     
     // Create a graph to be launched from device
     cudaStream_t stream;
-    cudaStreamCreate(&stream);
+    CUDA_CHECK(cudaStreamCreate(&stream));
     
     printf("Creating graph for device-initiated launch...\n");
     
     cudaGraph_t graph;
-    cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
     
     // Add kernels to the graph
     dim3 grid((N + 255) / 256);
@@ -264,18 +367,18 @@ void demonstrateDeviceGraphLaunch() {
     workKernelHigh<<<grid, block, 0, stream>>>(d_data, N);
     workKernelLow<<<grid, block, 0, stream>>>(d_data, N);
     
-    cudaStreamEndCapture(stream, &graph);
+    CUDA_CHECK(cudaStreamEndCapture(stream, &graph));
     
     // Instantiate for device launch
     cudaGraphExec_t graphExec;
-    cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
+    CUDA_CHECK(cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0));
     
     // Upload graph to device memory for device-initiated launch
-    cudaGraphUpload(graphExec, stream);
-    cudaStreamSynchronize(stream);
+    CUDA_CHECK(cudaGraphUpload(graphExec, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     
     // Copy graph executor to device global memory
-    cudaMemcpyToSymbol(g_graphExec, &graphExec, sizeof(cudaGraphExec_t));
+    CUDA_CHECK(cudaMemcpyToSymbol(g_graphExec, &graphExec, sizeof(cudaGraphExec_t)));
     
     printf("Launching persistent scheduler kernel...\n");
     
@@ -284,25 +387,72 @@ void demonstrateDeviceGraphLaunch() {
     
     // Reset work counter
     int zero = 0;
-    cudaMemcpyToSymbol(g_workIndex, &zero, sizeof(int));
+    CUDA_CHECK(cudaMemcpyToSymbol(g_workIndex, &zero, sizeof(int)));
     
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
     
-    cudaEventRecord(start);
+    CUDA_CHECK(cudaEventRecord(start));
     
     // Launch persistent scheduler (single block for simplicity)
     persistentScheduler<<<1, 32>>>(d_data, numTasks, maxIterations);
     
-    cudaEventRecord(stop);
-    cudaDeviceSynchronize();
-    cudaEventSynchronize(stop);
+    CUDA_CHECK(cudaEventRecord(stop));
+    cudaError_t launch_err = cudaGetLastError();
+    if (is_feature_unsupported(launch_err)) {
+        printf("⚠️  Skipping device-initiated graph launch demo: %s\n", cudaGetErrorString(launch_err));
+        cudaGraphExecDestroy(graphExec);
+        cudaGraphDestroy(graph);
+        cudaStreamDestroy(stream);
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (launch_err != cudaSuccess) {
+        printf("CUDA error launching persistent scheduler: %s\n", cudaGetErrorString(launch_err));
+        cudaGraphExecDestroy(graphExec);
+        cudaGraphDestroy(graph);
+        cudaStreamDestroy(stream);
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+
+    cudaError_t sync_err = cudaDeviceSynchronize();
+    if (is_feature_unsupported(sync_err)) {
+        printf("⚠️  Device cannot execute graph tail launches (%s); skipping demo\n",
+               cudaGetErrorString(sync_err));
+        cudaGraphExecDestroy(graphExec);
+        cudaGraphDestroy(graph);
+        cudaStreamDestroy(stream);
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (sync_err != cudaSuccess) {
+        printf("CUDA error syncing graph launch: %s\n", cudaGetErrorString(sync_err));
+        cudaGraphExecDestroy(graphExec);
+        cudaGraphDestroy(graph);
+        cudaStreamDestroy(stream);
+        delete[] h_data;
+        cudaFree(d_data);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    CUDA_CHECK(cudaEventSynchronize(stop));
     
     float elapsed_ms;
-    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
     
-    cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(h_data, d_data, bytes, cudaMemcpyDeviceToHost));
     
     printf("Execution time: %.2f ms\n", elapsed_ms);
     printf("Device-initiated %d iterations with embedded graph launches\n", maxIterations);
@@ -316,6 +466,8 @@ void demonstrateDeviceGraphLaunch() {
     cudaFree(d_data);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    return true;
 }
 
 // Adaptive scheduling kernel that chooses between different algorithms
@@ -357,7 +509,7 @@ __global__ void adaptiveScheduler(float* input, float* output, int N, int* algor
     }
 }
 
-void demonstrateAdaptiveScheduling() {
+bool demonstrateAdaptiveScheduling() {
     printf("\n=== Adaptive Device-Side Scheduling ===\n");
     
     const int N = 10000;
@@ -374,12 +526,12 @@ void demonstrateAdaptiveScheduling() {
     float *d_input, *d_output;
     int *d_algorithm_counts;
     
-    cudaMalloc(&d_input, bytes);
-    cudaMalloc(&d_output, bytes);
-    cudaMalloc(&d_algorithm_counts, 3 * sizeof(int));
+    CUDA_CHECK(cudaMalloc(&d_input, bytes));
+    CUDA_CHECK(cudaMalloc(&d_output, bytes));
+    CUDA_CHECK(cudaMalloc(&d_algorithm_counts, 3 * sizeof(int)));
     
-    cudaMemcpy(d_input, h_input, bytes, cudaMemcpyHostToDevice);
-    cudaMemset(d_algorithm_counts, 0, 3 * sizeof(int));
+    CUDA_CHECK(cudaMemcpy(d_input, h_input, bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_algorithm_counts, 0, 3 * sizeof(int)));
     
     printf("Running adaptive scheduler on %d elements...\n", N);
     
@@ -387,24 +539,71 @@ void demonstrateAdaptiveScheduling() {
     dim3 block(256);
     
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
     
-    cudaEventRecord(start);
+    CUDA_CHECK(cudaEventRecord(start));
     adaptiveScheduler<<<grid, block>>>(d_input, d_output, N, d_algorithm_counts);
-    cudaEventRecord(stop);
+    CUDA_CHECK(cudaEventRecord(stop));
     
-    cudaDeviceSynchronize();
-    cudaEventSynchronize(stop);
+    cudaError_t launch_err = cudaGetLastError();
+    if (is_feature_unsupported(launch_err)) {
+        printf("⚠️  Skipping adaptive scheduling demo: %s\n", cudaGetErrorString(launch_err));
+        delete[] h_input;
+        delete[] h_output;
+        cudaFree(d_input);
+        cudaFree(d_output);
+        cudaFree(d_algorithm_counts);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (launch_err != cudaSuccess) {
+        printf("CUDA error launching adaptive scheduler: %s\n", cudaGetErrorString(launch_err));
+        delete[] h_input;
+        delete[] h_output;
+        cudaFree(d_input);
+        cudaFree(d_output);
+        cudaFree(d_algorithm_counts);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    
+    cudaError_t sync_err = cudaDeviceSynchronize();
+    if (is_feature_unsupported(sync_err)) {
+        printf("⚠️  Device cannot execute adaptive DP workload (%s); skipping demo\n",
+               cudaGetErrorString(sync_err));
+        delete[] h_input;
+        delete[] h_output;
+        cudaFree(d_input);
+        cudaFree(d_output);
+        cudaFree(d_algorithm_counts);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    if (sync_err != cudaSuccess) {
+        printf("CUDA error syncing adaptive scheduler: %s\n", cudaGetErrorString(sync_err));
+        delete[] h_input;
+        delete[] h_output;
+        cudaFree(d_input);
+        cudaFree(d_output);
+        cudaFree(d_algorithm_counts);
+        cudaEventDestroy(start);
+        cudaEventDestroy(stop);
+        return false;
+    }
+    CUDA_CHECK(cudaEventSynchronize(stop));
     
     float elapsed_ms;
     cudaEventElapsedTime(&elapsed_ms, start, stop);
     
     // Get results
-    cudaMemcpy(h_output, d_output, bytes, cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(h_output, d_output, bytes, cudaMemcpyDeviceToHost));
     
     int algorithm_counts[3];
-    cudaMemcpy(algorithm_counts, d_algorithm_counts, 3 * sizeof(int), cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(algorithm_counts, d_algorithm_counts, 3 * sizeof(int), cudaMemcpyDeviceToHost));
     
     printf("Execution time: %.2f ms\n", elapsed_ms);
     printf("Algorithm usage:\n");
@@ -425,6 +624,8 @@ void demonstrateAdaptiveScheduling() {
     cudaFree(d_algorithm_counts);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    return true;
 }
 
 int main() {
@@ -459,8 +660,8 @@ int main() {
     
     printf("\n");
     
-    demonstrateBasicDynamicParallelism();
-    demonstrateRecursiveLaunches();
+    (void)demonstrateBasicDynamicParallelism();
+    (void)demonstrateRecursiveLaunches();
     
     // Only run graph examples on supported devices
     if (prop.major >= 8 || (prop.major == 7 && prop.minor >= 5)) {

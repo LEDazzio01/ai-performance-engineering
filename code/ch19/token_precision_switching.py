@@ -119,7 +119,7 @@ class TokenPrecisionController:
 # NEW PyTorch 2.9 API (no warnings!)
 torch.set_float32_matmul_precision('high')
 torch.backends.cudnn.conv.fp32_precision = 'tf32'
-torch.backends.cuda.matmul.fp32_precision = 'high'
+torch.backends.cuda.matmul.fp32_precision = 'tf32'
 # If you compile models elsewhere, keep it outside this loop; don't pay compile cost per-step.
 
 # ----------------------------

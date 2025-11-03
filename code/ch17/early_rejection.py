@@ -1,39 +1,30 @@
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import arch_config  # noqa: F401 - Configure architecture optimizations
+from arch_config import ArchitectureConfig
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx
 import torch
 import os
 
+_ARCH_CFG = ArchitectureConfig()
+
+
 def get_architecture():
     """Detect and return the current GPU architecture."""
     if not torch.cuda.is_available():
         return "cpu"
-
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-    return "blackwell" if compute_capability == "10.0" else "other"
+    return _ARCH_CFG.arch
 
 
 def get_architecture_info():
     """Get detailed architecture information."""
-    arch = get_architecture()
-    if arch == "blackwell":
-        return {
-            "name": "Blackwell B200/B300",
-            "compute_capability": "10.0",
-            "sm_version": "sm_100",
-            "memory_bandwidth": "7.8 TB/s",
-            "tensor_cores": "5th Gen",
-            "features": ["HBM3e", "TMA", "NVLink-C2C"]
-        }
     return {
-        "name": "Other",
-        "compute_capability": "Unknown",
-        "sm_version": "Unknown",
-        "memory_bandwidth": "Unknown",
-        "tensor_cores": "Unknown",
-        "features": []
+        "name": _ARCH_CFG.get_architecture_name(),
+        "compute_capability": _ARCH_CFG.config.get("compute_capability", "Unknown"),
+        "sm_version": _ARCH_CFG.config.get("sm_version", "sm_unknown"),
+        "memory_bandwidth": _ARCH_CFG.config.get("memory_bandwidth", "Unknown"),
+        "tensor_cores": _ARCH_CFG.config.get("tensor_cores", "Unknown"),
+        "features": _ARCH_CFG.config.get("features", []),
     }
 
 """early_rejection.py
@@ -515,13 +506,10 @@ if __name__ == "__main__":
 
 # Architecture-specific optimizations
 if torch.cuda.is_available():
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-
     inductor = getattr(torch, "_inductor", None)
     triton_cfg = getattr(getattr(inductor, "config", None), "triton", None) if inductor else None
 
-    if compute_capability == "10.0" and triton_cfg is not None:  # Blackwell B200/B300
+    if _ARCH_CFG.arch in {"blackwell", "grace_blackwell"} and triton_cfg is not None:
         try:
             if hasattr(triton_cfg, "use_blackwell_optimizations"):
                 triton_cfg.use_blackwell_optimizations = True

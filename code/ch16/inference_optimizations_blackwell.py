@@ -611,13 +611,13 @@ def detect_gb200_gb300():
     import platform
     is_arm = platform.machine() in ['aarch64', 'arm64']
     
-    has_b200 = False
+    has_sm100 = False
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         compute_capability = f"{props.major}.{props.minor}"
-        has_b200 = compute_capability == "10.0"
+        has_sm100 = compute_capability == "10.0"
     
-    return is_arm and has_b200
+    return is_arm and has_sm100
 
 class TensorParallel8GPU:
     """

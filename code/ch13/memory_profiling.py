@@ -1,4 +1,5 @@
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import arch_config  # noqa: F401 - Configure architecture optimizations
+from arch_config import ArchitectureConfig
 import torch.profiler as profiler
 from torch.profiler import profile, record_function, ProfilerActivity, schedule
 import torch.cuda.nvtx as nvtx
@@ -6,35 +7,25 @@ import torch
 import torch.nn as nn
 import os
 
+_ARCH_CFG = ArchitectureConfig()
+
+
 def get_architecture():
     """Detect and return the current GPU architecture."""
     if not torch.cuda.is_available():
         return "cpu"
-
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-    return "blackwell" if compute_capability == "10.0" else "other"
+    return _ARCH_CFG.arch
 
 
 def get_architecture_info():
     """Get detailed architecture information."""
-    arch = get_architecture()
-    if arch == "blackwell":
-        return {
-            "name": "Blackwell B200/B300",
-            "compute_capability": "10.0",
-            "sm_version": "sm_100",
-            "memory_bandwidth": "7.8 TB/s",
-            "tensor_cores": "5th Gen",
-            "features": ["HBM3e", "TMA", "NVLink-C2C"]
-        }
     return {
-        "name": "Other",
-        "compute_capability": "Unknown",
-        "sm_version": "Unknown",
-        "memory_bandwidth": "Unknown",
-        "tensor_cores": "Unknown",
-        "features": []
+        "name": _ARCH_CFG.get_architecture_name(),
+        "compute_capability": _ARCH_CFG.config.get("compute_capability", "Unknown"),
+        "sm_version": _ARCH_CFG.config.get("sm_version", "sm_unknown"),
+        "memory_bandwidth": _ARCH_CFG.config.get("memory_bandwidth", "Unknown"),
+        "tensor_cores": _ARCH_CFG.config.get("tensor_cores", "Unknown"),
+        "features": _ARCH_CFG.config.get("features", []),
     }
 
 def demonstrate_memory_profiling():
@@ -274,21 +265,27 @@ def demonstrate_pytorch_29_memory_features():
             backend = torch.backends.cuda.preferred_sdp_backend
             print(f"   Preferred backend: {backend}")
     
-    # 3. Blackwell-specific memory metrics
-    print("\n3. Blackwell-Specific Memory Metrics:")
+    # 3. Architecture-specific memory metrics
+    print("\n3. Architecture-Specific Memory Metrics:")
     
     device_props = torch.cuda.get_device_properties(0)
     compute_capability = f"{device_props.major}.{device_props.minor}"
+    arch = _ARCH_CFG.arch
     
-    if compute_capability == "10.0":  # Blackwell
+    if arch == "blackwell":
         print(f"   Detected: Blackwell B200/B300 (CC {compute_capability})")
         print(f"   HBM3e Total: {device_props.total_memory / 1e9:.1f} GB")
-        print(f"   Memory bandwidth: ~7.8 TB/s")
+        print("   Memory bandwidth: ~7.8 TB/s")
         print(f"   L2 Cache: {device_props.l2_cache_size / 1024 / 1024:.1f} MB")
         
         # Check HBM3e utilization
         allocated = torch.cuda.memory_allocated() / device_props.total_memory
         print(f"   HBM3e utilization: {allocated * 100:.1f}%")
+    elif arch == "grace_blackwell":
+        print(f"   Detected: Grace-Blackwell GB10 (CC {compute_capability})")
+        print(f"   Total GPU memory: {device_props.total_memory / 1e9:.1f} GB")
+        print(f"   L2 Cache: {device_props.l2_cache_size / 1024 / 1024:.1f} MB")
+        print("   Bandwidth metrics: consult Nsight Compute on GB10 for peak values")
     else:
         print(f"   Non-Blackwell GPU detected (CC {compute_capability})")
     
@@ -348,12 +345,11 @@ if __name__ == "__main__":
 # Architecture-specific optimizations
 if torch.cuda.is_available():
     device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
 
     inductor = getattr(torch, "_inductor", None)
     triton_cfg = getattr(getattr(inductor, "config", None), "triton", None) if inductor else None
 
-    if compute_capability == "10.0" and triton_cfg is not None:  # Blackwell B200/B300
+    if _ARCH_CFG.arch in {"blackwell", "grace_blackwell"} and triton_cfg is not None:
         try:
             if hasattr(triton_cfg, "use_blackwell_optimizations"):
                 triton_cfg.use_blackwell_optimizations = True

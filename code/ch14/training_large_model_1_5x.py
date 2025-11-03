@@ -18,6 +18,12 @@ Training benchmark (end-to-end):
 
 Hardware: NVIDIA B200 (SM 10.0, 178 GB HBM3e)
 """
+import sys
+import os
+
+# Add parent directory to path to import arch_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import torch
@@ -43,10 +49,30 @@ def configure_for_training():
     
     # TF32 for training
     torch.set_float32_matmul_precision('high')
-    # NEW PyTorch 2.9 API (no warnings!)
-    torch.set_float32_matmul_precision('high')
-    torch.backends.cudnn.conv.fp32_precision = 'tf32'
-    torch.backends.cuda.matmul.fp32_precision = 'high'
+    cuda_matmul = getattr(torch.backends.cuda, "matmul", None)
+    if cuda_matmul is not None:
+        if hasattr(cuda_matmul, "allow_tf32"):
+            try:
+                cuda_matmul.allow_tf32 = True
+            except (RuntimeError, AttributeError):
+                pass
+        elif hasattr(cuda_matmul, "fp32_precision"):
+            try:
+                cuda_matmul.fp32_precision = 'tf32'
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+    cudnn_conv = getattr(torch.backends.cudnn, "conv", None)
+    if cudnn_conv is not None:
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            try:
+                torch.backends.cudnn.allow_tf32 = True
+            except (RuntimeError, AttributeError):
+                pass
+        elif hasattr(cudnn_conv, "fp32_precision"):
+            try:
+                cudnn_conv.fp32_precision = 'tf32'
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
     
     # Training optimizations
     torch.backends.cudnn.benchmark = True

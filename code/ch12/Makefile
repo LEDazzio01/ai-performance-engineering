@@ -1,51 +1,67 @@
-# Architecture switching support
-# Target architecture: Blackwell B200/B300 (SM100)
-ARCH ?= sm_100
+# Chapter 12 Makefile - CUDA graph and dynamic parallelism examples
 
-# CUDA configuration
-CUDA_VERSION = 13.0
-NVCC = nvcc
-# Use -gencode to embed both cubin (sm_100) and PTX (compute_100) for forward compatibility
-NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC
+include ../common/cuda_arch.mk
 
-# Build all CUDA sources in this chapter
-SOURCES = atomic_work_queue.cu cuda_graphs.cu dynamic_parallelism.cu cuda_graphs_conditional.cu
-TARGETS = $(SOURCES:.cu=)
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
+NVCC_LIBS = -lcuda
+SUFFIX = $(TARGET_SUFFIX)
 
-# Default target
+BASE_TARGETS = atomic_work_queue cuda_graphs dynamic_parallelism cuda_graphs_conditional cuda_graphs_conditional_enhanced
+TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+
+.PHONY: all clean compare blackwell grace-blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS)
+
 all: $(TARGETS)
-	@echo "Building with $(ARCH) architecture (CUDA $(CUDA_VERSION))"
-	@echo "✓ Targeting Blackwell B200/B300 (Compute Capability 10.0)"
+	@echo "Building Chapter 12 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
+	@echo "✓ Targeting $(ARCH_NAME)"
 
-$(TARGETS): %: %.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+atomic_work_queue$(SUFFIX): atomic_work_queue.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
-# Dynamic parallelism requires relocatable device code and device runtime library
-dynamic_parallelism: dynamic_parallelism.cu
-	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt
+cuda_graphs$(SUFFIX): cuda_graphs.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
-# Architecture-specific targets
+cuda_graphs_conditional$(SUFFIX): cuda_graphs_conditional.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+
+cuda_graphs_conditional_enhanced$(SUFFIX): cuda_graphs_conditional_enhanced.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+
+dynamic_parallelism$(SUFFIX): dynamic_parallelism.cu
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+
+compare: clean
+	@echo "========================================"
+	@echo "Building Chapter 12 samples for both architectures..."
+	@echo "========================================"
+	@for arch in $(ARCH_LIST); do \
+		echo ""; \
+		echo ">>> Building $${arch}..."; \
+		$(MAKE) ARCH=$${arch} all; \
+	done
+
 blackwell: ARCH=sm_100
-blackwell: $(TARGETS)
-	@echo "Built for Blackwell B200/B300"
+blackwell: clean all
 
-# Enhanced profiling targets
+grace-blackwell: ARCH=sm_121
+grace-blackwell: clean all
+
 profile-nsys: $(TARGETS)
 	@echo "Nsight Systems timeline profiling..."
 	@for t in $(TARGETS); do \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas -o nsys_profile_$(ARCH)_$$t ./$$t; \
+		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas -o nsys_profile_$${t}_$(ARCH) ./$$t; \
 	done
 
 profile-ncu: $(TARGETS)
 	@echo "Nsight Compute kernel profiling..."
 	@for t in $(TARGETS); do \
-		ncu --metrics achieved_occupancy,warp_execution_efficiency,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram_read_throughput,dram_write_throughput -o ncu_profile_$(ARCH)_$$t ./$$t; \
+		ncu --metrics achieved_occupancy,warp_execution_efficiency,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram_read_throughput,dram_write_throughput -o ncu_profile_$${t}_$(ARCH) ./$$t; \
 	done
 
 profile-hta: $(TARGETS)
 	@echo "HTA (Holistic Tracing Analysis) profiling..."
 	@for t in $(TARGETS); do \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o hta_profile_$(ARCH)_$$t ./$$t; \
+		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o hta_profile_$${t}_$(ARCH) ./$$t; \
 	done
 
 profile-perf: $(TARGETS)
@@ -59,17 +75,15 @@ profile-all: $(TARGETS)
 	@echo "Comprehensive profiling with all tools..."
 	@for t in $(TARGETS); do \
 		echo "1. Nsight Systems timeline..."; \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt -o comprehensive_timeline_$(ARCH)_$$t ./$$t; \
+		nsys profile --force-overwrite=true -t cuda,nvtx,osrt -o comprehensive_timeline_$${t}_$(ARCH) ./$$t; \
 		echo "2. Nsight Compute kernel analysis..."; \
-		ncu --metrics achieved_occupancy,warp_execution_efficiency,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram_read_throughput,dram_write_throughput -o comprehensive_kernel_$(ARCH)_$$t ./$$t; \
+		ncu --metrics achieved_occupancy,warp_execution_efficiency,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram_read_throughput,dram_write_throughput -o comprehensive_kernel_$${t}_$(ARCH) ./$$t; \
 		echo "3. Memory profiling..."; \
-		nsys profile --force-overwrite=true -t cuda,cudamemcpy -o comprehensive_memory_$(ARCH)_$$t ./$$t; \
+		nsys profile --force-overwrite=true -t cuda,cudamemcpy -o comprehensive_memory_$${t}_$(ARCH) ./$$t; \
 		echo "4. HTA analysis..."; \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o comprehensive_hta_$(ARCH)_$$t ./$$t; \
+		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o comprehensive_hta_$${t}_$(ARCH) ./$$t; \
 	done
 
 clean:
-	rm -f $(TARGETS) *.o *.so *.a
+	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
-
-.PHONY: all blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all clean $(TARGETS)

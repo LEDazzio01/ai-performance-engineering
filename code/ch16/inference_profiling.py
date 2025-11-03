@@ -1,44 +1,28 @@
-import arch_config  # noqa: F401 - Configure Blackwell optimizations
+import arch_config  # noqa: F401 - Configure architecture optimizations
+from arch_config import ArchitectureConfig
 import torch
 import os
+
+_ARCH_CFG = ArchitectureConfig()
+
 
 def get_architecture():
     """Detect and return the current GPU architecture."""
     if not torch.cuda.is_available():
         return "cpu"
-    
-    device_props = torch.cuda.get_device_properties(0)
-    compute_capability = f"{device_props.major}.{device_props.minor}"
-    
-    # Architecture detection
-    if compute_capability == "9.0":
-        return "hopper"  # H100/H200
-    elif compute_capability == "10.0":
-        return "blackwell"  # B200/B300
-    else:
-        return "other"
+    return _ARCH_CFG.arch
+
 
 def get_architecture_info():
     """Get detailed architecture information."""
-    arch = get_architecture()
-    if arch == "blackwell":
-        return {
-            "name": "Blackwell B200/B300",
-            "compute_capability": "10.0",
-            "sm_version": "sm_100",
-            "memory_bandwidth": "7.8 TB/s",
-            "tensor_cores": "5th Gen",
-            "features": ["HBM3e", "TMA", "NVLink-C2C"]
-        }
-    else:
-        return {
-            "name": "Other",
-            "compute_capability": "Unknown",
-            "sm_version": "Unknown",
-            "memory_bandwidth": "Unknown",
-            "tensor_cores": "Unknown",
-            "features": []
-        }
+    return {
+        "name": _ARCH_CFG.get_architecture_name(),
+        "compute_capability": _ARCH_CFG.config.get("compute_capability", "Unknown"),
+        "sm_version": _ARCH_CFG.config.get("sm_version", "sm_unknown"),
+        "memory_bandwidth": _ARCH_CFG.config.get("memory_bandwidth", "Unknown"),
+        "tensor_cores": _ARCH_CFG.config.get("tensor_cores", "Unknown"),
+        "features": _ARCH_CFG.config.get("features", []),
+    }
 #!/usr/bin/env python3
 """
 Chapter 16: Profiling, Debugging, and Tuning Inference at Scale
@@ -637,8 +621,7 @@ if __name__ == "__main__":
 if torch.cuda.is_available():
     device_props = torch.cuda.get_device_properties(0)
     compute_capability = f"{device_props.major}.{device_props.minor}"
-    
-    if compute_capability == "10.0":  # Blackwell B200/B300
-        print(f"Enabled Blackwell B200/B300 optimizations (compute capability {compute_capability})")
+    if _ARCH_CFG.arch in {"blackwell", "grace_blackwell"}:
+        print(f"Enabled {_ARCH_CFG.get_architecture_name()} optimizations (compute capability {compute_capability})")
     else:
         print(f" Unsupported compute capability {compute_capability}; running in fallback mode")

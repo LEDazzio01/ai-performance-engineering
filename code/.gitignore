@@ -1,14 +1,83 @@
-profiles_manual_20251028_063656
-.nfs*
+# Book materials (not publicly exposed)
+book/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# CUDA compiled binaries
+*_sm100
+*_sm121
+*.o
+*.so
+*.a
+*.cubin
+*.fatbin
+*.ptx
+
+# Profiling outputs
+profiles/
+profiles_*/
+*.nsys-rep
+*.ncu-rep
+*.sqlite
+*.qdrep
+nsys_profile_*
+ncu_profile_*
+hta_profile_*
+perf.data
+perf.data_*
+comprehensive_*
+
+# Test and benchmark results
 test_results/
-quick_load_test_validation/
-quick_power_test/
+test_results_*/
 quick_test_results/
-power_metrics/
-nsys_validation_*.sqlite
-nvlink_bandwidth_test.json
-power_baseline_*.jso
 quick_test_results_*.tar.gz
+all_chapters_results/
+all_chapters_results_*/
+validation_results/
 validation_results_*/
-large_model_eager_8xb200*.json
+quick_load_test_validation/
+
+# Power and performance metrics
+power_results/
+power_metrics/
+quick_power_test/
 power_baseline*.json
+nvlink_bandwidth_test.json
+large_model_eager_8xb200*.json
+
+# Build and run artifacts
+artifacts/20*/
+ch*/*_build.log
+ch*/*_profile.log
+ch*/*_benchmark.log
+*_build.log
+*_profile.log
+*_benchmark.log
+
+# Generated plots and outputs (in chapter directories)
+ch*/roofline_plot.png
+ch*/*.png
+ch*/*.svg
+
+# NFS files
+.nfs*
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

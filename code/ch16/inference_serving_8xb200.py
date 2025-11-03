@@ -298,13 +298,13 @@ def detect_gb200_gb300():
     import platform
     is_arm = platform.machine() in ['aarch64', 'arm64']
     
-    has_b200 = False
+    has_sm100 = False
     if torch.cuda.is_available():
         props = torch.cuda.get_device_properties(0)
         compute_capability = f"{props.major}.{props.minor}"
-        has_b200 = compute_capability == "10.0"
+        has_sm100 = compute_capability == "10.0"
     
-    return is_arm and has_b200
+    return is_arm and has_sm100
 
 # ============================================================================
 # Request Management
@@ -350,13 +350,9 @@ class RequestState:
 
 class ShardedKVCacheManager:
     """
-    Manage KV cache across 8 GPUs with attention head sharding.
+    Manage KV cache across multiple GPUs with attention head sharding.
     
-    Each GPU stores a subset of attention heads:
-    - GPU 0: heads 0-7
-    - GPU 1: heads 8-15
-    - ...
-    - GPU 7: heads 56-63 (for 64-head model)
+    Each GPU stores a subset of attention heads (even split across ranks).
     """
     
     def __init__(
@@ -382,6 +378,14 @@ class ShardedKVCacheManager:
         self.enable_symmetric_memory = (
             enable_symmetric_memory and _SymmetricMemory is not None and _sym_available() and torch.cuda.is_available()
         )
+
+        if num_gpus < 1:
+            raise ValueError("num_gpus must be >= 1")
+        if num_heads % num_gpus != 0:
+            raise ValueError(
+                f"num_heads ({num_heads}) must be divisible by num_gpus ({num_gpus}) "
+                "for head sharding."
+            )
 
         # Shard heads across GPUs
         self.heads_per_gpu = num_heads // num_gpus
@@ -424,7 +428,8 @@ class ShardedKVCacheManager:
         ) / (1024 * 1024)
 
         if self.rank == 0:
-            print(f"\nKV Cache Manager (Sharded across {num_gpus} GPUs)")
+            gpu_label = "GPU" if num_gpus == 1 else "GPUs"
+            print(f"\nKV Cache Manager (Sharded across {num_gpus} {gpu_label})")
             print(f"  Heads per GPU: {self.heads_per_gpu}")
             print(f"  Page size: {page_size} tokens")
             print(f"  On-demand memory per page: {page_memory_mb:.2f} MB")
@@ -734,6 +739,7 @@ class TensorParallelAttention(nn.Module):
         self._attn_k_workspace: Optional[torch.Tensor] = None
         self._attn_v_workspace: Optional[torch.Tensor] = None
         self._pending_work: Optional[Any] = None
+        self._force_sdpa = num_gpus == 1
 
     def _ensure_workspaces(
         self,
@@ -801,11 +807,9 @@ class TensorParallelAttention(nn.Module):
             token_lengths = [int(v) for v in input_lengths]
 
         if kv_cache is None:
-            if _flex_attention_supported(
+            if self._force_sdpa or not _flex_attention_supported(
                 q, key_local, value_local, head_dim=self.head_dim
             ):
-                out = _call_flex_attention_scaled(q, key_local, value_local, scale)
-            else:
                 out = F.scaled_dot_product_attention(
                     q,
                     key_local,
@@ -813,6 +817,8 @@ class TensorParallelAttention(nn.Module):
                     dropout_p=0.0,
                     is_causal=True,
                 )
+            else:
+                out = _call_flex_attention_scaled(q, key_local, value_local, scale)
         else:
             cache_entries: List[Tuple[int, Optional[torch.Tensor], Optional[torch.Tensor]]] = []
             max_total_len = 0
@@ -862,15 +868,13 @@ class TensorParallelAttention(nn.Module):
             if not bool(valid_mask.all().item()):
                 attn_bias = valid_mask.view(batch_size, 1, 1, required_seq_len)
 
-            if _flex_attention_supported(
+            if self._force_sdpa or not _flex_attention_supported(
                 q,
                 attn_k,
                 attn_v,
                 attn_bias=attn_bias,
                 head_dim=self.head_dim,
             ):
-                out = _call_flex_attention_scaled(q, attn_k, attn_v, scale)
-            else:
                 out = F.scaled_dot_product_attention(
                     q,
                     attn_k,
@@ -879,6 +883,8 @@ class TensorParallelAttention(nn.Module):
                     attn_mask=attn_bias,
                     is_causal=True,
                 )
+            else:
+                out = _call_flex_attention_scaled(q, attn_k, attn_v, scale)
         
         # Reshape and project
         out = out.transpose(1, 2).contiguous()
@@ -1117,8 +1123,13 @@ class InferenceServer8GPU:
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
 
-        if self.world_size != 8:
-            raise RuntimeError(f"This server requires 8 GPUs, found {self.world_size}")
+        if self.world_size < 1:
+            raise RuntimeError("Inference server requires at least one GPU.")
+
+        if self.world_size == 1 and self._enable_compile:
+            if self.rank == 0:
+                print("[info] torch.compile disabled in single-GPU mode for stability")
+            self._enable_compile = False
 
         # Initialize KV cache manager
         self.kv_cache = ShardedKVCacheManager(
@@ -1127,7 +1138,7 @@ class InferenceServer8GPU:
             head_dim=d_model // num_heads,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
-            num_gpus=8,
+            num_gpus=self.world_size,
             page_size=128,
             dtype=self.model_dtype,
             enable_symmetric_memory=use_symmetric_kv,
@@ -1136,7 +1147,8 @@ class InferenceServer8GPU:
             raise RuntimeError(
                 f"KV cache dtype {self.kv_cache.dtype} must match model dtype {self.model_dtype}"
             )
-        self._use_symmetric_kv = use_symmetric_kv and self.kv_cache.enable_symmetric_memory
+        enable_sym = use_symmetric_kv and self.world_size > 1 and self.kv_cache.enable_symmetric_memory
+        self._use_symmetric_kv = enable_sym
         self._symmetric_probe_interval = symmetric_probe_interval
         self._probe_counter = 0
 
@@ -1211,11 +1223,15 @@ class InferenceServer8GPU:
             self._setup_prefill_graph()
 
         if self.rank == 0:
-            print(f"\n8-GPU Inference Server initialized")
+            gpu_label = "GPU" if self.world_size == 1 else "GPUs"
+            print(f"\nInference Server initialized ({self.world_size} {gpu_label})")
             print(f"  Model: {num_layers}L, {d_model}D, {num_heads}H")
             print(f"  Max batch size: {max_batch_size}")
             print(f"  Max sequence length: {max_seq_len:,}")
-            print(f"  Expected throughput: >8M tokens/second\n")
+            if self.world_size >= 8:
+                print(f"  Expected throughput: >8M tokens/second\n")
+            else:
+                print("  Expected throughput: single-GPU fallback mode\n")
 
     def _on_request_complete(self, state: RequestState, completed_at: float) -> None:
         if self._completion_callback is None:
@@ -1251,6 +1267,9 @@ class InferenceServer8GPU:
         if not hasattr(torch.cuda, "CUDAGraph"):
             return
         if self.device.type != "cuda":
+            return
+        if self.world_size == 1:
+            self._prefill_graph_available = False
             return
 
         try:

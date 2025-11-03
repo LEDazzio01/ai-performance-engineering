@@ -71,8 +71,8 @@ progress 4 "$TOTAL_STEPS" "Inspecting example registry"
 echo ""
 echo "📚 Example Registry:"
 python3 - <<'PY'
-from scripts.example_registry import EXAMPLES
-from scripts.metrics_config import resolve_overrides
+from scripts.harness.example_registry import EXAMPLES
+from scripts.harness.metrics_config import resolve_overrides
 
 print(f"  Total examples: {len(EXAMPLES)}")
 print("  Sample examples:")
@@ -139,9 +139,9 @@ fi
 progress 6 "$TOTAL_STEPS" "Dry-running harness validation"
 echo ""
 echo "🧪 Harness Validation:"
-if [[ -f "$CODE_ROOT/scripts/profile_harness.py" ]]; then
+if [[ -f "$CODE_ROOT/scripts/harness/profile_harness.py" ]]; then
     echo "  Running dry-run test (max 3 examples)..."
-    python3 "$CODE_ROOT/scripts/profile_harness.py" --profile all --dry-run --max-examples 3 2>&1 | tail -5
+    python3 "$CODE_ROOT/scripts/harness/profile_harness.py" --profile all --dry-run --max-examples 3 2>&1 | tail -5
 else
     echo "  ❌ profile_harness.py not found"
 fi

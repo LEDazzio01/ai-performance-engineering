@@ -1,0 +1,12 @@
+{
+  "elapsed": 20.459535121917725,
+  "total_requests": 9,
+  "completed_requests": 9,
+  "rejected_requests": 0,
+  "tokens_generated": 36,
+  "throughput_tok_per_s": 1.7595707715486757,
+  "latency_p50_ms": 2395.5554962158203,
+  "latency_p90_ms": 2465.4266834259033,
+  "latency_p99_ms": 2488.4172916412354,
+  "samples_collected": 9
+}

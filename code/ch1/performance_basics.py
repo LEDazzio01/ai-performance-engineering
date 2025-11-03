@@ -1,6 +1,12 @@
 """Simple benchmarking script for Chapter 1 (goodput measurement)."""
 
 from __future__ import annotations
+import sys
+import os
+
+# Add parent directory to path to import arch_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import arch_config  # noqa: F401 - Configure Blackwell optimizations
 
 import time

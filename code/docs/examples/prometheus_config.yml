@@ -1,0 +1,170 @@
+# Prometheus Configuration for LLM Inference Monitoring (Chapter 16)
+#
+# This configuration scrapes GPU metrics from DCGM exporters
+# and application metrics from inference servers.
+#
+# Usage:
+#   1. Place this file as /etc/prometheus/prometheus.yml
+#   2. Restart Prometheus: sudo systemctl restart prometheus
+#   3. Access at http://localhost:9090
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  # Attach these labels to any time series or alerts
+  external_labels:
+    cluster: 'llm-inference-cluster'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # DCGM GPU metrics exporter (our custom exporter)
+  - job_name: 'dcgm-exporter'
+    scrape_interval: 5s
+    static_configs:
+      # Add all GPU nodes here
+      - targets:
+          - 'gpu-node-01:8000'
+          - 'gpu-node-02:8000'
+          - 'gpu-node-03:8000'
+          - 'gpu-node-04:8000'
+          - 'gpu-node-05:8000'
+          - 'gpu-node-06:8000'
+          - 'gpu-node-07:8000'
+          - 'gpu-node-08:8000'
+        labels:
+          group: 'gpu-cluster'
+          
+  # NVIDIA DCGM official exporter (if using official exporter)
+  - job_name: 'nvidia-dcgm-exporter'
+    scrape_interval: 5s
+    static_configs:
+      - targets:
+          - 'gpu-node-01:9400'
+          - 'gpu-node-02:9400'
+        labels:
+          group: 'gpu-cluster'
+          
+  # LLM inference application metrics
+  - job_name: 'llm-inference-app'
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - 'inference-server-01:8080'
+          - 'inference-server-02:8080'
+        labels:
+          group: 'inference-servers'
+          
+  # Node exporter for system metrics (CPU, memory, disk, network)
+  - job_name: 'node-exporter'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 'gpu-node-01:9100'
+          - 'gpu-node-02:9100'
+          - 'gpu-node-03:9100'
+          - 'gpu-node-04:9100'
+          - 'gpu-node-05:9100'
+          - 'gpu-node-06:9100'
+          - 'gpu-node-07:9100'
+          - 'gpu-node-08:9100'
+        labels:
+          group: 'system'
+          
+  # Kubernetes service discovery (if using K8s)
+  # - job_name: 'kubernetes-pods'
+  #   kubernetes_sd_configs:
+  #     - role: pod
+  #   relabel_configs:
+  #     # Only scrape pods with prometheus.io/scrape: "true" annotation
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+  #       action: keep
+  #       regex: true
+  #     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+  #       action: replace
+  #       target_label: __metrics_path__
+  #       regex: (.+)
+  #     - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+  #       action: replace
+  #       regex: ([^:]+)(?::\d+)?;(\d+)
+  #       replacement: $1:$2
+  #       target_label: __address__
+  #     - action: labelmap
+  #       regex: __meta_kubernetes_pod_label_(.+)
+  #     - source_labels: [__meta_kubernetes_namespace]
+  #       action: replace
+  #       target_label: kubernetes_namespace
+  #     - source_labels: [__meta_kubernetes_pod_name]
+  #       action: replace
+  #       target_label: kubernetes_pod_name
+
+# Example alert rules (save as /etc/prometheus/rules/llm_alerts.yml)
+# groups:
+#   - name: gpu_alerts
+#     interval: 30s
+#     rules:
+#       - alert: HighGPUTemperature
+#         expr: dcgm_gpu_temperature_celsius > 85
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "GPU {{ $labels.gpu }} temperature is high"
+#           description: "GPU {{ $labels.gpu }} on {{ $labels.hostname }} has temperature {{ $value }}°C"
+#       
+#       - alert: LowGPUUtilization
+#         expr: avg(dcgm_gpu_utilization_percent) < 20
+#         for: 10m
+#         labels:
+#           severity: info
+#         annotations:
+#           summary: "Low GPU utilization detected"
+#           description: "Average GPU utilization is {{ $value }}% across cluster"
+#       
+#       - alert: HighInferenceLatency
+#         expr: histogram_quantile(0.95, sum(rate(llm_latency_seconds_bucket[5m])) by (le)) > 0.2
+#         for: 5m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "P95 inference latency is high"
+#           description: "P95 latency is {{ $value }}s, exceeding 200ms threshold"
+#       
+#       - alert: LowCacheHitRate
+#         expr: kv_cache_hit_rate < 50
+#         for: 10m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "Low KV cache hit rate"
+#           description: "KV cache hit rate is {{ $value }}%, may need tuning"
+#       
+#       - alert: NVLinkErrors
+#         expr: increase(dcgm_nvlink_errors_total[5m]) > 0
+#         for: 1m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "NVLink errors detected"
+#           description: "GPU {{ $labels.gpu }} on {{ $labels.hostname }} has NVLink errors"
+#       
+#       - alert: HighMemoryPressure
+#         expr: dcgm_gpu_memory_utilization_percent > 90
+#         for: 5m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High GPU memory pressure"
+#           description: "GPU {{ $labels.gpu }} memory utilization is {{ $value }}%"
+

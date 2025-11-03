@@ -1,100 +1,68 @@
-# Architecture switching support
-# Target architecture: Blackwell B200/B300 (SM100)
-ARCH ?= sm_100
+# Makefile for double_buffered_pipeline.cu
 
-# CUDA configuration
-CUDA_VERSION = 13.0
+# Detect CUDA architecture
+CUDA_ARCH ?= native
+
+# Compiler settings
 NVCC = nvcc
-# CUTLASS support (optional - examples work without it)
-# If you need CUTLASS headers for custom kernels, install nvidia-cutlass-dsl:
-#   sudo pip install nvidia-cutlass-dsl
-# Headers available at: /usr/local/lib/python3.11/dist-packages/nvidia_cutlass_dsl/
-CUTLASS_INCLUDE =
-# Use -gencode to embed both cubin (sm_100) and PTX (compute_100) for forward compatibility
-NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC -lcuda $(CUTLASS_INCLUDE)
+CXXFLAGS = -std=c++17 -O3
+NVCCFLAGS = -arch=$(CUDA_ARCH) -lineinfo --expt-relaxed-constexpr
 
-# Source files
-SOURCES = double_buffered_pipeline.cu warp_specialized_pipeline.cu cooperative_persistent_kernel.cu
-TARGETS = $(SOURCES:.cu=)
+# Include path for common headers
+INCLUDES = -I..
 
-# Blackwell-only examples are built only when ARCH=sm_100
-ifeq ($(ARCH),sm_100)
-SOURCES += tma_2d_pipeline_blackwell.cu cluster_group_blackwell.cu tcgen05_blackwell.cu
-TARGETS += tma_2d_pipeline_blackwell cluster_group_blackwell tcgen05_blackwell
-endif
+# Common headers
+COMMON_HEADERS = ../common/headers/arch_detection.cuh ../common/headers/tma_helpers.cuh
 
-# Default target
-all: $(TARGETS)
-	@echo "Building with $(ARCH) architecture (CUDA $(CUDA_VERSION))"
-	@echo "✓ Targeting Blackwell B200/B300 (Compute Capability 10.0)"
+# Target executable
+TARGET = double_buffered_pipeline
+SOURCE = double_buffered_pipeline.cu
 
-# Build individual targets
-double_buffered_pipeline: double_buffered_pipeline.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+.PHONY: all clean run test test-gds demo help
 
-warp_specialized_pipeline: warp_specialized_pipeline.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+all: $(TARGET)
 
-cooperative_persistent_kernel: cooperative_persistent_kernel.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+$(TARGET): $(SOURCE) $(COMMON_HEADERS)
+	$(NVCC) $(NVCCFLAGS) $(CXXFLAGS) $(INCLUDES) -o $(TARGET) $(SOURCE)
 
-# Blackwell-only builds
-tma_2d_pipeline_blackwell: tma_2d_pipeline_blackwell.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
+run: $(TARGET)
+	./$(TARGET)
 
-cluster_group_blackwell: cluster_group_blackwell.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
+test: $(TARGET)
+	@echo "=== Testing Memory Pipeline (CUDA) ==="
+	@echo "=== Testing small matrix (16x16x16) ==="
+	./$(TARGET) 16 16 16
+	@echo ""
+	@echo "=== Testing medium matrix (128x128x128) ==="
+	./$(TARGET) 128 128 128
+	@echo ""
+	@echo "=== Testing large matrix (1024x1024x1024) ==="
+	./$(TARGET) 1024 1024 1024
 
-tcgen05_blackwell: tcgen05_blackwell.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcublas
+test-gds:
+	@echo "=== Testing GPUDirect Storage (Python) ==="
+	python3 cufile_gds_example.py
 
-# Architecture-specific targets
-blackwell: ARCH=sm_100
-blackwell: $(TARGETS)
-	@echo "Built for Blackwell B200/B300"
+demo: $(TARGET)
+	@echo "=== Running Both Examples ==="
+	./demo_both_examples.sh
 
-# Enhanced profiling targets
-profile-nsys: $(TARGETS)
-	@echo "Nsight Systems timeline profiling..."
-	@for target in $(TARGETS); do \
-		echo "Profiling $$target..."; \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas -o nsys_profile_$(ARCH)_$$target ./$$target; \
-	done
-
-profile-ncu: $(TARGETS)
-	@echo "Nsight Compute kernel profiling..."
-	@for target in $(TARGETS); do \
-		echo "Profiling $$target..."; \
-		ncu --metrics achieved_occupancy,warp_execution_efficiency,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram_read_throughput,dram_write_throughput -o ncu_profile_$(ARCH)_$$target ./$$target; \
-	done
-
-profile-hta: $(TARGETS)
-	@echo "HTA (Holistic Tracing Analysis) profiling..."
-	@for target in $(TARGETS); do \
-		echo "Profiling $$target..."; \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o hta_profile_$(ARCH)_$$target ./$$target; \
-	done
-
-profile-perf: $(TARGETS)
-	@echo "Perf system-level profiling..."
-	@for target in $(TARGETS); do \
-		echo "Profiling $$target..."; \
-		perf record -g -o perf.data_$(ARCH)_$$target ./$$target; \
-		perf report -i perf.data_$(ARCH)_$$target; \
-	done
-
-profile-all: $(TARGETS)
-	@echo "Comprehensive profiling with all tools..."
-	@for target in $(TARGETS); do \
-		echo "Comprehensive profiling of $$target..."; \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt -o comprehensive_timeline_$(ARCH)_$$target ./$$target; \
-		ncu --metrics achieved_occupancy,warp_execution_efficiency,sm__throughput.avg.pct_of_peak_sustained_elapsed,dram_read_throughput,dram_write_throughput -o comprehensive_kernel_$(ARCH)_$$target ./$$target; \
-		nsys profile --force-overwrite=true -t cuda,cudamemcpy -o comprehensive_memory_$(ARCH)_$$target ./$$target; \
-		nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o comprehensive_hta_$(ARCH)_$$target ./$$target; \
-	done
+help:
+	@echo "Chapter 10: Memory Pipelines and GPUDirect Storage"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  make          - Build memory pipeline (CUDA)"
+	@echo "  make test     - Test memory pipeline with multiple sizes"
+	@echo "  make test-gds - Test GPUDirect Storage (Python)"
+	@echo "  make demo     - Run both examples back-to-back"
+	@echo "  make run      - Run memory pipeline (default size)"
+	@echo "  make clean    - Remove compiled binaries"
+	@echo "  make help     - Show this help message"
+	@echo ""
+	@echo "Examples:"
+	@echo "  Memory Pipeline:       ./double_buffered_pipeline 512 512 512"
+	@echo "  GPUDirect Storage:     python3 cufile_gds_example.py"
+	@echo "  Both:                  make demo"
 
 clean:
-	rm -f $(TARGETS) *.o *.so *.a
-	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
-
-.PHONY: all blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all clean $(TARGETS)
+	rm -f $(TARGET)

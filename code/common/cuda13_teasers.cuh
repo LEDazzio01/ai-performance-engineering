@@ -17,7 +17,7 @@
 #include <cstdio>
 
 #if defined(CUDART_VERSION) && (CUDART_VERSION >= 13000)
-#include "../cuda13_feature_examples.cuh"
+#include "headers/cuda13_demos.cuh"
 #endif
 
 namespace cuda13_teasers {
@@ -25,7 +25,7 @@ namespace cuda13_teasers {
 inline void stream_ordered_teaser() {
 #if defined(CUDART_VERSION) && (CUDART_VERSION >= 13000)
     std::printf("\n[Teaser] Running cudaMallocAsync stream-ordered allocation demo…\n");
-    cuda13_examples::run_stream_ordered_memory_demo();
+    cuda13_demos::run_stream_ordered_memory_demo();
 #else
     std::printf(
         "\n[Teaser] cudaMallocAsync unavailable on this toolkit. "
@@ -36,7 +36,7 @@ inline void stream_ordered_teaser() {
 inline void tma_teaser() {
 #if defined(CUDART_VERSION) && (CUDART_VERSION >= 13000)
     std::printf("\n[Teaser] Running Tensor Memory Accelerator copy demo…\n");
-    cuda13_examples::run_simple_tma_demo();
+    cuda13_demos::run_simple_tma_demo();
 #else
     std::printf(
         "\n[Teaser] Tensor Memory Accelerator requires CUDA 13+. "

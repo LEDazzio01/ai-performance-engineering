@@ -1,38 +1,45 @@
-# Architecture switching support
-# Target architecture: Blackwell B200/B300 (SM100)
-ARCH ?= sm_100
+# Chapter 9 Makefile - Fusion and CUTLASS examples with dual-arch builds
 
-# CUDA configuration
-CUDA_VERSION = 13.0
-NVCC = nvcc
-# Use -gencode to embed both cubin (sm_100) and PTX (compute_100) for forward compatibility
-NVCC_FLAGS = -O3 -std=c++17 -gencode arch=compute_100,code=[sm_100,compute_100] --expt-relaxed-constexpr -DCUDA_VERSION=$(CUDA_VERSION) -Xcompiler -fPIC
+include ../common/cuda_arch.mk
 
-# Find all CUDA source files
+NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS)
+SUFFIX = $(TARGET_SUFFIX)
+
 CUDA_SOURCES = $(wildcard *.cu)
-TARGETS = $(CUDA_SOURCES:.cu=)
+BASE_TARGETS = $(CUDA_SOURCES:.cu=)
+TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
-# Default target
+.PHONY: all clean compare blackwell grace-blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS)
+
 all: $(TARGETS)
-	@echo "Building with $(ARCH) architecture (CUDA $(CUDA_VERSION))"
-	@echo "✓ Targeting Blackwell B200/B300 (Compute Capability 10.0)"
+	@echo "Building Chapter 9 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
+	@echo "✓ Targeting $(ARCH_NAME)"
 	@echo "Built targets: $(TARGETS)"
 
-# Build each target
-$(TARGETS): %: %.cu
+$(TARGETS): %$(SUFFIX): %.cu
 	@echo "Building $@..."
-	@if [ "$@" = "cutlass_gemm_example" ]; then \
+	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \
 	else \
 		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \
 	fi
 
-# Architecture-specific targets
-blackwell: ARCH=sm_100
-blackwell: $(TARGETS)
-	@echo "Built for Blackwell B200/B300"
+compare: clean
+	@echo "========================================"
+	@echo "Building Chapter 9 samples for both architectures..."
+	@echo "========================================"
+	@for arch in $(ARCH_LIST); do \
+		echo ""; \
+		echo ">>> Building $${arch}..."; \
+		$(MAKE) ARCH=$${arch} all; \
+	done
 
-# Enhanced profiling targets
+blackwell: ARCH=sm_100
+blackwell: clean all
+
+grace-blackwell: ARCH=sm_121
+grace-blackwell: clean all
+
 profile-nsys: $(TARGETS)
 	@echo "Nsight Systems timeline profiling..."
 	nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas -o nsys_profile_$(ARCH) ./$(firstword $(TARGETS))
@@ -62,7 +69,5 @@ profile-all: $(TARGETS)
 	nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o comprehensive_hta_$(ARCH) ./$(firstword $(TARGETS))
 
 clean:
-	rm -f $(TARGETS) *.o *.so *.a
+	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
-
-.PHONY: all blackwell profile-nsys profile-ncu profile-hta profile-perf profile-all clean $(TARGETS)

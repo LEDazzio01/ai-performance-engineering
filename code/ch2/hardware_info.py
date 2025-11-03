@@ -22,7 +22,14 @@ def get_architecture() -> str:
 
     device_props = torch.cuda.get_device_properties(0)
     compute_capability = f"{device_props.major}.{device_props.minor}"
-    return "blackwell" if compute_capability == "10.0" else "other"
+
+    if compute_capability == "10.0":
+        return "blackwell"
+
+    if device_props.major == 12:
+        return "grace_blackwell"
+
+    return "other"
 
 
 def get_architecture_info() -> Dict[str, Any]:
@@ -36,6 +43,15 @@ def get_architecture_info() -> Dict[str, Any]:
             "memory_bandwidth": "7.8 TB/s",
             "tensor_cores": "5th Gen",
             "features": ["HBM3e", "TMA", "NVLink-C2C"],
+        }
+    if arch == "grace_blackwell":
+        return {
+            "name": "Grace-Blackwell GB10",
+            "compute_capability": "12.x",
+            "sm_version": "sm_121",
+            "memory_bandwidth": "Unknown",
+            "tensor_cores": "Next Gen",
+            "features": ["Grace-Blackwell coherence fabric"],
         }
 
     return {
@@ -56,8 +72,31 @@ def get_gpu_info() -> Dict[str, Any]:
     device_props = torch.cuda.get_device_properties(0)
     compute_capability = f"{device_props.major}.{device_props.minor}"
 
-    is_blackwell = device_props.major == 10
-    memory_bandwidth_tbps = 7.8 if is_blackwell else None
+    major = device_props.major
+    architecture = "Unsupported"
+    memory_bandwidth_tbps = None
+    tensor_cores = "Unknown"
+    hbm3e_memory = False
+    tma_support = False
+    nvlink_c2c = False
+    max_unified_memory_tb = None
+    sm_version = "sm_unknown"
+
+    if major == 10:
+        architecture = "Blackwell B200/B300"
+        memory_bandwidth_tbps = 7.8
+        tensor_cores = "5th Generation"
+        hbm3e_memory = True
+        tma_support = True
+        nvlink_c2c = True
+        max_unified_memory_tb = 30
+        sm_version = "sm_100"
+    elif major == 12:
+        architecture = "Grace-Blackwell GB10"
+        tensor_cores = "Next Generation"
+        tma_support = True
+        nvlink_c2c = True
+        sm_version = "sm_121"
 
     return {
         "name": device_props.name,
@@ -71,14 +110,15 @@ def get_gpu_info() -> Dict[str, Any]:
         "max_shared_memory_per_block": device_props.shared_memory_per_block,
         "max_shared_memory_per_sm": device_props.shared_memory_per_multiprocessor,
         "l2_cache_size": device_props.L2_cache_size,
-        "architecture": "Blackwell B200/B300" if is_blackwell else "Unsupported",
-        "hbm3e_memory": is_blackwell,
+        "architecture": architecture,
+        "sm_version": sm_version,
+        "hbm3e_memory": hbm3e_memory,
         "memory_bandwidth_tbps": memory_bandwidth_tbps,
-        "tma_support": is_blackwell,
-        "nvlink_c2c": is_blackwell,
-        "tensor_cores": "5th Generation" if is_blackwell else "Unknown",
+        "tma_support": tma_support,
+        "nvlink_c2c": nvlink_c2c,
+        "tensor_cores": tensor_cores,
         "unified_memory": True,
-        "max_unified_memory_tb": 30 if is_blackwell else None,
+        "max_unified_memory_tb": max_unified_memory_tb,
     }
 
 
@@ -125,8 +165,8 @@ def get_system_info() -> Dict[str, Any]:
 
 
 def demonstrate_blackwell_features() -> None:
-    """Demonstrate Blackwell B200/B300 specific features."""
-    print("\n=== Blackwell B200/B300 Features Demonstration ===\n")
+    """Demonstrate detected GPU architecture features."""
+    print("\n=== Blackwell/Grace-Blackwell Features Demonstration ===\n")
 
     if not torch.cuda.is_available():
         print("CUDA not available, skipping Blackwell features")
@@ -134,7 +174,8 @@ def demonstrate_blackwell_features() -> None:
 
     gpu_info = get_gpu_info()
 
-    if gpu_info.get("architecture") == "Blackwell B200/B300":
+    architecture = gpu_info.get("architecture")
+    if architecture == "Blackwell B200/B300":
         print(" This is a Blackwell B200/B300 GPU")
         print(f" Compute Capability: {gpu_info['compute_capability']} (SM100)")
         print(f" Memory: {gpu_info['total_memory_gb']:.1f} GB")
@@ -144,6 +185,17 @@ def demonstrate_blackwell_features() -> None:
         print(" NVLink-C2C (Direct GPU-to-GPU communication)")
         print(" Unified Memory Architecture")
         print(f" Max Unified Memory: {gpu_info['max_unified_memory_tb']} TB")
+    elif architecture == "Grace-Blackwell GB10":
+        print(" This is a Grace-Blackwell GB10 GPU")
+        print(f" Compute Capability: {gpu_info['compute_capability']} ({gpu_info.get('sm_version', 'unknown SM')})")
+        print(f" Memory: {gpu_info['total_memory_gb']:.1f} GB")
+        bandwidth = gpu_info.get("memory_bandwidth_gbps")
+        bandwidth_str = f"{bandwidth:.1f} GB/s" if bandwidth else "Unknown"
+        print(f" Memory Bandwidth: {bandwidth_str}")
+        print(f" Tensor Cores: {gpu_info['tensor_cores']}")
+        if gpu_info.get("nvlink_c2c"):
+            print(" NVLink-C2C fabric available")
+        print(" Stream-ordered memory APIs supported")
     else:
         print("This is not a Blackwell B200/B300 GPU")
         print(f"GPU: {gpu_info['name']}")

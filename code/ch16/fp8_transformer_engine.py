@@ -120,8 +120,13 @@ def fp8_autocast(enabled: bool = True, *, recipe: Optional["DelayedScaling"] = N
     if recipe is None:
         recipe = _default_recipe()
     assert te is not None  # mypy guard
-    with te.fp8_autocast(enabled=True, recipe=recipe):
-        yield
+    try:
+        with te.fp8_autocast(enabled=True, fp8_recipe=recipe):
+            yield
+    except TypeError:
+        # Older TE releases expect `recipe`; fall back for compatibility.
+        with te.fp8_autocast(enabled=True, recipe=recipe):
+            yield
 
 
 def convert_linear_layers(

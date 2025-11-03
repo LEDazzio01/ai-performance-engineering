@@ -61,7 +61,7 @@ def main():
     # NEW PyTorch 2.9 API (fixes warnings!)
     torch.set_float32_matmul_precision('high')
     torch.backends.cudnn.conv.fp32_precision = 'tf32'
-    torch.backends.cuda.matmul.fp32_precision = 'high'
+    torch.backends.cuda.matmul.fp32_precision = 'tf32'
     
     print("=" * 80)
     print("QUICK GPT TEST ON B200")

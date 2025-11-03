@@ -52,8 +52,31 @@ def configure_peak_performance():
     
     # TF32 - Enable for Blackwell
     torch.set_float32_matmul_precision('high')
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cuda.matmul.allow_tf32 = True
+    cuda_matmul = getattr(torch.backends.cuda, "matmul", None)
+    if cuda_matmul is not None:
+        if hasattr(cuda_matmul, "allow_tf32"):
+            try:
+                cuda_matmul.allow_tf32 = True
+            except (RuntimeError, AttributeError):
+                pass
+        elif hasattr(cuda_matmul, "fp32_precision"):
+            try:
+                cuda_matmul.fp32_precision = 'tf32'
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
+
+    cudnn_conv = getattr(torch.backends.cudnn, "conv", None)
+    if cudnn_conv is not None:
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            try:
+                torch.backends.cudnn.allow_tf32 = True
+            except (RuntimeError, AttributeError):
+                pass
+        elif hasattr(cudnn_conv, "fp32_precision"):
+            try:
+                cudnn_conv.fp32_precision = 'tf32'
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                pass
     
     # Flash Attention
     torch.backends.cuda.enable_flash_sdp(True)
