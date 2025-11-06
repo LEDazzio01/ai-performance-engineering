@@ -1,6 +1,9 @@
 # Book materials (not publicly exposed)
 book/
-
+benchmark_test_results.json
+benchmark_test_results.md
+benchmark_status_table.json
+benchmark_status_table.txt
 benchmark_results/
 .torch_inductor/
 tmp_bench/

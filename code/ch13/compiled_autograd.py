@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
+"""
+Compiled Autograd with PyTorch 2.9
+
+PyTorch 2.9 can compile the backward pass for improved training efficiency.
+Requires PyTorch 2.9+ and CUDA 13.0+.
+"""
 
 import pathlib
 import sys
@@ -8,17 +16,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXTRAS_REPO_ROOT))
 
 from pathlib import Path
-
-"""
-Compiled Autograd with PyTorch 2.9
-
-PyTorch 2.9 can compile the backward pass for improved training efficiency.
-Requires PyTorch 2.9+ and CUDA 13.0+.
-"""
-
-from __future__ import annotations
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 

@@ -167,28 +167,42 @@ class BaselineRegionalCompilationBenchmark(Benchmark):
             print("\nWARNING: Compilation status unclear, falling back to EAGER mode")
             self.model = model
         
-        self.config = config
+        # Create input data
+        batch_size = 2
+        seq_len = 1024
+        self.input_data = torch.randint(
+            0, 50304, (batch_size, seq_len), device=self.device, dtype=torch.long
+        )
     
-    def run(self, input_data: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Run inference in eager mode (compilation failed/hung)."""
+    def benchmark_fn(self) -> None:
+        """Function to benchmark - runs inference."""
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_regional_compilation", enable=enable_nvtx):
+            with torch.no_grad():
+                _ = self.model(self.input_data)
+
+    
+    def get_config(self) -> BenchmarkConfig:
+        """Return benchmark configuration."""
+        return BenchmarkConfig(
+            iterations=1,
+            warmup=0,
+            timeout_seconds=15,  # Short timeout since compilation may hang
+        )
+    
+    def validate_result(self) -> Optional[str]:
+        """Validate benchmark result."""
         if self.model is None:
-            raise RuntimeError("Model not set up")
-        
-        if input_data is None:
-            batch_size = 2
-            seq_len = 1024
-            input_data = torch.randint(
-                0, 50304, (batch_size, seq_len), device=self.device, dtype=torch.long
-            )
-        
-        print("\nRunning inference in EAGER mode (no compilation)")
-        import time
-        start = time.perf_counter()
-        with torch.no_grad():
-            output = self.model(input_data)
-        elapsed = (time.perf_counter() - start) * 1000
-        print(f"Eager inference time: {elapsed:.2f} ms")
-        return output
+            return "Model not initialized"
+        return None
     
     def teardown(self) -> None:
         """Cleanup."""
@@ -198,20 +212,24 @@ class BaselineRegionalCompilationBenchmark(Benchmark):
             torch.cuda.empty_cache()
 
 
+def get_benchmark() -> Benchmark:
+    """Factory function for benchmark discovery."""
+    return BaselineRegionalCompilationBenchmark()
+
+
 def main():
     """Run the baseline benchmark."""
-    benchmark = BaselineRegionalCompilationBenchmark()
-    config = BenchmarkConfig(
-        iterations=1,
-        warmup=0,
-    )
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
     
-    benchmark.setup(config)
-    output = benchmark.run()
-    print(f"\n[OK] Baseline completed: output shape {output.shape}")
+    benchmark = BaselineRegionalCompilationBenchmark()
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=benchmark.get_config()
+    )
+    result = harness.benchmark(benchmark)
+    print(f"\n[OK] Baseline completed: {result.mean_ms:.3f} ms")
     print("NOTE: This ran in EAGER mode because compilation hung.")
     print("See optimized_regional_compilation.py for regional compilation solution.")
-    benchmark.teardown()
 
 
 if __name__ == "__main__":

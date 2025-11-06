@@ -75,6 +75,12 @@ class OptimizedRoutingBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.small_model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.medium_model = None
         self.large_model = None
         self.x_small = None
@@ -87,6 +93,11 @@ class OptimizedRoutingBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: initialize models and data."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # Create models of different sizes
         self.small_model = SimpleModel(hidden_dim=1024, num_layers=8).to(self.device).eval()
         self.medium_model = SimpleModel(hidden_dim=1536, num_layers=16).to(self.device).eval()
@@ -109,8 +120,16 @@ class OptimizedRoutingBenchmark(Benchmark):
         running a weighted mix: 50% small (fast), 30% medium, 20% large (slow).
         But we need to do this efficiently - use a counter to cycle through.
         """
-        torch.cuda.nvtx.range_push("routing_dynamic")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("routing_dynamic", enable=enable_nvtx):
             with torch.no_grad():
                         # Use a simple counter approach: cycle through models based on distribution
                         # This simulates the cost savings from routing easy requests to small models
@@ -130,9 +149,7 @@ class OptimizedRoutingBenchmark(Benchmark):
                             _ = self.medium_model(self.x_medium)  # 30% medium -> medium
                         else:
                             _ = self.large_model(self.x_large)  # 20% hard -> large
-    
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.small_model, self.medium_model, self.large_model

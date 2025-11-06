@@ -69,8 +69,16 @@ class BaselineFlashAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard attention without FlashAttention."""
-        torch.cuda.nvtx.range_push("baseline_flash_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_flash_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard attention (no FlashAttention)
                 # Computes full attention matrix: O(seq_len^2) memory
@@ -79,8 +87,7 @@ class BaselineFlashAttentionBenchmark(Benchmark):
                 
                 # Baseline: No FlashAttention benefits
                 # Quadratic memory complexity for long sequences
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

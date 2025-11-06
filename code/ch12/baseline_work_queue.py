@@ -59,12 +59,19 @@ class BaselineWorkQueueBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Static work distribution."""
-        torch.cuda.nvtx.range_push("baseline_work_queue_static")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_work_queue_static", enable=enable_nvtx):
             # Call CUDA extension with static work distribution
             self._extension.static_work_distribution(self.input_data, self.output_data, self.iterations)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

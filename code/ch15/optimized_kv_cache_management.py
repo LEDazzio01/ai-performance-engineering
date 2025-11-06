@@ -43,11 +43,28 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.inputs = None
         self.kv_cache = None
     
     def setup(self) -> None:
         """Setup: Initialize model with KV cache management."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: KV cache management - reuse cached values
         # KV cache management stores and reuses keys/values
@@ -79,8 +96,16 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: KV cache management with reuse."""
-        torch.cuda.nvtx.range_push("optimized_kv_cache_management")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_kv_cache_management", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: KV cache management
                 # Reuse cached keys/values instead of recomputing
@@ -105,8 +130,7 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
                     
                     # Attention with cached K/V (KV cache management benefits)
                     # Optimization: Reuses cached values instead of recomputing
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

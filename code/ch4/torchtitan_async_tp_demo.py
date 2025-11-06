@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -33,7 +33,6 @@ Async-TP currently requires:
   * torch.compile mode that includes the model ("max-autotune" by default below).
 """
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

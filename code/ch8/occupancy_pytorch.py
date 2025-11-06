@@ -1,3 +1,4 @@
+from __future__ import annotations
 """GPU occupancy heuristics with PyTorch (CUDA 13.0 / PyTorch 2.9).
 
 The focus is on sizing work to keep SMs busy, batching small ops, fusing chains,
@@ -13,7 +14,6 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 
-from __future__ import annotations
 import os
 
 CHAPTER_DIR = os.path.dirname(os.path.abspath(__file__))

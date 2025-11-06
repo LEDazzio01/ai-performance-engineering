@@ -47,6 +47,11 @@ class OptimizedCoalescingBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors with coalesced access pattern."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Coalesced memory access
         # Threads access contiguous memory for efficient coalescing
@@ -58,8 +63,16 @@ class OptimizedCoalescingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Coalesced memory access."""
-        torch.cuda.nvtx.range_push("optimized_coalescing")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_coalescing", enable=enable_nvtx):
             # Optimization: Coalesced memory access
             # Contiguous access pattern enables coalescing
             # Coalescing: threads access contiguous memory for efficiency
@@ -71,8 +84,7 @@ class OptimizedCoalescingBenchmark(Benchmark):
             # - Efficient memory bandwidth utilization
             # - Better performance through coalescing
             # - Maximized memory throughput
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

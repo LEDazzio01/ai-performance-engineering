@@ -67,8 +67,16 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without warp specialization."""
-        torch.cuda.nvtx.range_push("baseline_warp_specialization")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_warp_specialization", enable=enable_nvtx):
             # Baseline: All warps do the same work
             # Without warp specialization, all warps execute all operations
             # This does not leverage warp specialization for producer/consumer patterns
@@ -82,8 +90,7 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
             # All warps execute same operations
             # Cannot leverage producer/consumer patterns
             _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

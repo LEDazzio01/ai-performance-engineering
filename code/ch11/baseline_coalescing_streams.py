@@ -48,8 +48,16 @@ class BaselineCoalescingStreamsBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: Stream-ordered operations without coalescing."""
-        torch.cuda.nvtx.range_push("baseline_coalescing_streams")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_coalescing_streams", enable=enable_nvtx):
             # Baseline: Stream-ordered without coalescing
             # Memory coalescing ensures threads access contiguous memory
             # This baseline does not optimize memory access patterns
@@ -58,8 +66,7 @@ class BaselineCoalescingStreamsBenchmark(Benchmark):
                 self.output = self.input[::2] * 2.0  # Strided access (not coalesced)
                 # Stream-ordered allocation but non-coalesced memory access
                 # See ch5 for full coalescing optimizations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

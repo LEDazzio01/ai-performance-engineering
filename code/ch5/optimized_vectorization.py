@@ -46,6 +46,11 @@ class OptimizedVectorizationBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Vectorized operations
         # Vectorization processes multiple elements simultaneously
@@ -56,8 +61,16 @@ class OptimizedVectorizationBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Vectorized operations."""
-        torch.cuda.nvtx.range_push("optimized_vectorization")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_vectorization", enable=enable_nvtx):
             # Optimization: Vectorized operations
             # Processes multiple elements simultaneously (vectorization)
             # Vectorization: SIMD operations for efficient processing
@@ -69,8 +82,7 @@ class OptimizedVectorizationBenchmark(Benchmark):
             # - Better throughput through vectorization
             # - Improved performance through parallel element processing
             _ = result
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

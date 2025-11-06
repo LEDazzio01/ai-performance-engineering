@@ -41,21 +41,20 @@ except ImportError:
             os.environ.setdefault("MASTER_PORT", "29500")
             os.environ.setdefault("LOCAL_RANK", "0")
 
-try:
-    from sm121_compatibility import skip_if_sm121_triton_issue
-except ImportError:
-    def skip_if_sm121_triton_issue(script_name: str) -> None:
-        pass
+        try:
+            from sm121_compatibility import skip_if_sm121_triton_issue
+        except ImportError:
+            def skip_if_sm121_triton_issue(script_name: str) -> None:
+                pass
 
-from typing import Optional
+        from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
+        from common.python.benchmark_harness import (
+        Benchmark,
+        BenchmarkConfig,
+        BenchmarkHarness,
+        BenchmarkMode,
+        )
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -64,7 +63,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda:0")
 
 
-class MultiLayerNet(nn.Module):
+class MultiLayerNet:
     """Multi-layer network for benchmarking."""
     
     def __init__(self, size: int) -> None:
@@ -77,9 +76,7 @@ class MultiLayerNet(nn.Module):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
-
-
-class OptimizedOverlapDdpBenchmark(Benchmark):
+class OptimizedOverlapDdpBenchmark:
     """DDP with communication overlap - optimized."""
     
     def __init__(self):
@@ -107,12 +104,12 @@ class OptimizedOverlapDdpBenchmark(Benchmark):
         torch.manual_seed(42)
         model = MultiLayerNet(1024).to(self.device)
         
-        # Optimize with torch.compile if available
         if torch.cuda.is_available():
-            try:
-                model = torch.compile(model, mode="reduce-overhead")
-            except Exception:
-                pass  # Fallback to eager mode
+            pass
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception:
+            pass
         
         if self.world_size > 1:
             self.model = nn.parallel.DistributedDataParallel(
@@ -136,15 +133,21 @@ class OptimizedOverlapDdpBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: DDP training step with overlap."""
-        torch.cuda.nvtx.range_push("optimized_overlap_ddp")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_overlap_ddp", enable=enable_nvtx):
             output = self.model(self.data)
             loss = nn.functional.mse_loss(output, self.target)
             loss.backward()  # DDP overlaps gradient all-reduce with computation
             self.optimizer.step()
             self.optimizer.zero_grad()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -159,7 +162,7 @@ class OptimizedOverlapDdpBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
+        iterations=20,
             warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
@@ -183,11 +186,9 @@ class OptimizedOverlapDdpBenchmark(Benchmark):
             return f"Model forward pass failed: {e}"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedOverlapDdpBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

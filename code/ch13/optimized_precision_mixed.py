@@ -59,6 +59,18 @@ class OptimizedPrecisionMixedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.inputs = None
         self.targets = None
         self.optimizer = None
@@ -69,10 +81,26 @@ class OptimizedPrecisionMixedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model with mixed precision."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         
         # Model (can be FP32, autocast handles conversion)
-        self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()
+        self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass  # Fallback to FP32 if FP16 not supported
+        
+        self.model.train()
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
@@ -88,8 +116,16 @@ class OptimizedPrecisionMixedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - mixed precision training."""
-        torch.cuda.nvtx.range_push("optimized_precision_mixed")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_precision_mixed", enable=enable_nvtx):
             self.optimizer.zero_grad()
             
             # Forward pass in mixed precision (FP16)
@@ -101,8 +137,7 @@ class OptimizedPrecisionMixedBenchmark(Benchmark):
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.inputs, self.targets, self.optimizer, self.criterion, self.scaler

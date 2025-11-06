@@ -1,3 +1,4 @@
+from __future__ import annotations
 """GPU gather benchmark comparing naive vs. coalesced access.
 
 This replicates the Chapter 7 guidance with simple timing.
@@ -12,7 +13,6 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

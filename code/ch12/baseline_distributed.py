@@ -63,8 +63,16 @@ class BaselineDistributedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Single-node operations with many kernel launches."""
-        torch.cuda.nvtx.range_push("baseline_distributed")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_distributed", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Single-node operations with many kernel launches
                 # Distributed: not used
@@ -77,8 +85,7 @@ class BaselineDistributedBenchmark(Benchmark):
                 # - Single-node operations (not distributed)
                 # - Many kernel launches (high overhead)
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

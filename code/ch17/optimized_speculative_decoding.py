@@ -43,6 +43,12 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.target_model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.draft_model = None
         self.input_ids = None
         self.max_length = 20
@@ -50,6 +56,11 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize target and draft models."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Speculative decoding
         # Draft model predicts multiple tokens in parallel
@@ -78,8 +89,16 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Speculative decoding."""
-        torch.cuda.nvtx.range_push("optimized_speculative_decoding")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Speculative decoding
                 # Draft model predicts multiple tokens in parallel
@@ -105,8 +124,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
                     # - Target model verification ensures correctness
                     if current_ids.size(1) >= self.input_ids.size(1) + self.max_length:
                         break
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -17,7 +17,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.distributed as dist
 
-
 try:
     from distributed_helper import setup_single_gpu_env
 except ImportError:
@@ -38,13 +37,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch4")
     return torch.device("cuda")
-
 
 class OptimizedReinitCommBenchmark(Benchmark):
     """Initialize NCCL once and reuse - good pattern."""
@@ -58,6 +55,7 @@ class OptimizedReinitCommBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize NCCL once."""
+        
         setup_single_gpu_env()
         if not dist.is_initialized():
             dist.init_process_group("nccl", init_method="env://")
@@ -71,13 +69,19 @@ class OptimizedReinitCommBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Reuse existing NCCL communicator."""
-        torch.cuda.nvtx.range_push("optimized_reinit_comm_reuse")
-        try:
-            # Good pattern: reuse existing NCCL communicator
-            # No reinitialization - just perform all-reduce
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_reinit_comm_reuse", enable=enable_nvtx):
+    # Good pattern: reuse existing NCCL communicator
+    # No reinitialization - just perform all-reduce
             dist.all_reduce(self.tensor)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -108,11 +112,9 @@ class OptimizedReinitCommBenchmark(Benchmark):
             return "Tensor contains non-finite values"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedReinitCommBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

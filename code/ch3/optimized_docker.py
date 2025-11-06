@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
-
 
 class OptimizedDockerBenchmark(Benchmark):
     """Optimized: Docker containerization for consistent environments.
@@ -43,11 +41,13 @@ class OptimizedDockerBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.input = None
         self.dockerfile_path = None
     
     def setup(self) -> None:
         """Setup: Initialize model with Docker-optimized environment."""
+        
         torch.manual_seed(42)
         # Optimization: Docker containerization
         # Docker provides containerized execution with optimized GPU settings
@@ -70,12 +70,13 @@ class OptimizedDockerBenchmark(Benchmark):
         # In real Docker container, these would be set by dockerfile
         # Always set the optimized allocation config to guarantee the optimized path
         if not has_optimized_alloc:
-            # Use new unified PYTORCH_ALLOC_CONF (PyTorch 2.9+)
+            pass
+        # Use new unified PYTORCH_ALLOC_CONF (PyTorch 2.9+)
             os.environ.setdefault('PYTORCH_ALLOC_CONF', 'max_split_size_mb:512')
-            # Migrate legacy variable if present
+        # Migrate legacy variable if present
             if legacy_alloc_conf and not alloc_conf:
                 os.environ.pop('PYTORCH_CUDA_ALLOC_CONF', None)
-            # Re-check after setting
+        # Re-check after setting
             alloc_conf = os.getenv('PYTORCH_ALLOC_CONF', '')
             has_optimized_alloc = 'max_split_size_mb' in alloc_conf
         
@@ -102,22 +103,29 @@ class OptimizedDockerBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with Docker containerization."""
-        torch.cuda.nvtx.range_push("optimized_docker")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_docker", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Docker containerization
-                # Docker provides containerized execution with optimized GPU settings
-                # docker_gpu_optimized.dockerfile configures optimized environment
-                output = self.model(self.input)
+                pass
+        # Optimization: Docker containerization
+        # Docker provides containerized execution with optimized GPU settings
+        # docker_gpu_optimized.dockerfile configures optimized environment
+        output = self.model(self.input)
                 
-                # Optimization: Docker benefits
-                # - Containerized execution (Docker)
-                # - Consistent environment
-                # - Optimized GPU settings from dockerfile
-                # - Isolation and reproducibility
-                _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+        # Optimization: Docker benefits
+        # - Containerized execution (Docker)
+        # - Consistent environment
+        # - Optimized GPU settings from dockerfile
+        # - Isolation and reproducibility
+        _ = output.sum()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -141,11 +149,9 @@ class OptimizedDockerBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedDockerBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -164,7 +170,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

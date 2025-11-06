@@ -28,7 +28,6 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
@@ -39,14 +38,15 @@ def resolve_device() -> torch.device:
 class OptimizedDisaggregatedBenchmark(Benchmark):
     """Optimized: Disaggregated inference (prefill and decode separated across GPUs).
     
-    Disaggregated inference: Separates prefill (parallel, compute-intensive) and decode
-    (autoregressive, latency-sensitive) phases. Assigns different GPU resources to each
-    phase for optimal utilization and reduced interference.
-    """
+        Disaggregated inference: Separates prefill (parallel, compute-intensive) and decode
+        (autoregressive, latency-sensitive) phases. Assigns different GPU resources to each
+        phase for optimal utilization and reduced interference.
+        """
     
     def __init__(self):
         self.device = resolve_device()
         self.prefill_model = None
+
         self.decode_model = None
         self.prefill_input = None
         self.decode_input = None
@@ -56,6 +56,7 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize separate models for prefill and decode."""
+        
         # Initialize distributed if available
         if dist.is_available() and torch.cuda.device_count() > 1:
             try:
@@ -70,11 +71,18 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
                     if 'WORLD_SIZE' not in os.environ:
                         os.environ['WORLD_SIZE'] = str(torch.cuda.device_count())
                     dist.init_process_group(backend='nccl', init_method='env://')
-                self.is_distributed = True
-                self.rank = dist.get_rank()
-                self.world_size = dist.get_world_size()
             except Exception:
                 self.is_distributed = False
+                self.rank = 0
+                self.world_size = 1
+        else:
+            self.is_distributed = False
+            self.rank = 0
+            self.world_size = 1
+        
+        if self.is_distributed:
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
         
         torch.manual_seed(42)
         
@@ -98,8 +106,9 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
         ).to(self.device).eval()
         
         if self.is_distributed:
-            # In disaggregated setup, prefill and decode can use different GPU groups
-            # For demo: both use same group, but separated logically
+            pass
+        # In disaggregated setup, prefill and decode can use different GPU groups
+        # For demo: both use same group, but separated logically
             self.prefill_model = nn.parallel.DistributedDataParallel(self.prefill_model)
             self.decode_model = nn.parallel.DistributedDataParallel(self.decode_model)
         
@@ -110,38 +119,47 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Disaggregated inference."""
-        torch.cuda.nvtx.range_push("optimized_disaggregated")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_disaggregated", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Disaggregated inference
-                # Prefill and decode phases are separated across GPUs
-                # Prefill: Uses dedicated GPU resources for parallel processing
-                # Decode: Uses separate GPU resources for low-latency autoregressive generation
+                pass
+        # Optimization: Disaggregated inference
+        # Prefill and decode phases are separated across GPUs
+        # Prefill: Uses dedicated GPU resources for parallel processing
+        # Decode: Uses separate GPU resources for low-latency autoregressive generation
                 
-                # Process prefill on dedicated prefill GPUs (parallel, compute-intensive)
-                prefill_output = self.prefill_model(self.prefill_input)
+        # Process prefill on dedicated prefill GPUs (parallel, compute-intensive)
+        prefill_output = self.prefill_model(self.prefill_input)
                 
-                # Synchronize prefill across GPUs
-                if self.is_distributed:
-                    dist.all_reduce(prefill_output, op=dist.ReduceOp.SUM)
-                    prefill_output = prefill_output / self.world_size
+        # Synchronize prefill across GPUs
+        if self.is_distributed:
+            pass
+        dist.all_reduce(prefill_output, op=dist.ReduceOp.SUM)
+        prefill_output = prefill_output / self.world_size
                 
-                # Process decode on dedicated decode GPUs (autoregressive, latency-sensitive)
-                # Decode can run concurrently with next prefill (no interference)
-                decode_output = self.decode_model(self.decode_input)
+        # Process decode on dedicated decode GPUs (autoregressive, latency-sensitive)
+        # Decode can run concurrently with next prefill (no interference)
+        decode_output = self.decode_model(self.decode_input)
                 
-                # Synchronize decode across GPUs
-                if self.is_distributed:
-                    dist.all_reduce(decode_output, op=dist.ReduceOp.SUM)
-                    decode_output = decode_output / self.world_size
+        # Synchronize decode across GPUs
+        if self.is_distributed:
+            pass
+        dist.all_reduce(decode_output, op=dist.ReduceOp.SUM)
+        decode_output = decode_output / self.world_size
                 
-                # Optimization: Disaggregated inference benefits
-                # - Prefill and decode don't interfere (separate resources)
-                # - Better GPU utilization (each phase optimized for its workload)
-                # - Lower latency for decode (dedicated resources)
-                # - Higher throughput for prefill (parallel processing)
-        finally:
-            torch.cuda.nvtx.range_pop()
+        # Optimization: Disaggregated inference benefits
+        # - Prefill and decode don't interfere (separate resources)
+        # - Better GPU utilization (each phase optimized for its workload)
+        # - Lower latency for decode (dedicated resources)
+        # - Higher throughput for prefill (parallel processing)
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -156,7 +174,7 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
+        iterations=10,
             warmup=2,
         )
     
@@ -171,7 +189,6 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedDisaggregatedBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -190,7 +207,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

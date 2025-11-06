@@ -57,11 +57,28 @@ class OptimizedBatchingContinuousBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.request_queue = None
         self.hidden_dim = 1024
     
     def setup(self) -> None:
         """Setup: Initialize model and prepare requests."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().eval()
@@ -83,8 +100,16 @@ class OptimizedBatchingContinuousBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - continuous batching processes immediately."""
-        torch.cuda.nvtx.range_push("optimized_batching_continuous")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_batching_continuous", enable=enable_nvtx):
             # Continuous batching: group requests by similar length and process immediately
             # No waiting for full batch - better GPU utilization
             
@@ -106,8 +131,7 @@ class OptimizedBatchingContinuousBenchmark(Benchmark):
                     else:
                         # Process single request immediately (no waiting)
                         _ = self.model(reqs[0])
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

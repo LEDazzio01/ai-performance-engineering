@@ -47,6 +47,11 @@ class OptimizedMemoryHBM3eBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Allocate memory with HBM3e-friendly layout."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
         # Allocate memory optimized for HBM3e access patterns
@@ -62,8 +67,16 @@ class OptimizedMemoryHBM3eBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - HBM3e-optimized memory access."""
-        torch.cuda.nvtx.range_push("optimized_memory_hbm3e")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_memory_hbm3e", enable=enable_nvtx):
             # HBM3e-optimized: Coalesced access patterns, vectorized operations
             # PyTorch operations are already optimized for coalesced access
             # Use fused operations for better memory bandwidth utilization
@@ -73,8 +86,7 @@ class OptimizedMemoryHBM3eBenchmark(Benchmark):
             )
             # Additional optimized operation - in-place for better memory efficiency
             self.result.add_(0.1)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

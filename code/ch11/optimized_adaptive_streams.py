@@ -52,6 +52,11 @@ class OptimizedAdaptiveStreamsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and streams."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data1 = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.data2 = torch.randn(self.N, dtype=torch.float32, device=self.device)
@@ -66,8 +71,16 @@ class OptimizedAdaptiveStreamsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Concurrent kernel execution with streams."""
-        torch.cuda.nvtx.range_push("adaptive_streams_concurrent")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("adaptive_streams_concurrent", enable=enable_nvtx):
             # Launch kernels on different streams - they can overlap
             with torch.cuda.stream(self.stream1):
                 self.data1 = self.data1 * 2.0
@@ -82,8 +95,7 @@ class OptimizedAdaptiveStreamsBenchmark(Benchmark):
             self.stream1.synchronize()
             self.stream2.synchronize()
             self.stream3.synchronize()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

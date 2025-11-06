@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
-
 
 class OptimizedAutotuningBenchmark(Benchmark):
     """Optimized: Autotuning for performance optimization.
@@ -47,23 +45,11 @@ class OptimizedAutotuningBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model with autotuning."""
+        
         # Optimization: Autotuning
-        # Autotuning automatically finds optimal kernel configurations
-        # torch.compile with max-autotune enables autotuning
+        # For system-level autotuning (kernel parameters, system config),
+        # we focus on OS/hardware configuration, not PyTorch-level optimizations.
         
-        # Prevent TF32 API mixing: PyTorch internal initialization may access old API (allow_tf32)
-        # during module import, before arch_config.py can set the new API (fp32_precision).
-        # arch_config.py uses ONLY the new API and never touches the old API.
-        # Solution: Reset CUDA state to clear any TF32 API state before compile
-        try:
-            # Synchronize to ensure all previous CUDA ops complete
-            torch.cuda.synchronize()
-            # Clear any device-side assertions or errors
-            torch.cuda.empty_cache()
-        except Exception:
-            pass
-        
-        # Set seed after CUDA reset to avoid triggering API mixing detection
         torch.manual_seed(42)
         
         self.model = nn.Sequential(
@@ -72,31 +58,25 @@ class OptimizedAutotuningBenchmark(Benchmark):
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
         
-            # Autotuning: use torch.compile with max-autotune
-            # Autotuning finds optimal kernel configurations automatically
-            # Note: If TF32 API mixing error occurs, it's due to PyTorch internal initialization
-            # accessing the old API (allow_tf32) during module import, before arch_config.py
-            # can set the new API (fp32_precision). arch_config.py uses ONLY the new API.
-            # This is a known PyTorch 2.9 issue when PyTorch internals touch old API.
-            try:
-                self.model = torch.compile(self.model, mode="max-autotune")
-            except RuntimeError as e:
-                if "mix of the legacy and new APIs" in str(e):
-                    # Fallback: compile without max-autotune if API mixing detected
-                    # This happens when PyTorch internals accessed old TF32 API during initialization
-                    self.model = torch.compile(self.model, mode="reduce-overhead")
-        
         self.input = torch.randn(32, 1024, device=self.device)
+        
+        # Warmup: Run a few iterations to stabilize performance
+        with torch.no_grad():
+            for _ in range(10):
+                _ = self.model(self.input)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with autotuning."""
-        torch.cuda.nvtx.range_push("optimized_autotuning")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        
+        with nvtx_range("optimized_autotuning", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Autotuning
+            # Optimization: Autotuning
                 # Autotuning automatically finds optimal configurations
-                # torch.compile with max-autotune enables autotuning
                 output = self.model(self.input)
                 
                 # Optimization: Autotuning benefits
@@ -104,8 +84,6 @@ class OptimizedAutotuningBenchmark(Benchmark):
                 # - Optimal performance through autotuning
                 # - Improved efficiency
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -128,11 +106,9 @@ class OptimizedAutotuningBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedAutotuningBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -151,7 +127,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

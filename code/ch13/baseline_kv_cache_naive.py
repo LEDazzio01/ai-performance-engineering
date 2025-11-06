@@ -162,8 +162,16 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - naive KV cache."""
-        torch.cuda.nvtx.range_push("baseline_kv_cache_naive")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_kv_cache_naive", enable=enable_nvtx):
             for seq_idx, x in enumerate(self.inputs):
                 request_id = f"req_{seq_idx}"
                 seq_len = x.size(1)
@@ -175,8 +183,7 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
                         hidden = layer(hidden, self.kv_cache, request_id, layer_idx, pos)
                 
                 self.kv_cache.free(request_id)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.kv_cache, self.inputs

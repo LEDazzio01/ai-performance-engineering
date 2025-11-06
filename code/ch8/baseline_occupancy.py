@@ -49,16 +49,23 @@ class BaselineOccupancyBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Low occupancy - small work per kernel."""
-        torch.cuda.nvtx.range_push("baseline_occupancy_low")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_occupancy_low", enable=enable_nvtx):
             # Many small kernel launches - low occupancy
             # Each launch processes small amount of work
             chunk_size = 1000
             for i in range(0, self.N, chunk_size):
                 end = min(i + chunk_size, self.N)
                 self.data[i:end] = self.data[i:end] * 2.0
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

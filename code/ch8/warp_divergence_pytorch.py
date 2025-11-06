@@ -1,3 +1,4 @@
+from __future__ import annotations
 """PyTorch-side patterns for avoiding warp divergence.
 
 These snippets intentionally highlight how to keep GPU control flow uniform by
@@ -14,7 +15,6 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 
-from __future__ import annotations
 import os
 
 CHAPTER_DIR = os.path.dirname(os.path.abspath(__file__))

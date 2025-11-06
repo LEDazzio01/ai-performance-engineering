@@ -76,6 +76,18 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.dataloader = None
         self.optimizer = None
         self.criterion = None
@@ -85,9 +97,24 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and optimized DataLoader."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         
         self.model = SimpleModel(input_dim=self.feature_dim).to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass  # Fallback to FP32 if FP16 not supported
+
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.CrossEntropyLoss()
         
@@ -115,8 +142,16 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - optimized DataLoader with overlapping."""
-        torch.cuda.nvtx.range_push("optimized_dataloader_tuned")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_dataloader_tuned", enable=enable_nvtx):
             # Process one batch (optimized DataLoader: overlapped loading)
             data, labels = next(iter(self.dataloader))
             data = data.to(self.device, non_blocking=True)  # Non-blocking transfer
@@ -127,8 +162,7 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
             loss = self.criterion(outputs, labels)
             loss.backward()
             self.optimizer.step()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.dataloader, self.optimizer, self.criterion

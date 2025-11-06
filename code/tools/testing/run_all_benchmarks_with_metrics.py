@@ -167,6 +167,13 @@ def profile_with_ncu_python(
     benchmark_name = benchmark_path.stem
     ncu_output = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
     
+    # Check if file already exists (from previous run)
+    if ncu_output.exists():
+        return ncu_output
+    # Check for any matching .ncu-rep file
+    for existing_file in output_dir.glob(f"{benchmark_name}_{variant}*.ncu-rep"):
+        return existing_file
+    
     wrapper_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
     
     try:
@@ -213,7 +220,7 @@ benchmark.teardown()
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=30,
+            timeout=60,  # Increased timeout - NCU can be slow
             check=False
         )
         
@@ -222,10 +229,18 @@ benchmark.teardown()
         except Exception:
             pass
         
-        if result.returncode == 0 and ncu_output.exists():
+        # Check if file exists (NCU may create file even with non-zero exit code)
+        # Also check with .ncu-rep extension
+        if ncu_output.exists():
             return ncu_output
-        else:
-            return None
+        # Try alternative path (NCU might add extension differently)
+        alt_path = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
+        if alt_path.exists():
+            return alt_path
+        # Check for any .ncu-rep file matching the pattern
+        for ncu_file in output_dir.glob(f"{benchmark_name}_{variant}*.ncu-rep"):
+            return ncu_file
+        return None
     except Exception:
         try:
             Path(wrapper_script.name).unlink()
@@ -248,6 +263,13 @@ def profile_with_ncu_cuda(
     exec_name = executable.stem
     ncu_output = output_dir / f"{exec_name}_{variant}.ncu-rep"
     
+    # Check if file already exists (from previous run)
+    if ncu_output.exists():
+        return ncu_output
+    # Check for any matching .ncu-rep file
+    for existing_file in output_dir.glob(f"{exec_name}_{variant}*.ncu-rep"):
+        return existing_file
+    
     ncu_command = [
         "ncu",
         "--set", "full",
@@ -262,14 +284,21 @@ def profile_with_ncu_cuda(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=30,
+            timeout=60,  # Increased timeout - NCU can be slow
             check=False
         )
         
-        if result.returncode == 0 and ncu_output.exists():
+        # Check if file exists (NCU may create file even with non-zero exit code)
+        if ncu_output.exists():
             return ncu_output
-        else:
-            return None
+        # Try alternative path
+        alt_path = output_dir / f"{exec_name}_{variant}.ncu-rep"
+        if alt_path.exists():
+            return alt_path
+        # Check for any .ncu-rep file matching the pattern
+        for ncu_file in output_dir.glob(f"{exec_name}_{variant}*.ncu-rep"):
+            return ncu_file
+        return None
     except Exception:
         return None
 

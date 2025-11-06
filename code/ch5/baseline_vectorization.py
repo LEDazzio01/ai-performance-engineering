@@ -56,8 +56,16 @@ class BaselineVectorizationBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Scalar operations without vectorization."""
-        torch.cuda.nvtx.range_push("baseline_vectorization")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_vectorization", enable=enable_nvtx):
             # Baseline: Scalar operations (no vectorization)
             # Processes elements one at a time (inefficient)
             # Vectorization would process multiple elements simultaneously
@@ -68,8 +76,7 @@ class BaselineVectorizationBenchmark(Benchmark):
             # Baseline: No vectorization benefits
             # Scalar operations (inefficient)
             _ = result
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

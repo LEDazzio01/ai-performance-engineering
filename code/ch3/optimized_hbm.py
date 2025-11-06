@@ -25,7 +25,6 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
@@ -36,9 +35,9 @@ def resolve_device() -> torch.device:
 class OptimizedHbmBenchmark(Benchmark):
     """Optimized: HBM memory optimization for high bandwidth utilization.
     
-    HBM: Optimizes memory access patterns for HBM high bandwidth.
-    Maximizes HBM memory bandwidth utilization.
-    """
+        HBM: Optimizes memory access patterns for HBM high bandwidth.
+        Maximizes HBM memory bandwidth utilization.
+        """
     
     def __init__(self):
         self.device = resolve_device()
@@ -47,6 +46,7 @@ class OptimizedHbmBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model with HBM optimization."""
+        
         torch.manual_seed(42)
         # Optimization: HBM memory optimization
         # HBM (High Bandwidth Memory) provides high memory bandwidth
@@ -65,8 +65,15 @@ class OptimizedHbmBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: HBM-optimized operations."""
-        torch.cuda.nvtx.range_push("optimized_hbm")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_hbm", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: HBM memory optimization
                 # Large contiguous memory access maximizes HBM bandwidth
@@ -83,8 +90,7 @@ class OptimizedHbmBenchmark(Benchmark):
                 # - Maximized HBM bandwidth utilization
                 # - Better performance through HBM optimization
                 _ = output2.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -95,7 +101,7 @@ class OptimizedHbmBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
+        iterations=50,
             warmup=5,
         )
     
@@ -107,11 +113,9 @@ class OptimizedHbmBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedHbmBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -130,7 +134,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

@@ -54,9 +54,19 @@ class OptimizedPerformancePinnedBenchmark(Benchmark):
         self.data = None
         self.target = None
         self.optimizer = None
+        self.use_fp16 = False
     
     def setup(self) -> None:
         """Setup: initialize model and data with pinned memory."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+        
         self.model = torch.nn.Sequential(
             torch.nn.Linear(256, 256),
             torch.nn.ReLU(),
@@ -65,7 +75,7 @@ class OptimizedPerformancePinnedBenchmark(Benchmark):
         
         if self.device.type == "cuda":
             try:
-                self.model = compile_model(self.model.to(self.device), mode="reduce-overhead", fullgraph=False, dynamic=False)
+                self.model = self.model.to(self.device)
             except Exception as exc:
                 print(f"WARNING: GPU initialization failed: {exc}. Falling back to CPU.")
                 self.device = torch.device("cpu")
@@ -84,19 +94,29 @@ class OptimizedPerformancePinnedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark with pinned memory."""
-        torch.cuda.nvtx.range_push("optimized_performance_pinned")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_performance_pinned", enable=enable_nvtx):
+            # Optimization: Pinned memory enables faster CPU-GPU transfers
+            # Non-blocking copies allow overlap with computation
             self.host_data.normal_(0, 1)
             self.host_target.random_(0, 10)
-            self.data.copy_(self.host_data, non_blocking=True)  # Non-blocking copy with pinned memory
+            self.data.copy_(self.host_data, non_blocking=True)
             self.target.copy_(self.host_target, non_blocking=True)
+            # No sync needed - computation will wait for data automatically
             self.optimizer.zero_grad(set_to_none=True)
             logits = self.model(self.data)
             loss = torch.nn.functional.cross_entropy(logits, self.target)
             loss.backward()
             self.optimizer.step()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

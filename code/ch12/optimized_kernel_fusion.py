@@ -49,6 +49,11 @@ class OptimizedKernelFusionBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # Load CUDA extension (will compile on first call)
         self._extension = load_kernel_fusion_extension()
         
@@ -58,12 +63,19 @@ class OptimizedKernelFusionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Fused kernel (single memory round trip)."""
-        torch.cuda.nvtx.range_push("optimized_kernel_fusion_fused")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_kernel_fusion_fused", enable=enable_nvtx):
             # Call CUDA extension with fused kernel
             self._extension.fused_kernel(self.data, self.iterations)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

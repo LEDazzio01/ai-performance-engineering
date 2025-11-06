@@ -21,7 +21,7 @@ from common.python.benchmark_harness import (
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch199")
+        raise RuntimeError("CUDA required for ch19")
     return torch.device("cuda")
 
 
@@ -48,8 +48,16 @@ class MemoryCoalescingBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: Single-GPU stream-ordered operations."""
-        torch.cuda.nvtx.range_push("baseline_memory_coalescing")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_memory_coalescing", enable=enable_nvtx):
             # Baseline: Single-GPU stream-ordered
             # Distributed computing enables stream-ordered operations across multiple GPUs
             # This baseline processes on single GPU only
@@ -58,8 +66,7 @@ class MemoryCoalescingBenchmark(Benchmark):
                 self.output = self.input * 2.0 + 1.0
                 # Single-GPU: Limited by single device's capacity
                 # See ch197 for full distributed training implementations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -47,6 +47,11 @@ class OptimizedRooflineBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data with roofline analysis."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Roofline analysis
         # Identifies compute-bound vs memory-bound operations
@@ -64,8 +69,16 @@ class OptimizedRooflineBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with roofline analysis."""
-        torch.cuda.nvtx.range_push("optimized_roofline")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_roofline", enable=enable_nvtx):
             # Optimization: Roofline analysis
             # Measure execution time and estimate arithmetic intensity
             torch.cuda.synchronize()
@@ -110,8 +123,7 @@ class OptimizedRooflineBenchmark(Benchmark):
             # - Measures arithmetic intensity
             # - Performance-based optimization decisions
             _ = result
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

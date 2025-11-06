@@ -69,8 +69,16 @@ class BaselineStreamOrderedKVCacheBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: stream-ordered allocation without KV cache reuse."""
-        torch.cuda.nvtx.range_push("baseline_stream_ordered_kv_cache")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_stream_ordered_kv_cache", enable=enable_nvtx):
             with torch.cuda.stream(self.stream):
                 # Baseline: allocate new KV cache at each step (no reuse)
                 step = 0
@@ -90,9 +98,24 @@ class BaselineStreamOrderedKVCacheBenchmark(Benchmark):
 
                     # Compute attention (simplified)
                     with torch.no_grad():
-                        # Project input to Q, K, V
-                        qkv = self.model.in_proj_weight @ step_input.transpose(1, 2)
-                        q, k, v = qkv.chunk(3, dim=-1)
+                        # Use MultiheadAttention's forward to get Q, K, V properly
+                        # step_input shape: (batch_size, 1, hidden_dim)
+                        # We'll use the model's internal projection
+                        attn_output, _ = self.model(step_input, step_input, step_input, need_weights=False)
+                        
+                        # For KV cache, we need to manually extract K, V from the projection
+                        # Simplified: project input to get K, V for caching
+                        # Use the model's in_proj_weight to project
+                        qkv = torch.nn.functional.linear(step_input, self.model.in_proj_weight, self.model.in_proj_bias)
+                        qkv = qkv.view(self.batch_size, 1, 3, -1)  # (batch, 1, 3, embed_dim)
+                        q, k, v = qkv.chunk(3, dim=2)  # Each: (batch, 1, 1, embed_dim)
+                        q, k, v = q.squeeze(2), k.squeeze(2), v.squeeze(2)  # (batch, 1, embed_dim)
+                        
+                        # Reshape for multi-head: (batch, 1, embed_dim) -> (batch, num_heads, 1, head_dim)
+                        num_heads = self.model.num_heads
+                        head_dim = self.model.embed_dim // num_heads
+                        k = k.reshape(self.batch_size, 1, num_heads, head_dim).transpose(1, 2)  # (batch, num_heads, 1, head_dim)
+                        v = v.reshape(self.batch_size, 1, num_heads, head_dim).transpose(1, 2)  # (batch, num_heads, 1, head_dim)
 
                         # Allocate new cache and copy old data (inefficient - no reuse)
                         if step > 0 and self.kv_cache is not None:
@@ -103,17 +126,14 @@ class BaselineStreamOrderedKVCacheBenchmark(Benchmark):
                             v_cache[:, :, :old_seq_len, :] = old_v
 
                         # Append new K/V to new cache
-                        k_slice = k.squeeze(1).transpose(1, 2)
-                        v_slice = v.squeeze(1).transpose(1, 2)
-                        k_cache[:, :, step, :] = k_slice
-                        v_cache[:, :, step, :] = v_slice
+                        k_cache[:, :, step:step+1, :] = k
+                        v_cache[:, :, step:step+1, :] = v
 
                         self.kv_cache = (k_cache, v_cache)
                         step += 1
 
                 self.stream.synchronize()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

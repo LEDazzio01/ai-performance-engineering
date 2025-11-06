@@ -50,6 +50,11 @@ class OptimizedWorkQueueBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # Load CUDA extension (will compile on first call)
         self._extension = load_work_queue_extension()
         
@@ -60,12 +65,19 @@ class OptimizedWorkQueueBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Dynamic work queue with atomics."""
-        torch.cuda.nvtx.range_push("optimized_work_queue_dynamic")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_work_queue_dynamic", enable=enable_nvtx):
             # Call CUDA extension with dynamic work queue
             self._extension.dynamic_work_queue(self.input_data, self.output_data, self.iterations)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

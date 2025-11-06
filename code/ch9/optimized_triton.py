@@ -78,6 +78,11 @@ class OptimizedTritonBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Triton kernels
         # Triton provides a Python-like language for writing GPU kernels
@@ -88,8 +93,16 @@ class OptimizedTritonBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Triton kernel operations."""
-        torch.cuda.nvtx.range_push("optimized_triton")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_triton", enable=enable_nvtx):
             if TRITON_AVAILABLE:
                 # Optimization: Triton kernel
                 # Uses Triton for efficient custom GPU kernels
@@ -112,8 +125,7 @@ class OptimizedTritonBenchmark(Benchmark):
             # - Automatic optimization
             # - Better kernel efficiency
             # - Efficient custom kernel implementation
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -145,7 +157,7 @@ def main() -> None:
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
     
     harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
+    mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=100, warmup=10)
     )
     benchmark = OptimizedTritonBenchmark()

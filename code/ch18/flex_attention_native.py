@@ -21,6 +21,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
+    pass
 except Exception:
     class arch_config:  # type: ignore[override]
         @staticmethod

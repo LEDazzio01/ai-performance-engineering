@@ -19,14 +19,12 @@ import torch
 import torch.nn as nn
 from collections import deque
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -38,17 +36,19 @@ def resolve_device() -> torch.device:
 class OptimizedContinuousBatchingBenchmark(Benchmark):
     """Optimized: Continuous batching for optimal hardware utilization.
     
-    Continuous batching: Implements dynamic batch composition.
-    Batches are composed optimally based on hardware characteristics for better utilization.
-    """
+        Continuous batching: Implements dynamic batch composition.
+        Batches are composed optimally based on hardware characteristics for better utilization.
+        """
     
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.sample_queue = None
     
     def setup(self) -> None:
         """Setup: Initialize model and sample queue."""
+        
         torch.manual_seed(42)
         # Optimization: Continuous batching - dynamic sample queue
         # Optimized for hardware capabilities (e.g., tensor core utilization)
@@ -62,15 +62,22 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
         # Simulate continuous batching: queue of samples ready for processing
         num_samples = 100
         self.sample_queue = deque([
-            torch.randn(1, 1024, device=self.device)
+        torch.randn(1, 1024, device=self.device)
             for _ in range(num_samples)
         ])
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Continuous batching optimized for hardware."""
-        torch.cuda.nvtx.range_push("optimized_continuous_batching")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_continuous_batching", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Continuous batching optimized for hardware
                 # Compose batches dynamically for optimal hardware utilization
@@ -97,8 +104,7 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
                         
                         # Continuous batching: New samples can be added to queue
                         # Optimized for hardware capabilities (better GPU utilization)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -109,7 +115,7 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
+        iterations=10,
             warmup=2,
         )
     
@@ -124,7 +130,6 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedContinuousBatchingBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -143,7 +148,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

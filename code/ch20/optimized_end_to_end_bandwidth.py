@@ -18,12 +18,10 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-# Import arch_config to apply Triton patch for sm_12x support
-# The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
 try:
-    import arch_config  # noqa: F401
+    import ch20.arch_config  # noqa: F401 - Apply chapter defaults
 except ImportError:
-    pass  # Continue if arch_config not available
+    pass
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -70,6 +68,11 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize optimized model and data."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
         # Optimized: FP16, compiled model
@@ -93,8 +96,16 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - optimized end-to-end."""
-        torch.cuda.nvtx.range_push("optimized_end_to_end_bandwidth")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_end_to_end_bandwidth", enable=enable_nvtx):
             # Optimized processing with better memory access patterns
             torch.cuda.reset_peak_memory_stats()
             
@@ -103,8 +114,7 @@ class OptimizedEndToEndBandwidthBenchmark(Benchmark):
                 out = self.model(inp)
                 self.outputs.append(out)
             torch.cuda.synchronize()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

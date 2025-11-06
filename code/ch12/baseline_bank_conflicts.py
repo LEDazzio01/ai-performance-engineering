@@ -58,8 +58,16 @@ class BaselineBankConflictsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Bank conflicts with many kernel launches."""
-        torch.cuda.nvtx.range_push("baseline_bank_conflicts")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_bank_conflicts", enable=enable_nvtx):
             # Baseline: Bank conflicts with many kernel launches
             # Bank conflicts: stride access pattern causes conflicts
             # No CUDA graphs: each operation is a separate kernel launch
@@ -76,8 +84,7 @@ class BaselineBankConflictsBenchmark(Benchmark):
             # - Multiple kernel launches (high overhead)
             # - Bank conflicts cause serialization
             # - No CUDA graphs optimization
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

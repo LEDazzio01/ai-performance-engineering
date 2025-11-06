@@ -36,15 +36,14 @@ except ImportError:
     def skip_if_sm121_triton_issue(script_name: str) -> None:
         pass
 
-from typing import Optional
+        from typing import Optional
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-)
-
+        from common.python.benchmark_harness import (
+        Benchmark,
+        BenchmarkConfig,
+        BenchmarkHarness,
+        BenchmarkMode,
+        )
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -53,7 +52,7 @@ def resolve_device() -> torch.device:
     return torch.device("cuda:0")
 
 
-class SimpleNet(nn.Module):
+class SimpleNet:
     """Simple neural network for benchmarking."""
     
     def __init__(self, input_size: int, hidden_size: int) -> None:
@@ -64,9 +63,7 @@ class SimpleNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear2(self.relu(self.linear1(x)))
-
-
-class OptimizedDdpBenchmark(Benchmark):
+class OptimizedDdpBenchmark:
     """Optimized DDP with torch.compile."""
     
     def __init__(self):
@@ -81,6 +78,7 @@ class OptimizedDdpBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize distributed environment and compiled model."""
+        
         # Auto-setup for single-GPU mode
         if "RANK" not in os.environ:
             os.environ.setdefault("RANK", "0")
@@ -100,12 +98,12 @@ class OptimizedDdpBenchmark(Benchmark):
         torch.manual_seed(42)
         model = SimpleNet(input_size=1024, hidden_size=256).to(self.device)
         
-        # Optimize with torch.compile
         if torch.cuda.is_available():
-            try:
-                model = torch.compile(model, mode="reduce-overhead")
-            except Exception:
-                pass  # Fallback to eager mode
+            pass
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception:
+            pass
         
         if self.world_size > 1:
             self.model = nn.parallel.DistributedDataParallel(
@@ -121,22 +119,28 @@ class OptimizedDdpBenchmark(Benchmark):
         self.data = torch.randn(batch_size, 1024, device=self.device)
         self.target = torch.randn(batch_size, 1, device=self.device)
         
-        # Warmup for compilation
         for _ in range(5):
-            _ = self.model(self.data)
+             pass
+        _ = self.model(self.data)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Optimized DDP training step."""
-        torch.cuda.nvtx.range_push("optimized_ddp")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_ddp", enable=enable_nvtx):
             output = self.model(self.data)
             loss = nn.functional.mse_loss(output, self.target)
             loss.backward()
             self.optimizer.step()
             self.optimizer.zero_grad()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -151,7 +155,7 @@ class OptimizedDdpBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
+        iterations=20,
             warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
@@ -175,11 +179,9 @@ class OptimizedDdpBenchmark(Benchmark):
             return f"Model forward pass failed: {e}"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedDdpBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

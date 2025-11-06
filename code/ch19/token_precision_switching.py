@@ -1,3 +1,6 @@
+"""Chapter 19: Token precision switching and cache quantization helpers."""
+from __future__ import annotations
+
 import pathlib
 import sys
 
@@ -6,12 +9,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXTRAS_REPO_ROOT))
 
 from pathlib import Path
-
-"""Chapter 19: Token precision switching and cache quantization helpers."""
-
-from __future__ import annotations
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 

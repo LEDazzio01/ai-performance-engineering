@@ -52,14 +52,21 @@ class BaselineMemoryAccessBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Uncoalesced memory access pattern."""
-        torch.cuda.nvtx.range_push("baseline_memory_access_uncoalesced")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_memory_access_uncoalesced", enable=enable_nvtx):
             # Strided access - threads access scattered memory locations
             # This prevents memory coalescing, causing many small transactions
             idx = torch.arange(0, self.N, self.stride, device=self.device)
             self.output[idx] = self.input[idx] * 2.0
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

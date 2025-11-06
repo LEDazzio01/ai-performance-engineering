@@ -183,9 +183,13 @@ def test_profiling_tools():
             print(f" PyTorch profiler failed: {exc}")
 
     try:
-        nvtx.range_push("test_region")
+        # Use conditional NVTX ranges - only enabled when profiling
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("test_region", enable=enable_nvtx):
         time.sleep(0.1)
-        nvtx.range_pop()
         print(" NVTX annotations work")
     except Exception as exc:
         print(f" NVTX failed: {exc}")

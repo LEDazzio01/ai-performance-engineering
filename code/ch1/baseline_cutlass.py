@@ -1,4 +1,4 @@
-"""baseline cutlass - Baseline implementation. Implements Benchmark protocol for harness integration."""
+"""baseline cutlass - Baseline GEMM without CUTLASS optimization. Implements Benchmark protocol for harness integration."""
 
 from __future__ import annotations
 
@@ -31,39 +31,67 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
-class CutlassBenchmark(Benchmark):
-    """Baseline implementation."""
+class BaselineCutlassBenchmark(Benchmark):
+    """Baseline: GEMM without CUTLASS optimization (standard PyTorch matmul)."""
 
     def __init__(self):
         self.device = resolve_device()
+        self.A = None
+        self.B = None
+        # Match optimized matrix size for fair comparison
+        self.m = 12288  # Match optimized scale
+        self.n = 12288
+        self.k = 12288
 
     def setup(self) -> None:
-        """Setup: Initialize resources."""
-        pass
+        """Setup: Initialize matrices."""
+        torch.manual_seed(42)
+        # Baseline: Standard PyTorch matmul (no CUTLASS optimization)
+        # Use float16 for fair comparison with optimized version
+        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
+        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
+        torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Run computation."""
-        pass
+        """Benchmark: Standard GEMM."""
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_cutlass", enable=enable_nvtx):
+            # Baseline: Standard PyTorch matmul
+            # No CUTLASS optimization - uses default GEMM kernels
+            _ = torch.matmul(self.A, self.B)
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        pass
+        self.A = None
+        self.B = None
+        torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
+            iterations=50,
             warmup=5,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
+        if self.A is None or self.B is None:
+            return "Matrices not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
-    return CutlassBenchmark()
+    return BaselineCutlassBenchmark()
 
 
 if __name__ == '__main__':
@@ -75,4 +103,4 @@ if __name__ == '__main__':
         config=benchmark.get_config()
     )
     result = harness.benchmark(benchmark)
-    print(f"\nResult: {result.mean_ms:.3f} ms")
+    print(f"\nBaseline CUTLASS (Standard): {result.mean_ms:.3f} ms")

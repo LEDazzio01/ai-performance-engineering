@@ -62,12 +62,19 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - PyTorch matmul."""
-        torch.cuda.nvtx.range_push("baseline_matmul_pytorch")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_matmul_pytorch", enable=enable_nvtx):
             # Standard PyTorch matrix multiplication
             self.C = torch.matmul(self.A, self.B)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.C

@@ -95,8 +95,16 @@ class BaselineBatchingStaticBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - static batching waits for full batch."""
-        torch.cuda.nvtx.range_push("baseline_batching_static")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_batching_static", enable=enable_nvtx):
             # Static batching: must wait for full batch before processing
             # Simulate waiting by padding shorter sequences to match longest
             max_seq_len = max(req.size(1) for req in self.request_queue)
@@ -118,8 +126,7 @@ class BaselineBatchingStaticBenchmark(Benchmark):
             batch = torch.cat(padded_batch, dim=0)  # [batch_size, max_seq_len, hidden_dim]
             with torch.no_grad():
                 _ = self.model(batch)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

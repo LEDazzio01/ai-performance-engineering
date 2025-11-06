@@ -51,6 +51,11 @@ class OptimizedNvlinkBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize multi-GPU memory with NVLink."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: NVLink for GPU-to-GPU communication
         # NVLink provides high-speed interconnect between GPUs

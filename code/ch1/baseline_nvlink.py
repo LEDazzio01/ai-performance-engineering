@@ -50,12 +50,19 @@ class BaselineNvlinkBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: Memory transfer without NVLink optimization."""
-        torch.cuda.nvtx.range_push("baseline_nvlink")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_nvlink", enable=enable_nvtx):
             # Baseline: Standard PCIe transfer (no NVLink)
             self.device_data = self.host_data.to(self.device)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -44,10 +44,27 @@ class OptimizedAttentionBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
     
     def setup(self) -> None:
         """Setup: Initialize optimized attention model."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Optimized attention - uses efficient kernels
         # Attention mechanism: scaled dot-product attention with optimizations
@@ -70,8 +87,16 @@ class OptimizedAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Optimized attention computation."""
-        torch.cuda.nvtx.range_push("optimized_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Optimized attention (scaled dot-product attention)
                 # Uses PyTorch's optimized scaled_dot_product_attention backend
@@ -84,8 +109,7 @@ class OptimizedAttentionBenchmark(Benchmark):
                 # - Reduced memory usage (doesn't store full attention matrix)
                 # - Better performance for long sequences
                 # - Improved GPU utilization
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

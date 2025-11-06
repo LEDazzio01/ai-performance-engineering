@@ -54,18 +54,30 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: initialize tensors."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         self.q = torch.randn(self.batch_size, self.num_heads, self.seq_len, self.head_dim, device=self.device)
         self.k = torch.randn(self.batch_size, self.num_heads, self.seq_len, self.head_dim, device=self.device)
         self.v = torch.randn(self.batch_size, self.num_heads, self.seq_len, self.head_dim, device=self.device)
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        torch.cuda.nvtx.range_push("optimized_attention_flash")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_attention_flash", enable=enable_nvtx):
             with torch.no_grad():
                 _ = optimized_attention(self.q, self.k, self.v)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.q, self.k, self.v

@@ -15,7 +15,6 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -25,13 +24,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch2")
     return torch.device("cuda")
-
 
 class OptimizedMemoryTransferBenchmark(Benchmark):
     """Unified memory transfer - faster NVLink-C2C path."""
@@ -43,6 +40,7 @@ class OptimizedMemoryTransferBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize unified memory tensor."""
+        
         torch.manual_seed(42)
         # Unified memory - accessible by both CPU and GPU
         # On Grace-Blackwell, this uses NVLink-C2C (~900 GB/s vs PCIe ~64 GB/s)
@@ -51,13 +49,19 @@ class OptimizedMemoryTransferBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Unified memory access (no explicit transfer needed)."""
-        torch.cuda.nvtx.range_push("optimized_memory_transfer_unified")
-        try:
-            # Unified memory - GPU can access CPU memory directly via NVLink-C2C
-            # No explicit copy needed - faster than PCIe transfers
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_memory_transfer_unified", enable=enable_nvtx):
+    # Unified memory - GPU can access CPU memory directly via NVLink-C2C
+    # No explicit copy needed - faster than PCIe transfers
             result = self.data * 2.0  # Simulates GPU computation on unified memory
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -83,11 +87,9 @@ class OptimizedMemoryTransferBenchmark(Benchmark):
             return "Data contains non-finite values"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedMemoryTransferBenchmark()
-
 
 if __name__ == '__main__':
     benchmark = get_benchmark()
@@ -97,5 +99,4 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Memory Transfer: {result.mean_ms:.3f} ms")
-
 

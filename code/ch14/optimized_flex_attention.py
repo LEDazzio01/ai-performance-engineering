@@ -49,13 +49,25 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize FlexAttention model."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: FlexAttention
         # FlexAttention provides flexible attention patterns that adapt to different use cases
         # Supports various attention mechanisms (causal, bidirectional, etc.)
         # For ch14, we demonstrate the concept (full FlexAttention is in ch13/ch18)
         self.model = nn.MultiheadAttention(256, 8, batch_first=True)
-        self.model = self.model.to(self.device).eval()
+        self.model = self.model.to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass  # Fallback to FP32 if FP16 not supported
+        self.model.eval()
         
         # Compile for better performance (FlexAttention benefits from compilation)
         try:
@@ -68,8 +80,16 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: FlexAttention operations."""
-        torch.cuda.nvtx.range_push("optimized_flex_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_flex_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: FlexAttention
                 # Provides flexible attention patterns that adapt to different use cases
@@ -78,8 +98,7 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
                 _ = self.model(self.input, self.input, self.input)[0]
                 # FlexAttention enables adaptive attention patterns
                 # See ch13/ch18 for full FlexAttention implementations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

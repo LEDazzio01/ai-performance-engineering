@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Simulate UCX/NCCL memory registration patterns to highlight fragmentation risks.
 
 Launch:
@@ -13,7 +14,6 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 
-from __future__ import annotations
 
 import os
 import time

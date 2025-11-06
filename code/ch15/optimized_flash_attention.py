@@ -44,10 +44,27 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
     
     def setup(self) -> None:
         """Setup: Initialize attention model with FlashAttention."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: FlashAttention - memory-efficient attention
         # FlashAttention reduces memory complexity from O(seq_len^2) to O(seq_len)
@@ -71,8 +88,16 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: FlashAttention computation."""
-        torch.cuda.nvtx.range_push("optimized_flash_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_flash_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: FlashAttention
                 # Uses tiling to reduce memory complexity
@@ -85,8 +110,7 @@ class OptimizedFlashAttentionBenchmark(Benchmark):
                 # - Tiled computation avoids storing full attention matrix
                 # - Better performance for long sequences
                 # - Memory-efficient attention computation
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

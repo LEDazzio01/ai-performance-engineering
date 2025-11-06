@@ -62,6 +62,11 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize pipeline stages and streams."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
         # Pipeline stages
@@ -83,8 +88,16 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - pipeline with overlap."""
-        torch.cuda.nvtx.range_push("optimized_pipeline_overlap")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_pipeline_overlap", enable=enable_nvtx):
             # Pipeline overlap: stages execute concurrently
             # Split batch across stages for overlap
             batch_per_stage = self.batch_size // self.num_stages
@@ -103,8 +116,7 @@ class OptimizedPipelineOverlapBenchmark(Benchmark):
             # Synchronize all streams
             for stream in self.streams:
                 stream.synchronize()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

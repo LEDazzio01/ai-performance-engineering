@@ -65,8 +65,16 @@ class BaselineBatchBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with small batch size."""
-        torch.cuda.nvtx.range_push("baseline_batch")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_batch", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Small batch size
                 # Small batches do not fully utilize GPU resources
@@ -76,8 +84,7 @@ class BaselineBatchBenchmark(Benchmark):
                 # Baseline: Small batch size (inefficient)
                 # Limited GPU utilization
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -28,7 +28,6 @@ Usage:
         --min-bytes 1024 --max-bytes 67108864 --steps 6
 """
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

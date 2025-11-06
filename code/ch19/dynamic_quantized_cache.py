@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Dynamic KV cache quantization helpers for Chapter 19."""
+from __future__ import annotations
 
 import pathlib
 import sys
@@ -8,10 +10,6 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXTRAS_REPO_ROOT))
 
 from pathlib import Path
-
-"""Dynamic KV cache quantization helpers for Chapter 19."""
-
-from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass

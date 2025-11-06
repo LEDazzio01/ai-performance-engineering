@@ -62,8 +62,16 @@ class BaselineCoalescingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Uncoalesced memory access pattern."""
-        torch.cuda.nvtx.range_push("baseline_coalescing_uncoalesced")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_coalescing_uncoalesced", enable=enable_nvtx):
             # Call CUDA extension kernel with stride
             # The kernel accesses input[access_idx] where access_idx = idx * stride
             # Output size matches number of threads
@@ -74,8 +82,7 @@ class BaselineCoalescingBenchmark(Benchmark):
             self._extension.uncoalesced_copy(output, self.input, self.stride)
             
             self.output = output
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

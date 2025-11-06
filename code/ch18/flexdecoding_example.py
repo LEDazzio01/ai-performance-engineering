@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -10,11 +11,11 @@ from pathlib import Path
 # Environment (Oct-2025): CUDA 13.x r580+, torch 2.9.0+cu130, triton 3.5.0, optional TE 2.8+
 """FlexDecoding showcase aligned with PyTorch 2.9 (CUDA 13.0)."""
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
+    pass
 except Exception:
     class arch_config:  # type: ignore[override]
         @staticmethod

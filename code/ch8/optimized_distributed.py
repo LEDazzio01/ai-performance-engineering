@@ -46,6 +46,18 @@ class OptimizedDistributedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
         self.is_distributed = False
         self.rank = 0
@@ -53,6 +65,11 @@ class OptimizedDistributedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and distributed processing."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Distributed processing
         # Coordinates operations across multiple nodes
@@ -122,8 +139,16 @@ class OptimizedDistributedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Distributed processing."""
-        torch.cuda.nvtx.range_push("optimized_distributed")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_distributed", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Distributed processing
                 # Each node processes its portion
@@ -141,8 +166,7 @@ class OptimizedDistributedBenchmark(Benchmark):
                 # - Scalable operations
                 # - Distributed workload distribution
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

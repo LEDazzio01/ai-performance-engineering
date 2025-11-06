@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -9,7 +10,6 @@ from pathlib import Path
 
 """PyTorch vectorized vs. naive additions benchmark."""
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

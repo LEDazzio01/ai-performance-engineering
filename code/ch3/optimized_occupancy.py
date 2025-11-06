@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
-
 
 class OptimizedOccupancyBenchmark(Benchmark):
     """High occupancy - many threads per SM.
@@ -43,10 +41,12 @@ class OptimizedOccupancyBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.input = None
     
     def setup(self) -> None:
         """Setup: Initialize model with high occupancy configuration."""
+        
         torch.manual_seed(42)
         # Optimization: High occupancy configuration
         # Occupancy measures active threads per SM
@@ -64,23 +64,30 @@ class OptimizedOccupancyBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: High occupancy - large work per forward pass."""
-        torch.cuda.nvtx.range_push("optimized_occupancy")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_occupancy", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Large forward passes - high occupancy
-                # Process large amount of work per pass
-                # Maximizes threads per SM for better utilization
+                pass
+        # Optimization: Large forward passes - high occupancy
+        # Process large amount of work per pass
+        # Maximizes threads per SM for better utilization
                 
-                # Single large forward pass - high occupancy
-                output = self.model(self.input)
+        # Single large forward pass - high occupancy
+        output = self.model(self.input)
                 
-                # Optimization: High occupancy benefits
-                # - Many threads per SM
-                # - GPU resources fully utilized
-                # - Better performance through high occupancy
-                _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+        # Optimization: High occupancy benefits
+        # - Many threads per SM
+        # - GPU resources fully utilized
+        # - Better performance through high occupancy
+        _ = output.sum()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -103,11 +110,9 @@ class OptimizedOccupancyBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedOccupancyBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -126,7 +131,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

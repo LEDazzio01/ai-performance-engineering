@@ -33,13 +33,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
-
 
 if TRITON_AVAILABLE:
     @triton.jit
@@ -47,7 +45,7 @@ if TRITON_AVAILABLE:
         x_ptr, y_ptr, output_ptr,
         n_elements,
         BLOCK_SIZE: tl.constexpr,
-    ):
+        ):
         """Triton kernel for element-wise addition."""
         pid = tl.program_id(axis=0)
         block_start = pid * BLOCK_SIZE
@@ -58,13 +56,12 @@ if TRITON_AVAILABLE:
         output = x + y
         tl.store(output_ptr + offsets, output, mask=mask)
 
-
-class OptimizedTritonBenchmark(Benchmark):
+class OptimizedTritonBenchmark:
     """Optimized: Uses Triton kernels for efficient GPU operations.
     
-    Triton: Uses Triton kernels for optimized GPU operations.
-    Triton provides a Python-like language for writing efficient CUDA kernels.
-    """
+        Triton: Uses Triton kernels for optimized GPU operations.
+        Triton provides a Python-like language for writing efficient CUDA kernels.
+        """
     
     def __init__(self):
         self.device = resolve_device()
@@ -74,6 +71,7 @@ class OptimizedTritonBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
+        
         torch.manual_seed(42)
         # Optimization: Prepare for Triton kernel execution
         # Triton is a GPU programming language for writing efficient kernels
@@ -85,18 +83,24 @@ class OptimizedTritonBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with Triton kernels."""
-        torch.cuda.nvtx.range_push("optimized_triton")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_triton", enable=enable_nvtx):
+            # Optimization: Triton kernels
+            # Triton provides a Python-like language for writing GPU kernels
+            # Triton kernels can be more efficient through explicit optimization
             if TRITON_AVAILABLE:
-                # Optimization: Triton kernels
-                # Triton provides a Python-like language for writing GPU kernels
-                # Triton kernels can be more efficient through explicit optimization
-                
                 # Triton: compute output = input * 2.0 + 1.0 using Triton kernel
                 # Create y tensor for addition operation
                 y = torch.full((self.N,), 1.0, device=self.device, dtype=torch.float32)
                 x_times_2 = self.input * 2.0
-                
+                        
                 # Triton: use Triton kernel for addition
                 grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
                 triton_add_kernel[grid](
@@ -113,8 +117,7 @@ class OptimizedTritonBenchmark(Benchmark):
             # - Python-like GPU kernel programming (Triton)
             # - Explicit optimization control
             # - Efficient kernels through Triton
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -125,7 +128,7 @@ class OptimizedTritonBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
+        iterations=100,
             warmup=10,
         )
     
@@ -135,11 +138,9 @@ class OptimizedTritonBenchmark(Benchmark):
             return "Output tensor not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedTritonBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -158,7 +159,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

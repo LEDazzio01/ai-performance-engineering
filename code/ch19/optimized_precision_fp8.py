@@ -39,15 +39,13 @@ from common.python.benchmark_harness import (
     BenchmarkMode
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch19")
     return torch.device("cuda")
 
-
-class ProductionTransformer(nn.Module):
+class ProductionTransformer:
     """Production-scale transformer with optional FP8 support."""
     
     def __init__(self, use_te=False, hidden_dim=1024, num_layers=12):
@@ -57,8 +55,8 @@ class ProductionTransformer(nn.Module):
         
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
+            # TE Linear layers - these handle FP8 internally when fp8_autocast is active
             if self.use_te:
-                # TE Linear layers - these handle FP8 internally when fp8_autocast is active
                 layer = nn.ModuleDict({
                     'attn_qkv': TELinear(hidden_dim, hidden_dim * 3, bias=True),
                     'attn_proj': TELinear(hidden_dim, hidden_dim, bias=True),
@@ -86,14 +84,13 @@ class ProductionTransformer(nn.Module):
             ffn_out = layer['ffn_fc2'](torch.relu(layer['ffn_fc1'](x)))
             x = x + ffn_out
         return x
-
-
-class OptimizedFP8Benchmark(Benchmark):
+class OptimizedFP8Benchmark:
     """Benchmark implementation following Benchmark protocol."""
     
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.x = None
         self.optimizer = None
         # Match baseline - balanced size to prevent timeout
@@ -104,8 +101,21 @@ class OptimizedFP8Benchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            pass
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
         self.model = ProductionTransformer(use_te=True, hidden_dim=self.hidden_dim)
-        self.model = self.model.to(self.device).train()
+        self.model = self.model.to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass
+        self.model.train()
         # For TE: use bfloat16 input (TE handles FP8 internally)
         # For non-TE: convert model to bfloat16
         if not self.te_available:
@@ -146,11 +156,24 @@ class OptimizedFP8Benchmark(Benchmark):
                     self.optimizer.step()
                     self.optimizer.zero_grad()
             torch.cuda.synchronize()
+        else:
+            # Non-TE warmup
+            with torch.no_grad():
+                for _ in range(5):
+                    _ = self.model(self.x)
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        torch.cuda.nvtx.range_push("optimized_precision_fp8")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_precision_fp8", enable=enable_nvtx):
             self.optimizer.zero_grad()
             # TE Linear requires fp8_autocast to be active when forward() is called
             # Wrap entire forward+backward in fp8_autocast for TE
@@ -173,18 +196,18 @@ class OptimizedFP8Benchmark(Benchmark):
                 loss = output.mean()
                 loss.backward()
             self.optimizer.step()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.x, self.optimizer
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            pass
+        torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
         return BenchmarkConfig(
-            iterations=5,  # Reduced iterations to prevent timeout
+        iterations=5,  # Reduced iterations to prevent timeout
             warmup=2,  # Reduced warmup since we already do warmup in setup
         )
     def validate_result(self) -> Optional[str]:
@@ -220,15 +243,13 @@ class OptimizedFP8Benchmark(Benchmark):
                     return f"Model output shape mismatch: expected {expected_output_shape}, got {output.shape}"
                 if not torch.isfinite(output).all():
                     return "Model output contains non-finite values"
+            return None
         except Exception as e:
-            return f"Model forward pass failed: {e}"
-        return None
-
+            return f"Validation failed: {e}"
 
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedFP8Benchmark()
-
 
 def main() -> None:
     """Standalone execution with timing."""
@@ -260,7 +281,6 @@ def main() -> None:
         print("Status: FP8 training (1.5-2x speedup, 30-40% memory reduction)")
     else:
         print("Status: BF16 training (FP8 not available)")
-
 
 if __name__ == "__main__":
     main()

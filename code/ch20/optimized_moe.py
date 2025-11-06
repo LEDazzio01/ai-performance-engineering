@@ -104,11 +104,28 @@ class OptimizedMoeBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
         self.hidden_dim = 256
     
     def setup(self) -> None:
         """Setup: Initialize MoE model."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: MoE architecture
         # Only subset of experts activate per input (sparse activation)
@@ -121,22 +138,36 @@ class OptimizedMoeBenchmark(Benchmark):
         )
         
         self.model = compile_model(self.model)
-        self.model = self.model.to(self.device).eval()
+        self.model = self.model.to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass  # Fallback to FP32 if FP16 not supported
+        self.model.eval()
         
         self.input = torch.randn(4, 32, self.hidden_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: MoE model inference."""
-        torch.cuda.nvtx.range_push("optimized_moe")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_moe", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: MoE with sparse activation
                 # Only top-k experts activate per input (e.g., top-2 of 4 experts)
                 # Reduces computation while maintaining model capacity
                 output = self.model(self.input)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

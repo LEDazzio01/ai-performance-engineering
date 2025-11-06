@@ -51,8 +51,20 @@ class BaselineComputeBoundBenchmark(Benchmark):
         if self.data is None:
             raise RuntimeError("CUDA tensors not initialized")
 
-        torch.cuda.nvtx.range_push("baseline_compute_bound")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+
+        config = self.get_config()
+
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+
+        with nvtx_range("baseline_compute_bound", enable=enable_nvtx):
             # Each step writes intermediates back to memory which reduces reuse.
             sin_out = torch.sin(self.data)
             cos_out = torch.cos(self.data)
@@ -61,8 +73,7 @@ class BaselineComputeBoundBenchmark(Benchmark):
             sqrt_term = torch.sqrt(torch.abs(product))
             combined = squared + sqrt_term
             self.data = combined * 0.90 + torch.exp(product * 0.001)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
 
     def teardown(self) -> None:
         """Release GPU tensors."""

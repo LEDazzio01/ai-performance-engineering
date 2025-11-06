@@ -66,8 +66,16 @@ class BaselineSharedMemoryBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without shared memory."""
-        torch.cuda.nvtx.range_push("baseline_shared_memory")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_shared_memory", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: No shared memory - all data access via global memory
                 # Shared memory would cache frequently accessed data
@@ -82,8 +90,7 @@ class BaselineSharedMemoryBenchmark(Benchmark):
                 # Global memory access is slower than shared memory
                 # Poor cache utilization for repeated data access
                 _ = output1 + output2 + output3
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

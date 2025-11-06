@@ -50,7 +50,7 @@ class BaselineCoalescingBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 10_000_000  # 10M elements
+        self.N = 50_000_000  # 50M elements - match optimized scale
         self.stride = 32  # Large stride prevents coalescing
     
     def setup(self) -> None:
@@ -69,14 +69,21 @@ class BaselineCoalescingBenchmark(Benchmark):
         Accesses memory with large stride, preventing coalescing.
         Each thread accesses non-consecutive memory locations.
         """
-        torch.cuda.nvtx.range_push("baseline_coalescing_uncoalesced")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_coalescing_uncoalesced", enable=enable_nvtx):
             # Uncoalesced access: threads access elements with stride
             # This prevents memory coalescing into single 128-byte transactions
             idx = torch.arange(0, self.N, self.stride, device=self.device)
             self.output = self.input[idx] * 2.0
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

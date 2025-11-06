@@ -63,8 +63,16 @@ class BaselineTritonBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without Triton."""
-        torch.cuda.nvtx.range_push("baseline_triton")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_triton", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard PyTorch operations (no Triton)
                 # Does not use Triton DSL for kernel optimization
@@ -74,8 +82,7 @@ class BaselineTritonBenchmark(Benchmark):
                 # Baseline: No Triton benefits
                 # Standard PyTorch operations (not optimized with Triton)
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

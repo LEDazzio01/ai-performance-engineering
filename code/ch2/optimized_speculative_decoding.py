@@ -18,14 +18,12 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -44,6 +42,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.target_model = None
+
         self.draft_model = None
         self.input_ids = None
         self.max_length = 20
@@ -51,6 +50,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize target and draft models."""
+        
         torch.manual_seed(42)
         # Optimization: Speculative decoding optimized for hardware
         # Draft model predicts multiple tokens in parallel (optimized for hardware parallelism)
@@ -79,8 +79,15 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Speculative decoding optimized for hardware."""
-        torch.cuda.nvtx.range_push("optimized_speculative_decoding")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Speculative decoding optimized for hardware
                 # Draft model predicts multiple tokens in parallel (hardware parallelism)
@@ -108,8 +115,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
                     # - Target model verification ensures correctness
                     if current_ids.size(1) >= self.input_ids.size(1) + self.max_length:
                         break
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -121,7 +127,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
+        iterations=10,
             warmup=2,
         )
     
@@ -136,7 +142,6 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedSpeculativeDecodingBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -155,7 +160,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

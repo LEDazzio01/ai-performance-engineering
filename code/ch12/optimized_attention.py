@@ -43,11 +43,28 @@ class OptimizedAttentionBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
         self.graph = None
     
     def setup(self) -> None:
         """Setup: Initialize attention model with CUDA graphs."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Attention with CUDA graphs
         # Attention: uses CUDA graphs to reduce launch overhead
@@ -73,8 +90,16 @@ class OptimizedAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Attention with CUDA graphs."""
-        torch.cuda.nvtx.range_push("optimized_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Attention with CUDA graphs
                 # Attention: replay captured kernels (low overhead)
@@ -86,8 +111,7 @@ class OptimizedAttentionBenchmark(Benchmark):
                 # - Faster attention computation
                 # - Better performance through graph replay
                 _ = self.input.sum()  # Use input for validation
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

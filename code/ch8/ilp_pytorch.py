@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Instruction-level parallelism (ILP) illustrations in PyTorch.
 
 The goal is to show how grouping independent work, fusing kernels, and using
@@ -13,7 +14,6 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 
-from __future__ import annotations
 import os
 
 CHAPTER_DIR = os.path.dirname(os.path.abspath(__file__))

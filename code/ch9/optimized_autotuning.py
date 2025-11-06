@@ -53,6 +53,11 @@ class OptimizedAutotuningBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model with autotuning."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Autotuning - automatic kernel tuning
         # Autotuning finds optimal kernel configurations automatically
@@ -63,17 +68,37 @@ class OptimizedAutotuningBenchmark(Benchmark):
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
         
-        # Autotuning: Use torch.compile with max-autotune for autotuning
+        # Autotuning: Use torch.compile with optimal mode for autotuning
         # Autotuning automatically explores kernel configurations
-        self.model = torch.compile(self.model, mode="max-autotune")
+        # Select optimal compile mode based on GPU SM count
+        from common.python.compile_utils import get_optimal_compile_mode
+        compile_mode = get_optimal_compile_mode("max-autotune")
+        # Wrap in try-except to handle compilation errors gracefully
+        try:
+            self.model = torch.compile(self.model, mode=compile_mode)
+        except Exception as e:
+            # Fallback to reduce-overhead if compilation fails
+            try:
+                self.model = torch.compile(self.model, mode="reduce-overhead")
+            except Exception:
+                # If compilation fails entirely, use eager mode
+                pass  # Model stays in eager mode
         
         self.input = torch.randn(32, 1024, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with autotuning."""
-        torch.cuda.nvtx.range_push("optimized_autotuning")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_autotuning", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Autotuning
                 # Uses autotuned kernel configurations
@@ -86,8 +111,7 @@ class OptimizedAutotuningBenchmark(Benchmark):
                 # - Improved performance through autotuning
                 # - Better kernel efficiency
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

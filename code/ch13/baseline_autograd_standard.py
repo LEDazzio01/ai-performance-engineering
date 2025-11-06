@@ -83,15 +83,22 @@ class BaselineAutogradStandardBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - standard autograd."""
-        torch.cuda.nvtx.range_push("baseline_autograd_standard")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_autograd_standard", enable=enable_nvtx):
             self.optimizer.zero_grad()
             outputs = self.model(self.inputs)
             loss = self.criterion(outputs, self.targets)
             loss.backward()  # Standard backward pass
             self.optimizer.step()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

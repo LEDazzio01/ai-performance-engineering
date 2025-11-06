@@ -64,8 +64,16 @@ class BaselineHbmBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without HBM optimization (many kernel launches)."""
-        torch.cuda.nvtx.range_push("baseline_hbm")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_hbm", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard memory access with many kernel launches
                 # HBM: not optimized for high bandwidth memory
@@ -78,8 +86,7 @@ class BaselineHbmBenchmark(Benchmark):
                 # - Standard memory access (not optimized for HBM)
                 # - Many kernel launches (high overhead)
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -48,6 +48,14 @@ class OptimizedArithmeticIntensityBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors for compute-bound operation."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         
         # Smaller tensors but with high compute intensity
@@ -61,8 +69,16 @@ class OptimizedArithmeticIntensityBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - high arithmetic intensity (compute-bound)."""
-        torch.cuda.nvtx.range_push("optimized_arithmetic_intensity")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_arithmetic_intensity", enable=enable_nvtx):
             # High arithmetic intensity: matrix multiplication
             # Few memory operations, many compute operations
             # MatMul: 2*N^3 FLOPs, 3*N^2 elements accessed
@@ -73,8 +89,7 @@ class OptimizedArithmeticIntensityBenchmark(Benchmark):
             self.C = torch.matmul(self.C, self.A.T)
             self.C = torch.matmul(self.C, self.B.T)
             # High arithmetic intensity: many FLOPs per byte
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.A, self.B, self.C

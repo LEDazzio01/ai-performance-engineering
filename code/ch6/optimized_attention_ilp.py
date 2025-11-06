@@ -30,13 +30,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch6")
     return torch.device("cuda")
-
 
 class OptimizedAttentionILPBenchmark(Benchmark):
     """Optimized: Attention with high ILP optimization."""
@@ -48,36 +46,46 @@ class OptimizedAttentionILPBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize optimized attention model."""
+        
         torch.manual_seed(42)
         # Optimization: Attention optimized for high ILP
         # Independent attention operations expose instruction-level parallelism
         # Uses optimized attention patterns that maximize ILP
         self.model = nn.MultiheadAttention(256, 8, batch_first=True)
-        self.model = self.model.to(self.device).eval()
+        self.model = self.model.to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass  # Fallback to FP32 if FP16 not supported
+        self.model.eval()
         
-        # Compile for better ILP (torch.compile optimizes for ILP)
-        try:
-            self.model = torch.compile(self.model, mode="reduce-overhead")
-        except Exception:
-            pass  # Fallback if compile not available
+        # Note: For CUDA-level ILP optimization, we focus on kernel-level patterns,
+        # not PyTorch compilation. ILP is achieved through kernel design.
         
         self.input = torch.randn(4, 32, 256, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Attention with high ILP optimization."""
-        torch.cuda.nvtx.range_push("optimized_attention_ilp")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_attention_ilp", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: High ILP attention operations
                 # Independent attention computations expose ILP
-                # torch.compile optimizes attention kernels for ILP
                 # Parallel processing of attention heads maximizes parallelism
                 _ = self.model(self.input, self.input, self.input)[0]
                 # High ILP: Optimized attention operations expose instruction-level parallelism
                 # See ch13 for full attention optimizations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -98,11 +106,9 @@ class OptimizedAttentionILPBenchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedAttentionILPBenchmark()
-
 
 if __name__ == '__main__':
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode

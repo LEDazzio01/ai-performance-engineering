@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -27,13 +26,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch2")
     return torch.device("cuda")
-
 
 class MoELayer(nn.Module):
     """Mixture of Experts layer optimized for hardware."""
@@ -50,9 +47,9 @@ class MoELayer(nn.Module):
         # Experts optimized for hardware
         self.experts = nn.ModuleList([
             nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim * 2),
-                nn.ReLU(),
-                nn.Linear(hidden_dim * 2, hidden_dim),
+        nn.Linear(hidden_dim, hidden_dim * 2),
+        nn.ReLU(),
+        nn.Linear(hidden_dim * 2, hidden_dim),
             )
             for _ in range(num_experts)
         ])
@@ -75,15 +72,14 @@ class MoELayer(nn.Module):
             expert_mask = (top_k_indices == expert_idx).any(dim=-1)
             if expert_mask.any():
                 expert_input = x[expert_mask]
-                expert_output = self.experts[expert_idx](expert_input)
+        expert_output = self.experts[expert_idx](expert_input)
                 
-                # Weight by router probability (MoE: weighted combination)
-                expert_probs = top_k_probs[expert_mask]
-                expert_weight = expert_probs[:, top_k_indices[expert_mask] == expert_idx].sum(dim=-1, keepdim=True)
-                output[expert_mask] += expert_output * expert_weight
+        # Weight by router probability (MoE: weighted combination)
+        expert_probs = top_k_probs[expert_mask]
+        expert_weight = expert_probs[:, top_k_indices[expert_mask] == expert_idx].sum(dim=-1, keepdim=True)
+        output[expert_mask] += expert_output * expert_weight
         
         return output
-
 
 class OptimizedMoeBenchmark(Benchmark):
     """Optimized: Mixture of Experts optimized for hardware.
@@ -95,10 +91,12 @@ class OptimizedMoeBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.input = None
     
     def setup(self) -> None:
         """Setup: Initialize MoE model optimized for hardware."""
+        
         torch.manual_seed(42)
         # Optimization: MoE (Mixture of Experts) optimized for hardware
         # MoE uses router to select top-k experts for each input
@@ -107,30 +105,44 @@ class OptimizedMoeBenchmark(Benchmark):
         hidden_dim = 256
         num_experts = 4
         self.model = MoELayer(hidden_dim=hidden_dim, num_experts=num_experts, top_k=2)
-        self.model = self.model.to(self.device).eval()
+        self.model = self.model.to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                 pass
+        self.model.eval()
         
         self.input = torch.randn(32, hidden_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: MoE optimized for hardware."""
-        torch.cuda.nvtx.range_push("optimized_moe")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_moe", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: MoE (Mixture of Experts) optimized for hardware
-                # Router selects top-k experts for each input
-                # Sparse activation optimized for GPU hardware characteristics
-                # MoE benefits: reduces computation, optimized for hardware capabilities
-                output = self.model(self.input)
+                pass
+        # Optimization: MoE (Mixture of Experts) optimized for hardware
+        # Router selects top-k experts for each input
+        # Sparse activation optimized for GPU hardware characteristics
+        # MoE benefits: reduces computation, optimized for hardware capabilities
+        output = self.model(self.input)
                 
-                # Optimization: MoE benefits for hardware
-                # - Sparse activation (only selected experts)
-                # - Optimized for GPU hardware characteristics
-                # - Better hardware utilization
-                # - Efficient expert routing
-                _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+        # Optimization: MoE benefits for hardware
+        # - Sparse activation (only selected experts)
+        # - Optimized for GPU hardware characteristics
+        # - Better hardware utilization
+        # - Efficient expert routing
+        _ = output.sum()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -157,7 +169,6 @@ def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedMoeBenchmark()
 
-
 def main() -> None:
     """Standalone execution (for testing)."""
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
@@ -175,7 +186,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

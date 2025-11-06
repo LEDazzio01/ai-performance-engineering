@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -9,7 +10,6 @@ from pathlib import Path
 
 """Helper module for distributed training with auto-fallback to single-GPU mode."""
 
-from __future__ import annotations
 
 import os
 

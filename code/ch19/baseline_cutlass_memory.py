@@ -1,4 +1,4 @@
-"""Baseline stream-ordered single-GPU (no distributed)."""
+"""baseline_cutlass_memory - Baseline GEMM without CUTLASS memory optimization. Implements Benchmark protocol for harness integration."""
 
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+
+try:
+    import ch19.arch_config  # noqa: F401 - Apply chapter defaults
+except ImportError:
+    pass
+
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -21,50 +27,50 @@ from common.python.benchmark_harness import (
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch199")
+        raise RuntimeError("CUDA required for ch19")
     return torch.device("cuda")
 
 
-class CutlassBenchmark(Benchmark):
-    """Baseline: Single-GPU stream-ordered (no distributed computing)."""
+class BaselineCutlassMemoryBenchmark(Benchmark):
+    """Baseline: GEMM without CUTLASS memory optimization (standard PyTorch matmul)."""
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.A = None
+        self.B = None
+        self.m = 512
+        self.n = 512
+        self.k = 512
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: Initialize matrices."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        # Baseline: Standard PyTorch matmul (no CUTLASS memory optimization)
+        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
+        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
-        torch.cuda.nvtx.range_push("baseline_cutlass")
-        try:
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch197 for full distributed training implementations
-        finally:
-            torch.cuda.nvtx.range_pop()
+        """Benchmark: Standard GEMM without memory optimization."""
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_cutlass_memory", enable=enable_nvtx):
+            # Baseline: Standard PyTorch matmul
+            # No CUTLASS memory optimization - uses default GEMM kernels
+            _ = torch.matmul(self.A, self.B)
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
-        self.output = None
+        self.A = None
+        self.B = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -76,14 +82,14 @@ class CutlassBenchmark(Benchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.output is None:
-            return "Output tensor not initialized"
+        if self.A is None or self.B is None:
+            return "Matrices not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
-    return CutlassBenchmark()
+    return BaselineCutlassMemoryBenchmark()
 
 
 if __name__ == '__main__':
@@ -95,5 +101,4 @@ if __name__ == '__main__':
         config=benchmark.get_config()
     )
     result = harness.benchmark(benchmark)
-    print(f"\nBaseline Cutlass (Single GPU): {result.mean_ms:.3f} ms")
-    print(" Note: Single-GPU operation, no distributed computing")
+    print(f"\nBaseline CUTLASS Memory (Standard): {result.mean_ms:.3f} ms")

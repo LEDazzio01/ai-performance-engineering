@@ -58,16 +58,23 @@ class BaselineTritonBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard PyTorch operations."""
-        torch.cuda.nvtx.range_push("baseline_triton")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_triton", enable=enable_nvtx):
             # Baseline: Standard PyTorch operations
             # Triton provides a Python-like language for writing GPU kernels
             # This baseline uses PyTorch's default CUDA kernels
             # Triton kernels can be more efficient through explicit optimization
             self.output = self.input * 2.0 + 1.0
             # Without Triton, uses PyTorch's default kernel implementations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

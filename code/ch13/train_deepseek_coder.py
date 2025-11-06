@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Profiling helper for DeepSeek Coder training (Chapter 13).
 
 Demonstrates DeepSeek architecture training with:
@@ -10,6 +12,7 @@ Demonstrates DeepSeek architecture training with:
 Note: Uses DeepSeek Coder 6.7B (manageable size for single GPU)
 For full DeepSeek-V3, see multi-GPU examples in extras/ch13/fsdp_example.py
 """
+
 import pathlib
 import sys
 
@@ -18,11 +21,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXTRAS_REPO_ROOT))
 
 from pathlib import Path
-
-
-from __future__ import annotations
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 

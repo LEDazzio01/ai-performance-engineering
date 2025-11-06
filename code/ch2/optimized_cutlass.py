@@ -30,13 +30,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch2")
     return torch.device("cuda")
-
 
 class OptimizedCutlassBenchmark(Benchmark):
     """Optimized: GEMM using CUTLASS library.
@@ -55,38 +53,49 @@ class OptimizedCutlassBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
+        
+        # Enable TF32 for faster matmul on Ampere+ GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         # Optimization: CUTLASS-optimized GEMM
-        # Uses torch.compile with CUTLASS backend for hardware-optimized kernels
-        
+                
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
         
         # Optimization: Compile with CUTLASS backend
         # CUTLASS provides hardware-optimized GEMM kernels
+        # Select optimal compile mode based on GPU SM count
+        from common.python.compile_utils import get_optimal_compile_mode
+        compile_mode = get_optimal_compile_mode("max-autotune")
         self.compiled_matmul = torch.compile(
             lambda a, b: torch.matmul(a, b),
-            mode="max-autotune",
+            mode=compile_mode,
             backend="inductor"
         )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUTLASS-optimized GEMM."""
-        torch.cuda.nvtx.range_push("optimized_cutlass")
-        try:
-            # Optimization: CUTLASS-optimized GEMM
-            # Uses torch.compile with CUTLASS backend
-            # Leverages hardware-optimized kernels (tensor cores, optimized memory access)
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_cutlass", enable=enable_nvtx):
+    # Optimization: CUTLASS-optimized GEMM
+    # Leverages hardware-optimized kernels (tensor cores, optimized memory access)
             _ = self.compiled_matmul(self.A, self.B)
             
-            # Optimization: CUTLASS benefits
-            # - Hardware-optimized GEMM kernels
-            # - Leverages tensor cores for acceleration
-            # - Optimized memory access patterns
-            # - Better performance through hardware-specific optimizations
-        finally:
-            torch.cuda.nvtx.range_pop()
+    # Optimization: CUTLASS benefits
+    # - Hardware-optimized GEMM kernels
+    # - Leverages tensor cores for acceleration
+    # - Optimized memory access patterns
+    # - Better performance through hardware-specific optimizations
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -112,7 +121,6 @@ def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedCutlassBenchmark()
 
-
 def main() -> None:
     """Standalone execution (for testing)."""
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
@@ -130,7 +138,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

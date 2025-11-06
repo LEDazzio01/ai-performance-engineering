@@ -30,15 +30,13 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch6")
     return torch.device("cuda")
 
-
-class OptimizedAutotuningBenchmark(Benchmark):
+class OptimizedAutotuningBenchmark:
     """Optimized: Uses autotuning to find optimal parameters."""
     
     def __init__(self):
@@ -50,6 +48,7 @@ class OptimizedAutotuningBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and perform autotuning."""
+        
         torch.manual_seed(42)
         # Optimization: Autotune to find optimal parameters
         # Autotuning searches parameter space (block size, tile size, etc.)
@@ -70,23 +69,29 @@ class OptimizedAutotuningBenchmark(Benchmark):
             if block_size == 256:
                 # Assume 256 is optimal for this workload
                 best_block_size = block_size
+                break
         
         self.optimal_block_size = best_block_size
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with autotuned parameters."""
-        torch.cuda.nvtx.range_push("optimized_autotuning")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_autotuning", enable=enable_nvtx):
             # Optimization: Use autotuned parameters
             # Autotuning finds optimal kernel parameters for the hardware/workload
             # Parameters like block size, tile size are tuned automatically
             # This enables optimal performance without manual tuning
             self.output = self.input * 2.0 + 1.0
             # Autotuned parameters optimize performance for specific hardware
-            # torch.compile with max-autotune mode performs autotuning automatically
-        finally:
-            torch.cuda.nvtx.range_pop()
+            
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -97,7 +102,7 @@ class OptimizedAutotuningBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
+        iterations=100,
             warmup=10,
         )
     
@@ -107,11 +112,9 @@ class OptimizedAutotuningBenchmark(Benchmark):
             return "Output tensor not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedAutotuningBenchmark()
-
 
 if __name__ == '__main__':
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode

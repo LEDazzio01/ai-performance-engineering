@@ -43,6 +43,18 @@ class OptimizedStreamsBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input1 = None
         self.input2 = None
         self.stream1 = None
@@ -50,6 +62,14 @@ class OptimizedStreamsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and CUDA streams."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         # Optimization: CUDA streams for parallel execution
         # Streams allow independent operations to execute concurrently
@@ -70,8 +90,16 @@ class OptimizedStreamsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Parallel execution with CUDA streams."""
-        torch.cuda.nvtx.range_push("optimized_streams")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_streams", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: CUDA streams for parallel execution
                 # Independent operations execute concurrently on different streams
@@ -93,8 +121,7 @@ class OptimizedStreamsBenchmark(Benchmark):
                 # - Better GPU utilization
                 # - Improved throughput through parallelism
                 _ = output1 + output2
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

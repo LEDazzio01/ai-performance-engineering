@@ -59,8 +59,16 @@ class BaselineWarpDivergenceBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with warp divergence."""
-        torch.cuda.nvtx.range_push("baseline_warp_divergence")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_warp_divergence", enable=enable_nvtx):
             # Baseline: Warp divergence - threads take different paths
             # Conditional execution causes threads in warp to diverge
             # Warp divergence: inefficient execution due to divergent paths
@@ -70,8 +78,7 @@ class BaselineWarpDivergenceBenchmark(Benchmark):
             # Baseline: Warp divergence issues
             # Conditional execution causes divergence
             # Inefficient execution due to divergent paths
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

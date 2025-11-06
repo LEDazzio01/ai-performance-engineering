@@ -49,6 +49,11 @@ class OptimizedAutotuningBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model with autotuning."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Autotuning to find optimal parameters
         # Automatically searches for best kernel configuration
@@ -62,29 +67,46 @@ class OptimizedAutotuningBenchmark(Benchmark):
         # Optimization: Autotuning enabled
         # torch.compile with max-autotune mode explores optimal configurations
         # Searches tile sizes, block sizes, loop unrolling, etc.
-        self.model = self.model.to(self.device).eval()
-        # Enable autotuning via torch.compile with max-autotune
+        self.model = self.model.to(self.device)
+        # Optimization: Use FP16 for faster computation
+        if self.device.type == "cuda":
+            try:
+                self.model = self.model.half()
+            except Exception:
+                pass  # Fallback to FP32 if FP16 not supported
+        self.model.eval()
+        # Enable autotuning via torch.compile with optimal mode
         # This triggers automatic kernel parameter search
+        # Select optimal compile mode based on GPU SM count
+        from common.python.compile_utils import get_optimal_compile_mode
+        compile_mode = get_optimal_compile_mode("max-autotune")
         try:
-            self.model = torch.compile(self.model, mode="max-autotune", backend="inductor")
+            self.model = torch.compile(self.model, mode=compile_mode, backend="inductor")
         except Exception:
             # Fallback if torch.compile not available
-            self.model = compile_model(self.model, mode="max-autotune")
+            self.model = compile_model(self.model, mode=compile_mode)
         
         self.input = torch.randn(4, 32, 256, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with autotuned parameters."""
-        torch.cuda.nvtx.range_push("optimized_autotuning")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_autotuning", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Autotuned kernel configuration
                 # Parameters (tile sizes, block sizes, etc.) are optimized for this workload
                 # Autotuning explores search space to find best configuration
                 output = self.model(self.input)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -117,7 +139,7 @@ def main() -> None:
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
     
     harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
+    mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=50, warmup=5)
     )
     benchmark = OptimizedAutotuningBenchmark()

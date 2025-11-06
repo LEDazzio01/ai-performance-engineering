@@ -75,33 +75,26 @@ class BaselineDoubleBufferingBenchmark(Benchmark):
         3. CPU waits for D2H transfer to complete
         No overlap between transfers and computation.
         """
-        torch.cuda.nvtx.range_push("baseline_double_buffering_sequential")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        
+        with nvtx_range("baseline_double_buffering_sequential", enable=enable_nvtx):
             # Step 1: Transfer host to device (synchronous)
-            torch.cuda.nvtx.range_push("H2D_transfer")
-            try:
+            with nvtx_range("H2D_transfer", enable=enable_nvtx):
                 self.device_data.copy_(self.host_data, non_blocking=False)
                 torch.cuda.synchronize()  # Wait for transfer
-            finally:
-                torch.cuda.nvtx.range_pop()
-            
+
             # Step 2: Compute on device
-            torch.cuda.nvtx.range_push("computation")
-            try:
+            with nvtx_range("computation", enable=enable_nvtx):
                 self.device_data = self.device_data * 2.0 + 1.0
                 torch.cuda.synchronize()  # Wait for computation
-            finally:
-                torch.cuda.nvtx.range_pop()
-            
+
             # Step 3: Transfer device to host (synchronous)
-            torch.cuda.nvtx.range_push("D2H_transfer")
-            try:
+            with nvtx_range("D2H_transfer", enable=enable_nvtx):
                 self.result.copy_(self.device_data, non_blocking=False)
                 torch.cuda.synchronize()  # Wait for transfer
-            finally:
-                torch.cuda.nvtx.range_pop()
-        finally:
-            torch.cuda.nvtx.range_pop()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

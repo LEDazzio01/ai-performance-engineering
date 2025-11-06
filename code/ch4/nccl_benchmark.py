@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -9,7 +10,6 @@ from pathlib import Path
 
 """Comprehensive NCCL benchmark for PyTorch 2.9 + CUDA 13.0."""
 
-from __future__ import annotations
 
 import argparse
 import os

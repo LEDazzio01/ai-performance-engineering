@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -9,7 +10,6 @@ from pathlib import Path
 
 """High-throughput DataLoader patterns for storage-bound training (PyTorch 2.9)."""
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

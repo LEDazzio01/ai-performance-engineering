@@ -95,8 +95,16 @@ class BaselineDisaggregatedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Monolithic inference."""
-        torch.cuda.nvtx.range_push("baseline_disaggregated")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_disaggregated", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Monolithic inference
                 # Prefill and decode phases share same resources across GPUs
@@ -121,8 +129,7 @@ class BaselineDisaggregatedBenchmark(Benchmark):
                 
                 # Baseline: No separation - both phases interfere with each other
                 # This leads to poor GPU utilization and latency spikes
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

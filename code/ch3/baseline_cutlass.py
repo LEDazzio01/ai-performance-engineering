@@ -61,8 +61,16 @@ class BaselineCutlassBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard GEMM without CUTLASS."""
-        torch.cuda.nvtx.range_push("baseline_cutlass")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_cutlass", enable=enable_nvtx):
             # Baseline: Standard PyTorch matmul (no CUTLASS)
             # Does not leverage CUTLASS hardware-optimized kernels
             # Standard computation path without hardware-specific optimizations
@@ -70,8 +78,7 @@ class BaselineCutlassBenchmark(Benchmark):
             
             # Baseline: No CUTLASS benefits
             # Standard GEMM without hardware-specific optimizations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

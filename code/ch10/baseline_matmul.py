@@ -27,7 +27,7 @@ from common.python.benchmark_harness import (
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch100")
+        raise RuntimeError("CUDA required for ch10")
     return torch.device("cuda")
 
 
@@ -50,12 +50,19 @@ class BaselineMatmulBenchmark(Benchmark):
 
     def benchmark_fn(self) -> None:
         """Benchmark: Memory transfer without Matmul optimization."""
-        torch.cuda.nvtx.range_push("baseline_matmul")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_matmul", enable=enable_nvtx):
             # Baseline: Standard PCIe transfer (no Matmul)
             self.device_data = self.host_data.to(self.device)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

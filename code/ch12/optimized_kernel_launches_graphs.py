@@ -47,6 +47,11 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: initialize tensor and capture CUDA graph."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # Use bfloat16 for GPU performance
         dtype = torch.bfloat16 if self.device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float32
         self.x_template = torch.randn(*self.size, device=self.device, dtype=dtype)
@@ -78,12 +83,19 @@ class OptimizedKernelLaunchesBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        torch.cuda.nvtx.range_push("optimized_kernel_launches_graphs")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_kernel_launches_graphs", enable=enable_nvtx):
             with torch.no_grad():
                 _ = self.replay_fn()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.x_template, self.x_capture, self.graph, self.replay_fn

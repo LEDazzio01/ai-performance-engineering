@@ -39,6 +39,81 @@ from typing import List, Tuple, Any
 from common.python.chapter_compare_template import discover_benchmarks, load_benchmark
 from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 
+# Check if torch.profiler is available at module level
+TORCH_PROFILER_AVAILABLE = hasattr(torch, 'profiler') and hasattr(torch.profiler, 'profile')
+
+# Import metric extraction utilities
+try:
+    from tools.analysis.metric_extractor import (
+        extract_from_ncu_report,
+        extract_from_nsys_report,
+    )
+except ImportError:
+    # Fallback if metric extractor not available
+    def extract_from_ncu_report(path: Path) -> Dict[str, float]:
+        return {}
+    def extract_from_nsys_report(path: Path) -> Dict[str, float]:
+        return {}
+
+
+def extract_from_pytorch_trace(trace_path: Path) -> Dict[str, float]:
+    """Extract metrics from PyTorch Chrome trace JSON file.
+    
+    Args:
+        trace_path: Path to Chrome trace JSON file
+        
+    Returns:
+        Dictionary of extracted metrics
+    """
+    if not trace_path.exists():
+        return {}
+    
+    metrics = {}
+    
+    try:
+        with open(trace_path, 'r') as f:
+            trace_data = json.load(f)
+        
+        # Chrome trace format: {"traceEvents": [...], "displayTimeUnit": "ms"}
+        if isinstance(trace_data, dict) and "traceEvents" in trace_data:
+            events = trace_data["traceEvents"]
+            
+            # Sum CUDA kernel times
+            cuda_time_us = 0
+            cpu_time_us = 0
+            cuda_kernels = 0
+            
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                
+                # Look for CUDA kernel events
+                if event.get("cat") == "cuda_runtime" or "cuda" in event.get("name", "").lower():
+                    dur = event.get("dur", 0)  # Duration in microseconds
+                    if dur > 0:
+                        cuda_time_us += dur
+                        cuda_kernels += 1
+                
+                # Look for CPU events
+                if event.get("cat") == "cpu_op" or "cpu" in event.get("cat", "").lower():
+                    dur = event.get("dur", 0)
+                    if dur > 0:
+                        cpu_time_us += dur
+            
+            if cuda_time_us > 0:
+                metrics["pytorch_cuda_time_us"] = cuda_time_us
+                metrics["pytorch_cuda_time_ms"] = cuda_time_us / 1000.0
+            if cpu_time_us > 0:
+                metrics["pytorch_cpu_time_us"] = cpu_time_us
+                metrics["pytorch_cpu_time_ms"] = cpu_time_us / 1000.0
+            if cuda_kernels > 0:
+                metrics["pytorch_cuda_kernels"] = float(cuda_kernels)
+                
+    except Exception:
+        pass
+    
+    return metrics
+
 
 def format_time_ms(time_ms: float) -> str:
     """Format time in milliseconds with adaptive precision.
@@ -337,6 +412,20 @@ def check_nsys_available() -> bool:
         return False
 
 
+def check_ncu_available() -> bool:
+    """Check if ncu (NVIDIA Compute Profiler) is available on the system."""
+    try:
+        result = subprocess.run(
+            ["ncu", "--version"],
+            capture_output=True,
+            timeout=5,
+            check=False
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
 def profile_python_benchmark(
     benchmark: Any,  # Benchmark instance
     benchmark_path: Path,
@@ -501,6 +590,236 @@ def profile_cuda_executable(
         return None
 
 
+def profile_python_benchmark_ncu(
+    benchmark: Any,  # Benchmark instance
+    benchmark_path: Path,
+    chapter_dir: Path,
+    output_dir: Path,
+    variant: str = "baseline"
+) -> Optional[Path]:
+    """Profile a Python benchmark using ncu (NVIDIA Compute Profiler).
+    
+    Args:
+        benchmark: Benchmark instance (already loaded)
+        benchmark_path: Path to Python benchmark file (for naming)
+        chapter_dir: Path to chapter directory
+        output_dir: Directory to save ncu-rep file
+        variant: 'baseline' or 'optimized' for naming
+        
+    Returns:
+        Path to generated ncu-rep file, or None if failed
+    """
+    if not check_ncu_available():
+        return None
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create output filename based on benchmark name
+    benchmark_name = benchmark_path.stem
+    ncu_output = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
+    
+    # Create a temporary wrapper script that runs the benchmark
+    wrapper_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
+    
+    try:
+        wrapper_script.write(f"""
+import sys
+from pathlib import Path
+
+# Add chapter directory to path
+sys.path.insert(0, r'{chapter_dir}')
+
+# Import and load benchmark
+from {benchmark_path.stem} import get_benchmark
+
+benchmark = get_benchmark()
+benchmark.setup()
+
+# Warmup
+for _ in range(5):
+    benchmark.benchmark_fn()
+
+# Profile execution
+import torch
+if torch.cuda.is_available():
+    torch.cuda.synchronize()
+
+benchmark.benchmark_fn()
+
+if torch.cuda.is_available():
+    torch.cuda.synchronize()
+
+benchmark.teardown()
+""")
+        wrapper_script.close()
+        
+        # Build ncu command
+        ncu_command = [
+            "ncu",
+            "--set", "full",
+            "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
+            "--replay-mode", "kernel",
+            "-o", str(ncu_output.with_suffix("")),  # ncu adds .ncu-rep automatically
+            sys.executable,
+            wrapper_script.name
+        ]
+        
+        result = subprocess.run(
+            ncu_command,
+            cwd=str(chapter_dir),
+            capture_output=True,
+            timeout=60,  # ncu can be slow
+            check=False
+        )
+        
+        # Clean up wrapper script
+        try:
+            Path(wrapper_script.name).unlink()
+        except Exception:
+            pass
+        
+        # Check if file exists (ncu may create file even with non-zero exit code)
+        if ncu_output.exists():
+            return ncu_output
+        # Try alternative path
+        alt_path = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
+        if alt_path.exists():
+            return alt_path
+        # Check for any .ncu-rep file matching the pattern
+        for ncu_file in output_dir.glob(f"{benchmark_name}_{variant}*.ncu-rep"):
+            return ncu_file
+        return None
+    except Exception:
+        # Clean up wrapper script on error
+        try:
+            Path(wrapper_script.name).unlink()
+        except Exception:
+            pass
+        return None
+
+
+def profile_cuda_executable_ncu(
+    executable: Path,
+    chapter_dir: Path,
+    output_dir: Path,
+    variant: str = "baseline"
+) -> Optional[Path]:
+    """Profile a CUDA executable using ncu (NVIDIA Compute Profiler).
+    
+    Args:
+        executable: Path to CUDA executable
+        chapter_dir: Path to chapter directory
+        output_dir: Directory to save ncu-rep file
+        variant: 'baseline' or 'optimized' for naming
+        
+    Returns:
+        Path to generated ncu-rep file, or None if failed
+    """
+    if not check_ncu_available():
+        return None
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create output filename based on executable name
+    exec_name = executable.stem
+    ncu_output = output_dir / f"{exec_name}_{variant}.ncu-rep"
+    
+    # Build ncu command
+    ncu_command = [
+        "ncu",
+        "--set", "full",
+        "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
+        "--replay-mode", "kernel",
+        "-o", str(ncu_output.with_suffix("")),  # ncu adds .ncu-rep automatically
+        str(executable)
+    ]
+    
+    try:
+        result = subprocess.run(
+            ncu_command,
+            cwd=str(chapter_dir),
+            capture_output=True,
+            timeout=60,  # ncu can be slow
+            check=False
+        )
+        
+        # Check if file exists (ncu may create file even with non-zero exit code)
+        if ncu_output.exists():
+            return ncu_output
+        # Try alternative path
+        alt_path = output_dir / f"{exec_name}_{variant}.ncu-rep"
+        if alt_path.exists():
+            return alt_path
+        # Check for any .ncu-rep file matching the pattern
+        for ncu_file in output_dir.glob(f"{exec_name}_{variant}*.ncu-rep"):
+            return ncu_file
+        return None
+    except (subprocess.TimeoutExpired, Exception):
+        return None
+
+
+def profile_python_benchmark_torch(
+    benchmark: Any,  # Benchmark instance
+    benchmark_path: Path,
+    chapter_dir: Path,
+    output_dir: Path,
+    variant: str = "baseline"
+) -> Optional[Path]:
+    """Profile a Python benchmark using PyTorch profiler.
+    
+    Args:
+        benchmark: Benchmark instance (already loaded)
+        benchmark_path: Path to Python benchmark file (for naming)
+        chapter_dir: Path to chapter directory
+        output_dir: Directory to save torch trace file
+        variant: 'baseline' or 'optimized' for naming
+        
+    Returns:
+        Path to generated torch trace JSON file, or None if failed
+    """
+    if not TORCH_PROFILER_AVAILABLE:
+        return None
+    
+    try:
+        import torch.profiler
+    except ImportError:
+        return None
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create output filename based on benchmark name
+    benchmark_name = benchmark_path.stem
+    torch_output = output_dir / f"{benchmark_name}_{variant}_torch_trace.json"
+    
+    try:
+        # Warmup
+        for _ in range(5):
+            benchmark.benchmark_fn()
+        
+        # Profile execution with PyTorch profiler
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            with_flops=True,
+        ) as prof:
+            benchmark.benchmark_fn()
+            prof.step()
+        
+        # Export Chrome trace
+        prof.export_chrome_trace(str(torch_output))
+        
+        if torch_output.exists():
+            return torch_output
+        return None
+    except Exception:
+        return None
+
+
 def ensure_cuda_executables_built(chapter_dir: Path) -> bool:
     """Try to build CUDA executables if Makefile exists.
     
@@ -535,7 +854,7 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
     
     Args:
         chapter_dir: Path to chapter directory
-        enable_profiling: If True, generate nsys-rep files alongside benchmarks
+        enable_profiling: If True, generate profiling files (nsys, ncu, PyTorch) alongside benchmarks
     """
     dump_environment_and_capabilities()
 
@@ -546,11 +865,26 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
     if enable_profiling:
         repo_root = chapter_dir.parent
         profiling_output_dir = repo_root / "benchmark_profiles" / chapter_name
-        if check_nsys_available():
-            profiling_output_dir.mkdir(parents=True, exist_ok=True)
-            print(f"  Profiling enabled: nsys-rep files will be saved to {profiling_output_dir}")
+        profiling_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Check which profilers are available
+        nsys_avail = check_nsys_available()
+        ncu_avail = check_ncu_available()
+        # Use module-level check to avoid local variable shadowing issue
+        torch_avail = TORCH_PROFILER_AVAILABLE
+        
+        profilers = []
+        if nsys_avail:
+            profilers.append("nsys")
+        if ncu_avail:
+            profilers.append("ncu")
+        if torch_avail:
+            profilers.append("PyTorch")
+        
+        if profilers:
+            print(f"  Profiling enabled: {', '.join(profilers)} profiling files will be saved to {profiling_output_dir}")
         else:
-            print(f"  WARNING: Profiling requested but nsys not available - skipping profiling")
+            print(f"  WARNING: Profiling requested but no profilers available - skipping profiling")
             enable_profiling = False
     
     print(f"\n{'='*80}")
@@ -662,17 +996,81 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
                 p50 = baseline_result.percentiles.get(50.0, baseline_result.median_ms)
                 print(f"      📈 Percentiles: p99={format_time_ms(p99)}ms, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
             
-            # Profile baseline if profiling is enabled
+            # Profile baseline if profiling is enabled (nsys, ncu, PyTorch)
             if enable_profiling and profiling_output_dir:
-                print(f"    Profiling baseline...", end=' ', flush=True)
-                nsys_path = profile_python_benchmark(
-                    baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
-                )
-                if nsys_path:
-                    result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
-                    print(f"✓ saved")
+                print(f"    Profiling baseline...", flush=True)
+                profiler_results = []
+                baseline_metrics = {}
+                
+                # nsys profiling
+                if check_nsys_available():
+                    print(f"      nsys...", end=' ', flush=True)
+                    nsys_path = profile_python_benchmark(
+                        baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                    )
+                    if nsys_path:
+                        result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                        profiler_results.append("nsys✓")
+                        # Extract metrics
+                        nsys_metrics = extract_from_nsys_report(nsys_path)
+                        if nsys_metrics:
+                            baseline_metrics['nsys'] = nsys_metrics
+                    else:
+                        profiler_results.append("nsys✗")
                 else:
-                    print(f"✗ failed")
+                    profiler_results.append("nsys-")
+                
+                # ncu profiling
+                if check_ncu_available():
+                    print(f"ncu...", end=' ', flush=True)
+                    ncu_path = profile_python_benchmark_ncu(
+                        baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                    )
+                    if ncu_path:
+                        result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                        profiler_results.append("ncu✓")
+                        # Extract metrics
+                        ncu_metrics = extract_from_ncu_report(ncu_path)
+                        if ncu_metrics:
+                            baseline_metrics['ncu'] = ncu_metrics
+                    else:
+                        profiler_results.append("ncu✗")
+                else:
+                    profiler_results.append("ncu-")
+                
+                # PyTorch profiler
+                if TORCH_PROFILER_AVAILABLE:
+                    print(f"PyTorch...", end=' ', flush=True)
+                    torch_path = profile_python_benchmark_torch(
+                        baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                    )
+                    if torch_path:
+                        result_entry['baseline_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
+                        profiler_results.append("torch✓")
+                        # Extract metrics
+                        torch_metrics = extract_from_pytorch_trace(torch_path)
+                        if torch_metrics:
+                            baseline_metrics['torch'] = torch_metrics
+                    else:
+                        profiler_results.append("torch✗")
+                else:
+                    profiler_results.append("torch-")
+                
+                print(f" ({', '.join(profiler_results)})")
+                
+                # Display extracted metrics
+                if baseline_metrics:
+                    print(f"      📈 Profiler Metrics:")
+                    if 'nsys' in baseline_metrics:
+                        for key, value in baseline_metrics['nsys'].items():
+                            print(f"        nsys.{key}: {value:.2f}")
+                    if 'ncu' in baseline_metrics:
+                        for key, value in baseline_metrics['ncu'].items():
+                            print(f"        ncu.{key}: {value:.2f}")
+                    if 'torch' in baseline_metrics:
+                        for key, value in baseline_metrics['torch'].items():
+                            print(f"        torch.{key}: {value:.2f}")
+                    result_entry['baseline_profiler_metrics'] = baseline_metrics
         except Exception as e:
             error_str = str(e)
             skip_reason = check_hardware_limitation(error_str)
@@ -776,18 +1174,84 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
                     'speedup': speedup,
                 }
                 
-                # Profile optimized if profiling is enabled
+                # Profile optimized if profiling is enabled (nsys, ncu, PyTorch)
                 if enable_profiling and profiling_output_dir:
-                    print(f"\n    Profiling optimized...", end=' ', flush=True)
-                    nsys_path = profile_python_benchmark(
-                        optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir, 
-                        variant=f"optimized_{technique}"
-                    )
-                    if nsys_path:
-                        opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
-                        print(f"✓ saved")
+                    print(f"\n    Profiling optimized...", flush=True)
+                    profiler_results = []
+                    optimized_metrics = {}
+                    
+                    # nsys profiling
+                    if check_nsys_available():
+                        print(f"      nsys...", end=' ', flush=True)
+                        nsys_path = profile_python_benchmark(
+                            optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir, 
+                            variant=f"optimized_{technique}"
+                        )
+                        if nsys_path:
+                            opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                            profiler_results.append("nsys✓")
+                            # Extract metrics
+                            nsys_metrics = extract_from_nsys_report(nsys_path)
+                            if nsys_metrics:
+                                optimized_metrics['nsys'] = nsys_metrics
+                        else:
+                            profiler_results.append("nsys✗")
                     else:
-                        print(f"✗ failed")
+                        profiler_results.append("nsys-")
+                    
+                    # ncu profiling
+                    if check_ncu_available():
+                        print(f"ncu...", end=' ', flush=True)
+                        ncu_path = profile_python_benchmark_ncu(
+                            optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
+                            variant=f"optimized_{technique}"
+                        )
+                        if ncu_path:
+                            opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                            profiler_results.append("ncu✓")
+                            # Extract metrics
+                            ncu_metrics = extract_from_ncu_report(ncu_path)
+                            if ncu_metrics:
+                                optimized_metrics['ncu'] = ncu_metrics
+                        else:
+                            profiler_results.append("ncu✗")
+                    else:
+                        profiler_results.append("ncu-")
+                    
+                    # PyTorch profiler
+                    if TORCH_PROFILER_AVAILABLE:
+                        print(f"PyTorch...", end=' ', flush=True)
+                        torch_path = profile_python_benchmark_torch(
+                            optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
+                            variant=f"optimized_{technique}"
+                        )
+                        if torch_path:
+                            opt_result['optimized_torch_trace'] = str(torch_path.relative_to(chapter_dir.parent))
+                            profiler_results.append("torch✓")
+                            # Extract metrics
+                            torch_metrics = extract_from_pytorch_trace(torch_path)
+                            if torch_metrics:
+                                optimized_metrics['torch'] = torch_metrics
+                        else:
+                            profiler_results.append("torch✗")
+                    else:
+                        profiler_results.append("torch-")
+                    
+                    print(f" ({', '.join(profiler_results)})")
+                    
+                    # Display extracted metrics
+                    if optimized_metrics:
+                        print(f"        📈 Profiler Metrics:")
+                        if 'nsys' in optimized_metrics:
+                            for key, value in optimized_metrics['nsys'].items():
+                                print(f"          nsys.{key}: {value:.2f}")
+                        if 'ncu' in optimized_metrics:
+                            for key, value in optimized_metrics['ncu'].items():
+                                print(f"          ncu.{key}: {value:.2f}")
+                        if 'torch' in optimized_metrics:
+                            for key, value in optimized_metrics['torch'].items():
+                                print(f"          torch.{key}: {value:.2f}")
+                        opt_result['optimized_profiler_metrics'] = optimized_metrics
                 
                 result_entry['optimizations'].append(opt_result)
                 
@@ -938,17 +1402,60 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
             p50 = baseline_result.percentiles.get(50.0, baseline_result.median_ms)
             print(f"      📈 Percentiles: p99={format_time_ms(p99)}ms, p75={format_time_ms(p75)}ms, p50={format_time_ms(p50)}ms")
         
-        # Profile baseline if profiling is enabled
+        # Profile baseline if profiling is enabled (nsys, ncu)
         if enable_profiling and profiling_output_dir:
-            print(f"    Profiling baseline...", end=' ', flush=True)
-            nsys_path = profile_cuda_executable(
-                baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
-            )
-            if nsys_path:
-                result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
-                print(f"✓ saved")
+            print(f"    Profiling baseline...", flush=True)
+            profiler_results = []
+            baseline_metrics = {}
+            
+            # nsys profiling
+            if check_nsys_available():
+                print(f"      nsys...", end=' ', flush=True)
+                nsys_path = profile_cuda_executable(
+                    baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
+                )
+                if nsys_path:
+                    result_entry['baseline_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                    profiler_results.append("nsys✓")
+                    # Extract metrics
+                    nsys_metrics = extract_from_nsys_report(nsys_path)
+                    if nsys_metrics:
+                        baseline_metrics['nsys'] = nsys_metrics
+                else:
+                    profiler_results.append("nsys✗")
             else:
-                print(f"✗ failed")
+                profiler_results.append("nsys-")
+            
+            # ncu profiling
+            if check_ncu_available():
+                print(f"ncu...", end=' ', flush=True)
+                ncu_path = profile_cuda_executable_ncu(
+                    baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
+                )
+                if ncu_path:
+                    result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                    profiler_results.append("ncu✓")
+                    # Extract metrics
+                    ncu_metrics = extract_from_ncu_report(ncu_path)
+                    if ncu_metrics:
+                        baseline_metrics['ncu'] = ncu_metrics
+                else:
+                    profiler_results.append("ncu✗")
+            else:
+                profiler_results.append("ncu-")
+            
+            print(f" ({', '.join(profiler_results)})")
+            
+            # Display extracted metrics
+            if baseline_metrics:
+                print(f"      📈 Profiler Metrics:")
+                if 'nsys' in baseline_metrics:
+                    for key, value in baseline_metrics['nsys'].items():
+                        print(f"        nsys.{key}: {value:.2f}")
+                if 'ncu' in baseline_metrics:
+                    for key, value in baseline_metrics['ncu'].items():
+                        print(f"        ncu.{key}: {value:.2f}")
+                result_entry['baseline_profiler_metrics'] = baseline_metrics
         
         # Test each optimization
         for optimized_cu_path in optimized_cu_paths:
@@ -1028,18 +1535,62 @@ def test_chapter(chapter_dir: Path, enable_profiling: bool = False) -> Dict[str,
                 'speedup': speedup,
             }
             
-            # Profile optimized if profiling is enabled
+            # Profile optimized if profiling is enabled (nsys, ncu)
             if enable_profiling and profiling_output_dir:
-                print(f"\n    Profiling optimized...", end=' ', flush=True)
-                nsys_path = profile_cuda_executable(
-                    optimized_executable, chapter_dir, profiling_output_dir,
-                    variant=f"optimized_{technique}"
-                )
-                if nsys_path:
-                    opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
-                    print(f"✓ saved")
+                print(f"\n    Profiling optimized...", flush=True)
+                profiler_results = []
+                optimized_metrics = {}
+                
+                # nsys profiling
+                if check_nsys_available():
+                    print(f"      nsys...", end=' ', flush=True)
+                    nsys_path = profile_cuda_executable(
+                        optimized_executable, chapter_dir, profiling_output_dir,
+                        variant=f"optimized_{technique}"
+                    )
+                    if nsys_path:
+                        opt_result['optimized_nsys_rep'] = str(nsys_path.relative_to(chapter_dir.parent))
+                        profiler_results.append("nsys✓")
+                        # Extract metrics
+                        nsys_metrics = extract_from_nsys_report(nsys_path)
+                        if nsys_metrics:
+                            optimized_metrics['nsys'] = nsys_metrics
+                    else:
+                        profiler_results.append("nsys✗")
                 else:
-                    print(f"✗ failed")
+                    profiler_results.append("nsys-")
+                
+                # ncu profiling
+                if check_ncu_available():
+                    print(f"ncu...", end=' ', flush=True)
+                    ncu_path = profile_cuda_executable_ncu(
+                        optimized_executable, chapter_dir, profiling_output_dir,
+                        variant=f"optimized_{technique}"
+                    )
+                    if ncu_path:
+                        opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(chapter_dir.parent))
+                        profiler_results.append("ncu✓")
+                        # Extract metrics
+                        ncu_metrics = extract_from_ncu_report(ncu_path)
+                        if ncu_metrics:
+                            optimized_metrics['ncu'] = ncu_metrics
+                    else:
+                        profiler_results.append("ncu✗")
+                else:
+                    profiler_results.append("ncu-")
+                
+                print(f" ({', '.join(profiler_results)})")
+                
+                # Display extracted metrics
+                if optimized_metrics:
+                    print(f"        📈 Profiler Metrics:")
+                    if 'nsys' in optimized_metrics:
+                        for key, value in optimized_metrics['nsys'].items():
+                            print(f"          nsys.{key}: {value:.2f}")
+                    if 'ncu' in optimized_metrics:
+                        for key, value in optimized_metrics['ncu'].items():
+                            print(f"          ncu.{key}: {value:.2f}")
+                    opt_result['optimized_profiler_metrics'] = optimized_metrics
             
             result_entry['optimizations'].append(opt_result)
             
@@ -1168,8 +1719,15 @@ def generate_markdown_report(results: List[Dict[str, Any]], output_path: Path) -
                 f.write(f"- Baseline: `{bench['baseline_file']}`")
                 if bench['baseline_time_ms']:
                     f.write(f" ({bench['baseline_time_ms']:.2f} ms)")
+                profiler_links = []
                 if bench.get('baseline_nsys_rep'):
-                    f.write(f" | [nsys-rep](./{bench['baseline_nsys_rep']})")
+                    profiler_links.append(f"[nsys](./{bench['baseline_nsys_rep']})")
+                if bench.get('baseline_ncu_rep'):
+                    profiler_links.append(f"[ncu](./{bench['baseline_ncu_rep']})")
+                if bench.get('baseline_torch_trace'):
+                    profiler_links.append(f"[torch](./{bench['baseline_torch_trace']})")
+                if profiler_links:
+                    f.write(f" | {' | '.join(profiler_links)}")
                 f.write("\n")
                 
                 if bench['status'] == 'failed':
@@ -1180,8 +1738,15 @@ def generate_markdown_report(results: List[Dict[str, Any]], output_path: Path) -
                     for opt in bench['optimizations']:
                         if opt['status'] == 'success':
                             f.write(f"- `{opt['file']}`: {opt['time_ms']:.2f} ms ({opt['speedup']:.2f}x speedup)")
+                            profiler_links = []
                             if opt.get('optimized_nsys_rep'):
-                                f.write(f" | [nsys-rep](./{opt['optimized_nsys_rep']})")
+                                profiler_links.append(f"[nsys](./{opt['optimized_nsys_rep']})")
+                            if opt.get('optimized_ncu_rep'):
+                                profiler_links.append(f"[ncu](./{opt['optimized_ncu_rep']})")
+                            if opt.get('optimized_torch_trace'):
+                                profiler_links.append(f"[torch](./{opt['optimized_torch_trace']})")
+                            if profiler_links:
+                                f.write(f" | {' | '.join(profiler_links)}")
                             f.write("\n")
                         elif opt['status'] == 'skipped':
                             f.write(f"- `{opt['file']}`: WARNING: **SKIPPED** - {opt.get('skip_reason', opt.get('error', 'Hardware/software limitation'))}\n")
@@ -1218,6 +1783,11 @@ def main():
         choices=['json', 'markdown', 'both'],
         default='both',
         help='Output format (default: both)'
+    )
+    parser.add_argument(
+        '--profile',
+        action='store_true',
+        help='Enable profiling (generates nsys .nsys-rep, ncu .ncu-rep, and PyTorch trace files for each benchmark)'
     )
     
     args = parser.parse_args()
@@ -1292,7 +1862,7 @@ def main():
         if not chapter_dir.exists():
             continue
         
-        result = test_chapter(chapter_dir)
+        result = test_chapter(chapter_dir, enable_profiling=args.profile)
         all_results.append(result)
     
     # Save results

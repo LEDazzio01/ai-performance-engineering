@@ -63,8 +63,16 @@ class BaselineRooflineBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without roofline analysis (many kernel launches)."""
-        torch.cuda.nvtx.range_push("baseline_roofline")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_roofline", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: No roofline analysis with many kernel launches
                 # Roofline: not used to measure arithmetic intensity
@@ -77,8 +85,7 @@ class BaselineRooflineBenchmark(Benchmark):
                 # - No bottleneck identification (roofline)
                 # - Many kernel launches (high overhead)
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -60,8 +60,16 @@ class BaselineStreamsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential kernel execution."""
-        torch.cuda.nvtx.range_push("baseline_streams")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_streams", enable=enable_nvtx):
             # Baseline: Sequential execution - kernels run one after another
             # Streams would allow concurrent execution
             # This baseline does not use streams
@@ -76,8 +84,7 @@ class BaselineStreamsBenchmark(Benchmark):
             
             # Baseline: No streams benefits
             # Sequential execution (inefficient)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

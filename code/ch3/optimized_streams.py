@@ -24,13 +24,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
-
 
 class OptimizedStreamsBenchmark(Benchmark):
     """Concurrent execution - kernels overlap.
@@ -51,6 +49,7 @@ class OptimizedStreamsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and streams."""
+        
         torch.manual_seed(42)
         # Optimization: CUDA streams for concurrent execution
         # Streams allow kernels to execute concurrently
@@ -70,11 +69,18 @@ class OptimizedStreamsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Concurrent kernel execution with streams."""
-        torch.cuda.nvtx.range_push("optimized_streams")
-        try:
-            # Optimization: Concurrent execution with streams
-            # Streams: launch kernels on different streams - they can overlap
-            # Better GPU utilization through overlapping execution
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_streams", enable=enable_nvtx):
+    # Optimization: Concurrent execution with streams
+    # Streams: launch kernels on different streams - they can overlap
+    # Better GPU utilization through overlapping execution
             with torch.cuda.stream(self.stream1):
                 self.data1 = self.data1 * 2.0
             
@@ -84,15 +90,14 @@ class OptimizedStreamsBenchmark(Benchmark):
             with torch.cuda.stream(self.stream3):
                 self.data3 = self.data3 * 2.0
             
-            # Synchronize all streams
+    # Synchronize all streams
             torch.cuda.synchronize()
             
-            # Optimization: Streams benefits
-            # - Concurrent kernel execution (streams)
-            # - Better GPU utilization
-            # - Overlapping execution for improved performance
-        finally:
-            torch.cuda.nvtx.range_pop()
+    # Optimization: Streams benefits
+    # - Concurrent kernel execution (streams)
+    # - Better GPU utilization
+    # - Overlapping execution for improved performance
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -121,11 +126,9 @@ class OptimizedStreamsBenchmark(Benchmark):
             return "Data3 tensor not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedStreamsBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -144,7 +147,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

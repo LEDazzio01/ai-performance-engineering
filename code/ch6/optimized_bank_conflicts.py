@@ -16,7 +16,6 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -29,13 +28,11 @@ from common.python.benchmark_harness import (
 # Import CUDA extension
 from ch6.cuda_extensions import load_bank_conflicts_extension
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch6")
     return torch.device("cuda")
-
 
 class OptimizedBankConflictsBenchmark(Benchmark):
     """Padding solution - no bank conflicts (uses CUDA extension)."""
@@ -49,6 +46,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
+        
         # Load CUDA extension (will compile on first call)
         self._extension = load_bank_conflicts_extension()
         
@@ -59,12 +57,18 @@ class OptimizedBankConflictsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Padding eliminates bank conflicts."""
-        torch.cuda.nvtx.range_push("optimized_bank_conflicts_padded")
-        try:
-            # Call CUDA extension kernel with padding
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_bank_conflicts_padded", enable=enable_nvtx):
+    # Call CUDA extension kernel with padding
             self._extension.bank_conflicts_padded(self.output, self.input)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -93,11 +97,9 @@ class OptimizedBankConflictsBenchmark(Benchmark):
             return "Output contains non-finite values"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedBankConflictsBenchmark()
-
 
 if __name__ == '__main__':
     benchmark = get_benchmark()

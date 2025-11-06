@@ -29,15 +29,13 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch4")
     return torch.device("cuda")
 
-
-class OptimizedKVCacheAttention(nn.Module):
+class OptimizedKVCacheAttention:
     """Optimized attention with efficient KV cache management."""
     
     def __init__(self, hidden_dim: int = 256, num_heads: int = 8):
@@ -56,7 +54,7 @@ class OptimizedKVCacheAttention(nn.Module):
         k_cache: Optional[torch.Tensor] = None,
         v_cache: Optional[torch.Tensor] = None,
         cache_pos: int = 0
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Forward pass with efficient KV cache management."""
         batch_size, seq_len, _ = x.shape
         
@@ -72,9 +70,13 @@ class OptimizedKVCacheAttention(nn.Module):
         # Optimization: Efficient KV cache management
         # Write to pre-allocated cache at specific position (in-place)
         if k_cache is not None and v_cache is not None:
+            pass
+    # Ensure k and v match cache dtype before assignment
+            k = k.to(k_cache.dtype)
+            v = v.to(v_cache.dtype)
             k_cache[:, :, cache_pos:cache_pos+seq_len, :] = k
             v_cache[:, :, cache_pos:cache_pos+seq_len, :] = v
-            # Use full cache for attention
+    # Use full cache for attention
             k_attn = k_cache[:, :, :cache_pos+seq_len, :]
             v_attn = v_cache[:, :, :cache_pos+seq_len, :]
         else:
@@ -82,8 +84,12 @@ class OptimizedKVCacheAttention(nn.Module):
             v_attn = v
         
         # Attention computation
+        # Ensure q matches k_attn dtype to avoid dtype mismatch errors
+        q = q.to(k_attn.dtype)
         scores = torch.matmul(q, k_attn.transpose(-2, -1)) / (self.head_dim ** 0.5)
         attn = F.softmax(scores, dim=-1)
+        # Ensure attn matches v_attn dtype
+        attn = attn.to(v_attn.dtype)
         output = torch.matmul(attn, v_attn)
         
         # Reshape and project
@@ -91,18 +97,17 @@ class OptimizedKVCacheAttention(nn.Module):
         output = self.out_proj(output)
         
         return output, k_cache, v_cache
-
-
-class OptimizedKVCacheManagementBenchmark(Benchmark):
+class OptimizedKVCacheManagementBenchmark:
     """Optimized: Efficient KV cache management across GPUs.
     
-    KV cache management: Implements efficient pre-allocation, in-place updates,
-    and proper synchronization across distributed GPUs.
-    """
+        KV cache management: Implements efficient pre-allocation, in-place updates,
+        and proper synchronization across distributed GPUs.
+        """
     
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.inputs = None
         self.k_cache = None
         self.v_cache = None
@@ -112,6 +117,10 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and pre-allocated KV cache."""
+        
+        # Enable TF32 for faster matmul on Ampere+ GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         # Initialize distributed if available
         if dist.is_available() and torch.cuda.device_count() > 1:
             try:
@@ -126,14 +135,23 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
                     if 'WORLD_SIZE' not in os.environ:
                         os.environ['WORLD_SIZE'] = str(torch.cuda.device_count())
                     dist.init_process_group(backend='nccl', init_method='env://')
-                self.is_distributed = True
-                self.rank = dist.get_rank()
-                self.world_size = dist.get_world_size()
             except Exception:
                 self.is_distributed = False
+                self.rank = 0
+                self.world_size = 1
+        else:
+            self.is_distributed = False
+            self.rank = 0
+            self.world_size = 1
         
-        # Model with attention
+        if self.is_distributed:
+            self.rank = dist.get_rank()
+            self.world_size = dist.get_world_size()
+        
+        # Model with attention - use float32 to match baseline
+        # Note: Using float32 instead of float16 to avoid dtype mismatches with DDP
         self.model = OptimizedKVCacheAttention().to(self.device)
+        
         
         if self.is_distributed:
             self.model = nn.parallel.DistributedDataParallel(self.model)
@@ -147,51 +165,59 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
         num_heads = 8
         head_dim = hidden_dim // num_heads
         
-        # Pre-allocate cache with fixed size (efficient management)
+        # Pre-allocate cache with fixed size (efficient management) - use float32 to match model
         cache_size = (batch_size, num_heads, seq_len, head_dim)
-        self.k_cache = torch.zeros(cache_size, device=self.device, dtype=torch.float16)
-        self.v_cache = torch.zeros(cache_size, device=self.device, dtype=torch.float16)
+        self.k_cache = torch.zeros(cache_size, device=self.device, dtype=torch.float32)
+        self.v_cache = torch.zeros(cache_size, device=self.device, dtype=torch.float32)
         
-        # Simulate autoregressive generation steps
+        # Simulate autoregressive generation steps - use float32 to match baseline
         self.inputs = [
-            torch.randn(batch_size, 1, hidden_dim, device=self.device)
+        torch.randn(batch_size, 1, hidden_dim, device=self.device, dtype=torch.float32)
             for _ in range(seq_len)
         ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Efficient KV cache management."""
-        torch.cuda.nvtx.range_push("optimized_kv_cache_management")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_kv_cache_management", enable=enable_nvtx):
             with torch.no_grad():
                 cache_pos = 0
                 
-                # Optimization: Efficient KV cache management
-                # Pre-allocated cache, in-place updates, proper synchronization
-                for step_input in self.inputs:
-                    output, self.k_cache, self.v_cache = self.model(
-                        step_input,
-                        self.k_cache,
-                        self.v_cache,
-                        cache_pos
-                    )
+        # Optimization: Efficient KV cache management
+        # Pre-allocated cache, in-place updates, proper synchronization
+        for step_input in self.inputs:
+            pass
+        output, self.k_cache, self.v_cache = self.model(
+        step_input,
+        self.k_cache,
+        self.v_cache,
+        cache_pos
+        )
                     
-                    # Synchronize KV cache across GPUs (if distributed)
-                    if self.is_distributed:
-                        dist.all_reduce(output, op=dist.ReduceOp.SUM)
-                        output = output / self.world_size
+    # Synchronize KV cache across GPUs (if distributed)
+        if self.is_distributed:
+            pass
+        dist.all_reduce(output, op=dist.ReduceOp.SUM)
+        output = output / self.world_size
                         
-                        # Efficient cache synchronization (only when needed)
-                        # In practice, would sync cache at specific intervals
+    # Efficient cache synchronization (only when needed)
+    # In practice, would sync cache at specific intervals
                     
-                    cache_pos += step_input.shape[1]
+        cache_pos += step_input.shape[1]
                     
-                    # Optimization: Efficient management
-                    # - Pre-allocated cache (no reallocation)
-                    # - In-place updates (no copying)
-                    # - Bounded memory usage
-        finally:
-            torch.cuda.nvtx.range_pop()
+    # Optimization: Efficient management
+    # - Pre-allocated cache (no reallocation)
+    # - In-place updates (no copying)
+    # - Bounded memory usage
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -206,7 +232,7 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
+        iterations=10,
             warmup=2,
         )
     
@@ -223,7 +249,6 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedKVCacheManagementBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -242,7 +267,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

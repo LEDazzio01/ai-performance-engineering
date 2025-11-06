@@ -24,7 +24,6 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def check_numa_nodes() -> int:
     """Check number of NUMA nodes."""
     try:
@@ -40,11 +39,11 @@ def check_numa_nodes() -> int:
                 if len(parts) >= 2:
                     return int(parts[1])
         return 1
-    except:
+    except Exception:
         return 1
 
 
-class OptimizedNUMAAwareBenchmark(Benchmark):
+class OptimizedNUMAAwareBenchmark:
     """Benchmark implementation with NUMA-aware allocation."""
     
     def __init__(self, size_mb: int = 512):
@@ -54,6 +53,7 @@ class OptimizedNUMAAwareBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: allocate memory with NUMA awareness."""
+        
         # NUMA-aware allocation - bind to local NUMA node
         # In practice, this is done via numactl --membind=N
         # For this benchmark, we simulate by allocating normally
@@ -80,7 +80,7 @@ class OptimizedNUMAAwareBenchmark(Benchmark):
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.nvtx.range_pop()
-            except ImportError:
+            except (ImportError, AttributeError):
                 pass
     
     def teardown(self) -> None:
@@ -90,7 +90,7 @@ class OptimizedNUMAAwareBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
         return BenchmarkConfig(
-            iterations=20,
+        iterations=20,
             warmup=5,
         )
     
@@ -105,11 +105,9 @@ class OptimizedNUMAAwareBenchmark(Benchmark):
             return "Data contains non-finite values"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedNUMAAwareBenchmark(size_mb=512)
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -129,7 +127,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

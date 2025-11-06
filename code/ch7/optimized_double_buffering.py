@@ -43,6 +43,18 @@ class OptimizedDoubleBufferingBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.buffer_a = None
         self.buffer_b = None
         self.inputs = None
@@ -50,6 +62,11 @@ class OptimizedDoubleBufferingBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and double buffers."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Double buffering - two buffers for overlap
         # Double buffering overlaps computation and data transfer
@@ -73,8 +90,16 @@ class OptimizedDoubleBufferingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Double buffering with overlap."""
-        torch.cuda.nvtx.range_push("optimized_double_buffering")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_double_buffering", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Double buffering
                 # Overlaps computation and data transfer using two buffers
@@ -105,8 +130,7 @@ class OptimizedDoubleBufferingBenchmark(Benchmark):
                 # - Overlaps computation and transfer
                 # - Better GPU utilization
                 # - Improved throughput through parallelism
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

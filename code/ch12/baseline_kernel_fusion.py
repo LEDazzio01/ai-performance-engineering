@@ -58,12 +58,19 @@ class BaselineKernelFusionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Separate kernel launches (3 memory round trips)."""
-        torch.cuda.nvtx.range_push("baseline_kernel_fusion_separate")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_kernel_fusion_separate", enable=enable_nvtx):
             # Call CUDA extension with separate kernels
             self._extension.separate_kernels(self.data, self.iterations)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

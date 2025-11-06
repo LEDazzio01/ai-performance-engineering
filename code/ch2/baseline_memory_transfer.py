@@ -53,12 +53,19 @@ class BaselineMemoryTransferBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Traditional H2D transfer over PCIe."""
-        torch.cuda.nvtx.range_push("baseline_memory_transfer_pcie")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_memory_transfer_pcie", enable=enable_nvtx):
             # Traditional synchronous copy (simulates PCIe transfer)
             self.device_data.copy_(self.host_data, non_blocking=False)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -56,15 +56,22 @@ class BaselineMemoryStandardBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - standard memory access."""
-        torch.cuda.nvtx.range_push("baseline_memory_standard")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_memory_standard", enable=enable_nvtx):
             # Standard sequential memory access (not optimized for HBM3e)
             # Simple element-wise operations
             self.result = self.data * 2.0 + 1.0
             # Force memory write
             self.result += 0.1
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

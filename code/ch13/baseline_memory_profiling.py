@@ -82,8 +82,16 @@ class BaselineMemoryProfilingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - memory profiling baseline."""
-        torch.cuda.nvtx.range_push("baseline_memory_profiling")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_memory_profiling", enable=enable_nvtx):
             # Forward pass (builds computation graph)
             outputs = self.model(self.inputs)
             loss = self.criterion(outputs, self.targets)
@@ -93,8 +101,7 @@ class BaselineMemoryProfilingBenchmark(Benchmark):
             
             # Track peak memory
             self.peak_memory_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.inputs, self.targets, self.criterion

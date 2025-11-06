@@ -71,10 +71,21 @@ class OptimizedInferenceDisaggregatedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.decode_model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.kv_cache = None
     
     def setup(self) -> None:
         """Setup: initialize separate decode model (prefill runs elsewhere)."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # In disaggregated architecture, decode service is separate
         # Prefill runs on different service/GPU
         self.decode_model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
@@ -90,13 +101,20 @@ class OptimizedInferenceDisaggregatedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - disaggregated (decode doesn't block on prefill)."""
-        torch.cuda.nvtx.range_push("optimized_inference_disaggregated")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_inference_disaggregated", enable=enable_nvtx):
             with torch.no_grad():
                 # Decode runs independently (can overlap with other prefills)
                 _ = self.decode_model.decode(self.kv_cache, num_tokens=16)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     def teardown(self) -> None:
         """Cleanup."""
         del self.decode_model, self.kv_cache

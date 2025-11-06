@@ -74,6 +74,11 @@ class OptimizedInferenceDisaggregatedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize separate prefill and decode models."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
         # In real disaggregated setup, these would be on different GPUs/nodes
@@ -94,8 +99,16 @@ class OptimizedInferenceDisaggregatedBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - disaggregated inference."""
-        torch.cuda.nvtx.range_push("optimized_inference_disaggregated")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_inference_disaggregated", enable=enable_nvtx):
             with torch.no_grad():
                 # Disaggregated: prefill and decode optimized separately
                 # 1. Prefill phase: dedicated GPU/node for batch processing
@@ -111,8 +124,7 @@ class OptimizedInferenceDisaggregatedBenchmark(Benchmark):
                     # Generate next token on decode-optimized resource
                     next_token = self.decode_model(current_token)
                     current_token = next_token[:, -1:, :]
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""
@@ -143,7 +155,7 @@ def get_benchmark() -> Benchmark:
 if __name__ == "__main__":
     benchmark = get_benchmark()
     harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
+    mode=BenchmarkMode.CUSTOM,
         config=benchmark.get_config()
     )
     result = harness.benchmark(benchmark)

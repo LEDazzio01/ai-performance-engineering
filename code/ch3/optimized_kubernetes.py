@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
-
 
 class OptimizedKubernetesBenchmark(Benchmark):
     """Optimized: Kubernetes orchestration for container scheduling.
@@ -43,12 +41,14 @@ class OptimizedKubernetesBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+
         self.input = None
         self.batch_size = 32
         self.kubernetes_yaml_paths = []
     
     def setup(self) -> None:
         """Setup: Initialize model with Kubernetes-optimized environment."""
+        
         torch.manual_seed(42)
         # Optimization: Kubernetes orchestration
         # Kubernetes provides container orchestration and scheduling
@@ -71,14 +71,15 @@ class OptimizedKubernetesBenchmark(Benchmark):
         # Kubernetes: always use larger batch size to demonstrate resource-aware optimization
         # In real Kubernetes, pod resource limits enable larger batches than baseline
         if k8s_optimized:
-            # Kubernetes: use resource limits to determine optimal batch size
-            # MIG pods allocate specific GPU slices, topology pods use affinity
-            # Simulate resource-aware sizing (in real K8s, read from downward API)
+            pass
+        # Kubernetes: use resource limits to determine optimal batch size
+        # MIG pods allocate specific GPU slices, topology pods use affinity
+        # Simulate resource-aware sizing (in real K8s, read from downward API)
             self.batch_size = 128  # Kubernetes: larger batch with dedicated resources
         else:
-            # Simulate Kubernetes resource-aware sizing for demonstration
-            # Even without K8s env vars, demonstrate the optimization pattern
-            # In real Kubernetes, this would be based on pod resource limits
+        # Simulate Kubernetes resource-aware sizing for demonstration
+        # Even without K8s env vars, demonstrate the optimization pattern
+        # In real Kubernetes, this would be based on pod resource limits
             self.batch_size = 128  # Kubernetes: larger batch (optimization benefit)
         
         self.model = nn.Sequential(
@@ -104,22 +105,29 @@ class OptimizedKubernetesBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with Kubernetes orchestration."""
-        torch.cuda.nvtx.range_push("optimized_kubernetes")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        with nvtx_range("optimized_kubernetes", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Kubernetes orchestration
-                # Kubernetes provides container orchestration and scheduling
-                # kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml configure resources
-                output = self.model(self.input)
+                pass
+        # Optimization: Kubernetes orchestration
+        # Kubernetes provides container orchestration and scheduling
+        # kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml configure resources
+        output = self.model(self.input)
                 
-                # Optimization: Kubernetes benefits
-                # - Container orchestration (Kubernetes)
-                # - Resource management and scheduling
-                # - Optimized GPU allocation from pod specs
-                # - Scalability and high availability
-                _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+        # Optimization: Kubernetes benefits
+        # - Container orchestration (Kubernetes)
+        # - Resource management and scheduling
+        # - Optimized GPU allocation from pod specs
+        # - Scalability and high availability
+        _ = output.sum()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -143,11 +151,9 @@ class OptimizedKubernetesBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedKubernetesBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -166,7 +172,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

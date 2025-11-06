@@ -69,8 +69,16 @@ class BaselineAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard attention computation."""
-        torch.cuda.nvtx.range_push("baseline_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard attention (scaled dot-product attention)
                 # Computes full attention matrix: O(seq_len^2) memory
@@ -79,8 +87,7 @@ class BaselineAttentionBenchmark(Benchmark):
                 
                 # Baseline: Attention computation without optimization
                 # Full attention matrix computed and stored (memory intensive)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

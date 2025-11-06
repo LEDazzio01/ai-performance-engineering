@@ -43,9 +43,10 @@ class BaselineGemmBenchmark(Benchmark):
         self.device = resolve_device()
         self.A = None
         self.B = None
-        self.m = 2048
-        self.n = 2048
-        self.k = 2048
+        # Match optimized version size for fair comparison
+        self.m = 4096
+        self.n = 4096
+        self.k = 4096
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -60,8 +61,12 @@ class BaselineGemmBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard GEMM."""
-        torch.cuda.nvtx.range_push("baseline_gemm")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        
+        with nvtx_range("baseline_gemm", enable=enable_nvtx):
             # Baseline: Standard GEMM (General Matrix Multiply)
             # GEMM: C = A @ B
             # Uses standard PyTorch matmul without optimization
@@ -69,8 +74,6 @@ class BaselineGemmBenchmark(Benchmark):
             
             # Baseline: No GEMM optimization
             # Standard matrix multiplication without hardware-specific optimizations
-        finally:
-            torch.cuda.nvtx.range_pop()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

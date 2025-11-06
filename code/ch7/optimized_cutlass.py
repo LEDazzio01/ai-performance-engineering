@@ -55,6 +55,14 @@ class OptimizedCutlassBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         # Optimization: CUTLASS-optimized GEMM
         # Uses torch.compile with CUTLASS backend for hardware-optimized kernels
@@ -64,17 +72,28 @@ class OptimizedCutlassBenchmark(Benchmark):
         
         # Optimization: Compile with CUTLASS backend
         # CUTLASS provides hardware-optimized GEMM kernels
+        # Select optimal compile mode based on GPU SM count
+        from common.python.compile_utils import get_optimal_compile_mode
+        compile_mode = get_optimal_compile_mode("max-autotune")
         self.compiled_matmul = torch.compile(
             lambda a, b: torch.matmul(a, b),
-            mode="max-autotune",
+            mode=compile_mode,
             backend="inductor"
         )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUTLASS-optimized GEMM."""
-        torch.cuda.nvtx.range_push("optimized_cutlass")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_cutlass", enable=enable_nvtx):
             # Optimization: CUTLASS-optimized GEMM
             # Uses torch.compile with CUTLASS backend
             # Leverages hardware-optimized kernels (tensor cores, optimized memory access)
@@ -85,8 +104,7 @@ class OptimizedCutlassBenchmark(Benchmark):
             # - Leverages tensor cores for acceleration
             # - Optimized memory access patterns
             # - Better performance through hardware-specific optimizations
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

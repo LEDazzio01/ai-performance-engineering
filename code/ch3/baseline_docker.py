@@ -65,8 +65,16 @@ class BaselineDockerBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without Docker."""
-        torch.cuda.nvtx.range_push("baseline_docker")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_docker", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard execution (no Docker)
                 # Docker provides containerization for consistent environments
@@ -77,8 +85,7 @@ class BaselineDockerBenchmark(Benchmark):
                 # Standard execution without containerization
                 # Docker would provide consistent environment and isolation
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

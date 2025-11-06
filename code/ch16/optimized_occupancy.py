@@ -45,10 +45,27 @@ class OptimizedOccupancyBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
     
     def setup(self) -> None:
         """Setup: Initialize model with high occupancy configuration."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: High occupancy configuration
         # Occupancy measures active threads per SM
@@ -66,8 +83,16 @@ class OptimizedOccupancyBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: High occupancy - large work per forward pass."""
-        torch.cuda.nvtx.range_push("optimized_occupancy_high")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_occupancy_high", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Large forward pass - high occupancy
                 # Process large amount of work per pass
@@ -82,8 +107,7 @@ class OptimizedOccupancyBenchmark(Benchmark):
                 # - Better GPU resource utilization
                 # - Improved inference performance through parallelism
                 # - Better hides memory latency with more active threads
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

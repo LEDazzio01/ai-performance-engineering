@@ -48,6 +48,11 @@ class OptimizedBankConflictsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and CUDA graph."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: Avoid bank conflicts with CUDA graphs
         # Bank conflicts: eliminated through contiguous access
@@ -79,8 +84,16 @@ class OptimizedBankConflictsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Bank conflict avoidance with CUDA graphs."""
-        torch.cuda.nvtx.range_push("optimized_bank_conflicts")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_bank_conflicts", enable=enable_nvtx):
             # Optimization: Bank conflicts avoided with CUDA graphs
             # Bank conflicts: contiguous access eliminates conflicts
             # CUDA graphs: replay captured kernels (low overhead)
@@ -94,8 +107,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
             # - No bank conflicts (contiguous access)
             # - Reduced kernel launch overhead (CUDA graphs)
             # - Better performance through graph replay
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

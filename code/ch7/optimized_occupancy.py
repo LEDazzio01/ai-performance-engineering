@@ -43,10 +43,27 @@ class OptimizedOccupancyBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
     
     def setup(self) -> None:
         """Setup: Initialize model with large input (high occupancy)."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: High occupancy - large input size
         # Occupancy measures GPU utilization (active warps / max warps)
@@ -64,8 +81,16 @@ class OptimizedOccupancyBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with high occupancy."""
-        torch.cuda.nvtx.range_push("optimized_occupancy")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_occupancy", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: High occupancy
                 # Large input provides sufficient work per kernel
@@ -78,8 +103,7 @@ class OptimizedOccupancyBenchmark(Benchmark):
                 # - Better performance through high occupancy
                 # - Improved GPU resource utilization
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

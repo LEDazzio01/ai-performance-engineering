@@ -42,21 +42,33 @@ class OptimizedComputeBoundBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data = torch.randn(self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Fused operations (high AI)."""
-        torch.cuda.nvtx.range_push("optimized_compute_bound")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_compute_bound", enable=enable_nvtx):
             # Fused operations - high arithmetic intensity
             # Each operation reuses data in registers, increasing FLOPs per byte
             result = torch.sin(self.data) * torch.cos(self.data)
             result = result * result + torch.sqrt(torch.abs(result))
             self.data = result * 0.95 + torch.exp(result * 0.001)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

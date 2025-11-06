@@ -67,8 +67,16 @@ class BaselineReinitCommBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Reinitialize NCCL every iteration."""
-        torch.cuda.nvtx.range_push("baseline_reinit_comm")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_reinit_comm", enable=enable_nvtx):
             # Anti-pattern: reinitialize NCCL every iteration
             if dist.is_initialized():
                 dist.destroy_process_group()
@@ -82,8 +90,7 @@ class BaselineReinitCommBenchmark(Benchmark):
             
             # Perform all-reduce
             dist.all_reduce(self.tensor)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

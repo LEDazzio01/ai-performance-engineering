@@ -9,6 +9,45 @@ import warnings
 import torch
 
 
+def get_optimal_compile_mode(preferred_mode: str = "max-autotune", sm_threshold: int = 68) -> str:
+    """
+    Get the optimal torch.compile mode based on GPU SM count.
+    
+    max-autotune requires >= 68 SMs (Streaming Multiprocessors) for GEMM operations.
+    GPUs with fewer SMs will fall back to reduce-overhead to avoid warnings.
+    
+    Parameters
+    ----------
+    preferred_mode:
+        The preferred compile mode (default: "max-autotune")
+    sm_threshold:
+        Minimum number of SMs required for max-autotune (default: 68)
+    
+    Returns
+    -------
+    str
+        The compile mode to use: "max-autotune" if GPU has enough SMs,
+        otherwise "reduce-overhead"
+    """
+    if preferred_mode != "max-autotune":
+        return preferred_mode
+    
+    if not torch.cuda.is_available():
+        return "reduce-overhead"
+    
+    try:
+        device_index = torch.cuda.current_device()
+        num_sms = torch.cuda.get_device_properties(device_index).multi_processor_count
+        
+        if num_sms >= sm_threshold:
+            return "max-autotune"
+        else:
+            return "reduce-overhead"
+    except Exception:
+        # If we can't determine SM count, use reduce-overhead to be safe
+        return "reduce-overhead"
+
+
 def compile_model(module: torch.nn.Module, **_: Any) -> torch.nn.Module:
     """
     Placeholder compile helper.

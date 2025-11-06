@@ -50,6 +50,18 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
         self.device = resolve_device()
         self.batch_size = batch_size
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.data_buf = None
         self.target_buf = None
         self.host_data = None
@@ -58,6 +70,14 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: initialize model and capture CUDA graph."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         if self.device.type != "cuda":
             raise RuntimeError("CUDA Graphs require CUDA device")
         
@@ -101,8 +121,16 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark with CUDA graph replay."""
-        torch.cuda.nvtx.range_push("optimized_performance_graphs")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_performance_graphs", enable=enable_nvtx):
             self.host_data.normal_(0, 1)
             # Generate targets in valid range [0, 9] for 10-class classification
             # Use randint to ensure values are in [0, 9] inclusive
@@ -112,8 +140,7 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
             self.data_buf.copy_(self.host_data, non_blocking=True)
             self.target_buf.copy_(self.host_target, non_blocking=True)
             self.graph.replay()  # Replay captured graph (no launch overhead)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

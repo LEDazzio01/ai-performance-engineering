@@ -59,8 +59,16 @@ class BaselineStorageCpuBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: CPU-mediated I/O."""
-        torch.cuda.nvtx.range_push("baseline_storage_cpu")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_storage_cpu", enable=enable_nvtx):
             # Write: GPU → CPU → Storage
             cpu_data = self.data.cpu().numpy()
             np.save(self.filepath, cpu_data)
@@ -68,8 +76,7 @@ class BaselineStorageCpuBenchmark(Benchmark):
             # Read: Storage → CPU → GPU
             cpu_loaded = np.load(self.filepath)
             self.data = torch.from_numpy(cpu_loaded).to(self.device)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

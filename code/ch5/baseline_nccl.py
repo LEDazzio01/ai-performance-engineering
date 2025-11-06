@@ -56,8 +56,16 @@ class BaselineNcclBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without NCCL."""
-        torch.cuda.nvtx.range_push("baseline_nccl")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_nccl", enable=enable_nvtx):
             # Baseline: No NCCL - CPU-based communication
             # Simulates inefficient communication without NCCL
             result = self.data.sum()
@@ -70,8 +78,7 @@ class BaselineNcclBenchmark(Benchmark):
             # Baseline: No NCCL benefits
             # CPU-based communication (inefficient)
             _ = final_result
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

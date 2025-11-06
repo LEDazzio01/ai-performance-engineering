@@ -1,3 +1,4 @@
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -9,7 +10,6 @@ from pathlib import Path
 
 """Demonstrate how monitored_barrier surfaces stragglers."""
 
-from __future__ import annotations
 
 import datetime
 import os

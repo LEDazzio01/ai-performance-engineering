@@ -70,8 +70,16 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard autoregressive decoding."""
-        torch.cuda.nvtx.range_push("baseline_speculative_decoding")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard autoregressive decoding
                 # Generate tokens sequentially, one at a time
@@ -83,8 +91,7 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
                 output = self.model(embedded_input, memory)
                 # Baseline: sequential processing without speculation
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

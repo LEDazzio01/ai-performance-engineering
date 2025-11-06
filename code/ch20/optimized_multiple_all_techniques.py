@@ -17,12 +17,10 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-# Import arch_config to apply Triton patch for sm_12x support
-# The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
 try:
-    import arch_config  # noqa: F401
+    import ch20.arch_config  # noqa: F401 - Apply chapter defaults
 except ImportError:
-    pass  # Continue if arch_config not available
+    pass
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -68,6 +66,11 @@ class OptimizedAllTechniquesBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: initialize model, compile, and capture CUDA graph."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # Create model with FP16
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().eval()
         
@@ -105,15 +108,22 @@ class OptimizedAllTechniquesBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
-        torch.cuda.nvtx.range_push("optimized_multiple_all_techniques")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_multiple_all_techniques", enable=enable_nvtx):
             with torch.no_grad():
                 if self.graph:
                     self.graph.replay()
                 else:
                     _ = self.model(self.x)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

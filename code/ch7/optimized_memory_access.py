@@ -44,6 +44,11 @@ class OptimizedMemoryAccessBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.input = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.output = torch.empty(self.N, dtype=torch.float32, device=self.device)
@@ -51,13 +56,20 @@ class OptimizedMemoryAccessBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Coalesced memory access pattern."""
-        torch.cuda.nvtx.range_push("optimized_memory_access_coalesced")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_memory_access_coalesced", enable=enable_nvtx):
             # Coalesced access - threads access consecutive memory locations
             # Hardware can combine 32 consecutive accesses into single 128-byte transaction
             self.output = self.input * 2.0
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

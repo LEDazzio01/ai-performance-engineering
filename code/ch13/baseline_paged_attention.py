@@ -85,8 +85,16 @@ class BaselinePagedAttentionBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Attention without paged attention."""
-        torch.cuda.nvtx.range_push("baseline_paged_attention")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_paged_attention", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Contiguous KV cache (no paging)
                 # Memory is allocated contiguously, causing fragmentation
@@ -111,8 +119,7 @@ class BaselinePagedAttentionBenchmark(Benchmark):
                     
                     # Baseline: No paged attention
                     # Contiguous allocation causes memory waste for variable-length sequences
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -43,19 +43,31 @@ class OptimizedOccupancyBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data = torch.randn(self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: High occupancy - single large kernel launch."""
-        torch.cuda.nvtx.range_push("optimized_occupancy_high")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_occupancy_high", enable=enable_nvtx):
             # Single large kernel launch - high occupancy
             # All threads work in parallel, maximizing SM utilization
             self.data = self.data * 2.0
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

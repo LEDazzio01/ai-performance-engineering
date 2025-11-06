@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+from __future__ import annotations
 import pathlib
 import sys
 
@@ -76,7 +76,6 @@ When NOT to Use:
 - Multi-node deployments without fast interconnect
 """
 
-from __future__ import annotations
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -47,6 +47,11 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         self._extension = load_cuda_graphs_extension()
         
         torch.manual_seed(42)
@@ -55,11 +60,18 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUDA graph replay."""
-        torch.cuda.nvtx.range_push("optimized_cuda_graphs_replay")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_cuda_graphs_replay", enable=enable_nvtx):
             self._extension.graph_replay(self.data, self.iterations)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

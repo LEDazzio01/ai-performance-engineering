@@ -84,8 +84,16 @@ class BaselineInferenceMonolithicBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - monolithic inference."""
-        torch.cuda.nvtx.range_push("baseline_inference_monolithic")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_inference_monolithic", enable=enable_nvtx):
             with torch.no_grad():
                 # Monolithic: prefill and decode on same GPU sequentially
                 # 1. Prefill phase (process entire prompt)
@@ -98,8 +106,7 @@ class BaselineInferenceMonolithicBenchmark(Benchmark):
                     # Generate next token
                     next_token = self.model(current_token)
                     current_token = next_token[:, -1:, :]
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

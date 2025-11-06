@@ -18,6 +18,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
+    pass
 except Exception:  # pragma: no cover - optional per-environment tweak
     arch_config = None  # Graceful fallback if arch_config is absent
 

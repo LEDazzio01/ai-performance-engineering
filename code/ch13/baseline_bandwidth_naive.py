@@ -60,8 +60,16 @@ class BaselineBandwidthNaiveBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - naive bandwidth usage."""
-        torch.cuda.nvtx.range_push("baseline_bandwidth_naive")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_bandwidth_naive", enable=enable_nvtx):
             # Naive pattern: uncoalesced access via strided operations
             # This pattern results in poor bandwidth utilization
             for i in range(0, self.size, 1024):  # Strided access
@@ -70,8 +78,7 @@ class BaselineBandwidthNaiveBenchmark(Benchmark):
             # Additional unnecessary memory transfers
             temp = self.C.clone()  # Unnecessary copy
             self.C = temp * 0.5    # Write back
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Cleanup."""

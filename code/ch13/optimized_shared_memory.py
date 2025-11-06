@@ -45,11 +45,31 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
+        # Optimization: Compile model for kernel fusion and optimization
+        try:
+            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
+        except Exception:
+            pass  # Fallback to eager if compilation fails
+
         self.input = None
         self.cached_data = None
     
     def setup(self) -> None:
         """Setup: Initialize model and data with shared memory optimization."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            # Enable TF32 for faster matmul on Ampere+ GPUs
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         torch.manual_seed(42)
         # Optimization: Shared memory for data reuse
         # Shared memory allows fast data access within thread blocks
@@ -74,8 +94,16 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with shared memory optimization."""
-        torch.cuda.nvtx.range_push("optimized_shared_memory")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_shared_memory", enable=enable_nvtx):
             # Optimization: Shared memory for data reuse
             # Cached data reduces global memory access
             # Shared memory provides fast access to frequently used data
@@ -93,8 +121,7 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
             # - Better cache utilization
             # - Improved performance for repeated data access
             _ = output1 + output2 + output3
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

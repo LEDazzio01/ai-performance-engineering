@@ -51,6 +51,11 @@ class OptimizedNvlinkBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors and NVLink with CUDA graphs."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         # Optimization: NVLink with CUDA graphs
         # NVLink: high-speed GPU-to-GPU communication
@@ -154,8 +159,16 @@ class OptimizedNvlinkBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: NVLink-optimized communication with CUDA graphs."""
-        torch.cuda.nvtx.range_push("optimized_nvlink")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_nvlink", enable=enable_nvtx):
             num_gpus = torch.cuda.device_count()
             if num_gpus >= 2:
                 # Multi-GPU: NVLink-optimized transfer with CUDA graphs
@@ -182,8 +195,7 @@ class OptimizedNvlinkBenchmark(Benchmark):
             # - High-speed GPU-to-GPU communication (NVLink)
             # - Reduced kernel launch overhead (CUDA graphs)
             # - Better performance through graph replay
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

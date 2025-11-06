@@ -64,8 +64,16 @@ class BaselineMoeBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Dense model (no MoE)."""
-        torch.cuda.nvtx.range_push("baseline_moe")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("baseline_moe", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Dense model - all parameters active
                 # MoE would use sparse activation - only selected experts
@@ -76,8 +84,7 @@ class BaselineMoeBenchmark(Benchmark):
                 # All parameters process every input
                 # Inefficient computation for large models
                 _ = output.sum()
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

@@ -46,6 +46,11 @@ class OptimizedStorageGdsBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data and create temp file."""
+        
+        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data = torch.randn(self.size, device=self.device, dtype=torch.float32)
         
@@ -58,16 +63,23 @@ class OptimizedStorageGdsBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Simulated GDS I/O (direct GPU-to-storage)."""
-        torch.cuda.nvtx.range_push("optimized_storage_gds")
-        try:
+        # Use conditional NVTX ranges - only enabled when profiling
+
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+
+        with nvtx_range("optimized_storage_gds", enable=enable_nvtx):
             # Simulated GDS: Direct GPU-to-storage (faster than CPU-mediated)
             # In real GDS: Direct GPU memory → Storage (bypasses CPU)
             # Here we simulate by using more efficient transfer
             cpu_data = self.data.cpu()
             # Simulate direct write (in real GDS would use kvikio/cufile)
             self.data = cpu_data.to(self.device, non_blocking=True)
-        finally:
-            torch.cuda.nvtx.range_pop()
+
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
