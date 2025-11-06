@@ -9,6 +9,8 @@ Usage:
     python benchmark.py --chapter 12 --format json # Run ch12, output JSON only
     python benchmark.py --profile                  # Enable nsys profiling (generates .nsys-rep files)
     python benchmark.py --chapter 1 --profile       # Run ch1 with profiling enabled
+    python benchmark.py --suite-timeout 7200        # Set suite timeout to 2 hours (default: 4 hours)
+    python benchmark.py --suite-timeout 0          # Disable suite timeout (run until completion)
 """
 
 import sys
@@ -92,7 +94,7 @@ def ensure_peak_benchmarks_exist():
         print("   Continuing with benchmarks (using hardcoded targets if available)...")
 
 
-def run_benchmarks(chapter='all', format='both', enable_profiling=False):
+def run_benchmarks(chapter='all', format='both', enable_profiling=False, suite_timeout_seconds=None):
     """Run all benchmarks - discover, run, and summarize results.
     
     THIS IS THE DEFAULT ACTION WHEN RUNNING benchmark.py
@@ -101,6 +103,8 @@ def run_benchmarks(chapter='all', format='both', enable_profiling=False):
         chapter: Chapter to run ('all' or specific chapter like 'ch1')
         format: Output format ('json', 'markdown', or 'both')
         enable_profiling: If True, generate nsys-rep files alongside benchmarks
+        suite_timeout_seconds: Overall timeout for entire suite in seconds (default: 14400 = 4 hours)
+                              Set to None to disable timeout
     """
     dump_environment_and_capabilities()
 
@@ -120,6 +124,20 @@ def run_benchmarks(chapter='all', format='both', enable_profiling=False):
     print("RUNNING ALL BENCHMARKS")
     if enable_profiling:
         print("PROFILING ENABLED: nsys-rep files will be generated")
+    
+    # Set realistic default timeout: ~4 hours (14400 seconds)
+    # With 223 benchmark pairs × 2 benchmarks × 15s timeout = ~111 minutes minimum
+    # Plus overhead for discovery, setup, teardown, compilation, etc. = ~2-3 hours total
+    # 4 hours provides comfortable margin for profiling, slower systems, etc.
+    if suite_timeout_seconds is None:
+        suite_timeout_seconds = 14400  # 4 hours default
+    
+    if suite_timeout_seconds > 0:
+        timeout_hours = suite_timeout_seconds / 3600
+        print(f"SUITE TIMEOUT: {timeout_hours:.1f} hours ({suite_timeout_seconds} seconds)")
+        print("  (Individual benchmarks have 15s timeout to prevent hangs)")
+    else:
+        print("SUITE TIMEOUT: Disabled (will run until completion)")
     print("=" * 80)
     print()
     
@@ -138,14 +156,51 @@ def run_benchmarks(chapter='all', format='both', enable_profiling=False):
             if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
         ])
     
-    # Test all chapters
+    # Test all chapters with suite-level timeout protection
+    import signal
+    import time
+    
+    start_time = time.time()
     all_results = []
-    for chapter_dir in chapter_dirs:
-        if not chapter_dir.exists():
-            continue
-        
-        result = test_chapter(chapter_dir, enable_profiling=enable_profiling)
-        all_results.append(result)
+    suite_timed_out = False
+    
+    def timeout_handler(signum, frame):
+        nonlocal suite_timed_out
+        suite_timed_out = True
+        elapsed = time.time() - start_time
+        print(f"\n{'='*80}")
+        print(f"SUITE TIMEOUT: Benchmark suite exceeded {suite_timeout_seconds}s timeout")
+        print(f"  Elapsed time: {elapsed/3600:.2f} hours")
+        print(f"  Chapters completed: {len(all_results)}")
+        print(f"{'='*80}\n")
+        raise TimeoutError(f"Suite timeout after {suite_timeout_seconds} seconds")
+    
+    # Set up timeout signal handler if timeout is enabled
+    if suite_timeout_seconds > 0:
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(suite_timeout_seconds)
+    
+    try:
+        for chapter_dir in chapter_dirs:
+            if not chapter_dir.exists():
+                continue
+            
+            # Check if we've exceeded timeout
+            if suite_timeout_seconds > 0:
+                elapsed = time.time() - start_time
+                if elapsed >= suite_timeout_seconds:
+                    print(f"\nWARNING: Approaching suite timeout, skipping remaining chapters")
+                    break
+            
+            result = test_chapter(chapter_dir, enable_profiling=enable_profiling)
+            all_results.append(result)
+    except (TimeoutError, KeyboardInterrupt):
+        suite_timed_out = True
+        print("\nBenchmark suite interrupted")
+    finally:
+        # Cancel timeout alarm
+        if suite_timeout_seconds > 0:
+            signal.alarm(0)
     
     # Save results
     output_json = repo_root / 'benchmark_test_results.json'
@@ -224,11 +279,15 @@ def main():
     parser.add_argument('--chapter', type=str, default='all', help='Chapter to run (e.g., 12, ch12, or "all") (default: all)')
     parser.add_argument('--format', choices=['json', 'markdown', 'both'], default='both', help='Output format (default: both)')
     parser.add_argument('--profile', action='store_true', help='Enable nsys profiling (generates .nsys-rep files alongside benchmarks)')
+    parser.add_argument('--suite-timeout', type=int, default=14400, 
+                       help='Overall timeout for entire suite in seconds (default: 14400 = 4 hours). Set to 0 to disable.')
     
     args = parser.parse_args()
     
     # Run benchmarks by default
-    run_benchmarks(chapter=args.chapter, format=args.format, enable_profiling=args.profile)
+    suite_timeout = args.suite_timeout if args.suite_timeout > 0 else None
+    run_benchmarks(chapter=args.chapter, format=args.format, enable_profiling=args.profile, 
+                   suite_timeout_seconds=suite_timeout)
 
 
 if __name__ == '__main__':

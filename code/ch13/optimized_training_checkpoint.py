@@ -27,13 +27,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch13")
     return torch.device("cuda")
-
 
 class DeepModel(nn.Module):
     """Deep model with gradient checkpointing."""
@@ -55,7 +53,6 @@ class DeepModel(nn.Module):
                 x = torch.relu(layer(x))
         return x
 
-
 class OptimizedCheckpointBenchmark(Benchmark):
     """Benchmark implementation following Benchmark protocol."""
     
@@ -64,15 +61,9 @@ class OptimizedCheckpointBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.inputs = None
         self.targets = None
@@ -119,7 +110,6 @@ class OptimizedCheckpointBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_training_checkpoint", enable=enable_nvtx):
             self.optimizer.zero_grad()
             outputs = self.model(self.inputs)
@@ -160,11 +150,9 @@ class OptimizedCheckpointBenchmark(Benchmark):
             return f"Model forward pass failed: {e}"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedCheckpointBenchmark()
-
 
 def main() -> None:
     """Standalone execution with timing."""
@@ -188,7 +176,6 @@ def main() -> None:
     print(f"Std: {result.std_ms:.3f} ms")
     print("Status: Checkpointing (30-50% memory reduction, 10-30% slower)")
     print("Benefit: Enables training larger models")
-
 
 if __name__ == "__main__":
     main()

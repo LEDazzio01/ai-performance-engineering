@@ -18,7 +18,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -28,13 +27,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch13")
     return torch.device("cuda")
-
 
 def quantize_to_fp8(x: torch.Tensor) -> torch.Tensor:
     """Quantize tensor to FP8 (E4M3FN format) for GB10."""
@@ -51,7 +48,6 @@ def quantize_to_fp8(x: torch.Tensor) -> torch.Tensor:
     x_clamped = torch.clamp(x_scaled, -448.0, 448.0)
     x_quantized = (x_clamped * 8.0).round() / 8.0
     return x_quantized * scale
-
 
 class FP8Linear(nn.Module):
     """FP8 quantized linear layer."""
@@ -81,7 +77,6 @@ class FP8Linear(nn.Module):
         else:
             weight = self.weight
         return nn.functional.linear(x, weight, self.bias)
-
 
 class SimpleTransformerFP8(nn.Module):
     """Simple transformer with FP8 quantization."""
@@ -130,7 +125,6 @@ class SimpleTransformerFP8(nn.Module):
         
         return x
 
-
 class OptimizedFP8Benchmark(Benchmark):
     """FP8 precision optimization - faster training."""
     
@@ -139,15 +133,9 @@ class OptimizedFP8Benchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.inputs = None
         self.optimizer = None
@@ -205,7 +193,6 @@ class OptimizedFP8Benchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_precision_fp8", enable=enable_nvtx):
             self.optimizer.zero_grad()
             outputs = self.model(self.inputs)
@@ -232,11 +219,9 @@ class OptimizedFP8Benchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedFP8Benchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

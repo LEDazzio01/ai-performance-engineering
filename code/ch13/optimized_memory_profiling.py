@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -29,13 +28,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch13")
     return torch.device("cuda")
-
 
 class OptimizedModel(nn.Module):
     """Model with gradient checkpointing for memory optimization."""
@@ -58,7 +55,6 @@ class OptimizedModel(nn.Module):
         """Helper function for checkpointing."""
         return self.relu(self.fc1(x))
 
-
 class OptimizedMemoryProfilingBenchmark(Benchmark):
     """Optimized memory profiling - uses gradient checkpointing."""
     
@@ -67,15 +63,9 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.inputs = None
         self.targets = None
@@ -126,7 +116,6 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_memory_profiling", enable=enable_nvtx):
             # Forward pass (checkpointing reduces memory)
             outputs = self.model(self.inputs)
@@ -157,11 +146,9 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
             return "Model not initialized"
         return None and self.peak_memory_mb > 0
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedMemoryProfilingBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

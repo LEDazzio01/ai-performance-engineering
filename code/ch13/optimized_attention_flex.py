@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -29,13 +28,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch13")
     return torch.device("cuda")
-
 
 class FlexAttention(nn.Module):
     """FlexAttention implementation using optimized kernels."""
@@ -71,7 +68,6 @@ class FlexAttention(nn.Module):
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(out)
 
-
 class OptimizedAttentionFlexBenchmark(Benchmark):
     """FlexAttention optimization - optimized kernels."""
     
@@ -80,15 +76,9 @@ class OptimizedAttentionFlexBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.inputs = None
         self.batch_size = 2
@@ -126,7 +116,6 @@ class OptimizedAttentionFlexBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_attention_flex", enable=enable_nvtx):
             with torch.no_grad():
                 _ = self.model(self.inputs)
@@ -150,11 +139,9 @@ class OptimizedAttentionFlexBenchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedAttentionFlexBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

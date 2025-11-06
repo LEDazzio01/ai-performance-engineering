@@ -216,11 +216,13 @@ benchmark.teardown()
             wrapper_script.name
         ]
         
+        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=60,  # Increased timeout - NCU can be slow
+            timeout=180,  # Increased from 60s - ncu profiling needs more time
             check=False
         )
         
@@ -280,11 +282,13 @@ def profile_with_ncu_cuda(
     ]
     
     try:
+        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=60,  # Increased timeout - NCU can be slow
+            timeout=180,  # Increased from 60s - ncu profiling needs more time
             check=False
         )
         

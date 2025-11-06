@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch12")
     return torch.device("cuda")
-
 
 class OptimizedQuantizationBenchmark(Benchmark):
     """Optimized: Quantization with CUDA graphs.
@@ -43,18 +41,6 @@ class OptimizedQuantizationBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
         self.input = None
         self.input_static = None
         self.graph = None
@@ -67,19 +53,21 @@ class OptimizedQuantizationBenchmark(Benchmark):
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Quantization with CUDA graphs
-        # Quantization: reduced precision for performance/memory
+        # Optimization: FP8 Quantization with CUDA graphs
+        # FP8 quantization: 2x memory reduction vs FP16, native CUDA support
         # CUDA graphs: capture kernels to reduce launch overhead
+        from common.python.quantization_utils import quantize_model_to_fp8, get_quantization_dtype
         
-        # For CUDA, use FP16 as CUDA-compatible quantization
         self.model = nn.Sequential(
             nn.Linear(1024, 2048),
             nn.ReLU(),
             nn.Linear(2048, 1024),
-        ).to(self.device).to(torch.float16).eval()  # Quantization: FP16 precision
+        )
         
-        # Quantized input (quantization: FP16 precision for CUDA)
-        self.input = torch.randn(32, 1024, device=self.device, dtype=torch.float16)
+        # Quantize model to FP8 for CUDA-native quantization
+        self.model = quantize_model_to_fp8(self.model, self.device, precision='fp8')
+        input_dtype = get_quantization_dtype('fp8')
+        self.input = torch.randn(32, 1024, device=self.device, dtype=input_dtype)
         
         # CUDA graphs: warm-up before capture for stable graph creation
         # Warm-up iterations ensure CUDA kernels are compiled and cached
@@ -110,20 +98,20 @@ class OptimizedQuantizationBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_quantization", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Quantization with CUDA graphs
-                # Quantization: reduced precision (FP16)
+                # Optimization: FP8 Quantization with CUDA graphs
+                # FP8 quantization: 2x memory reduction vs FP16, native CUDA support
                 # CUDA graphs: replay captured kernels (low overhead)
                 # Copy input to static buffer before replay (graph uses static addresses)
                 self.input_static.copy_(self.input)
                 self.graph.replay()
                 
-                # Optimization: Quantization and CUDA graphs benefits
-                # - Reduced memory usage (quantization)
+                # Optimization: FP8 Quantization and CUDA graphs benefits
+                # - Reduced memory usage (FP8: 2x vs FP16, 4x vs FP32)
                 # - Reduced kernel launch overhead (CUDA graphs)
-                # - Better performance through graph replay
+                # - Better performance through graph replay + FP8 computation
+                # - Native CUDA support (not CPU-only like qint8)
                 _ = self.input.sum()  # Use input for validation
 
     
@@ -150,11 +138,9 @@ class OptimizedQuantizationBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedQuantizationBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -173,7 +159,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

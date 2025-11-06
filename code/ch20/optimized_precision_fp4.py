@@ -16,7 +16,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -26,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch20")
     return torch.device("cuda")
-
 
 def quantize_to_fp4(x: torch.Tensor) -> torch.Tensor:
     """Quantize tensor to FP4 (E2M1F format).
@@ -59,7 +56,6 @@ def quantize_to_fp4(x: torch.Tensor) -> torch.Tensor:
     # Simulate quantization by reducing precision
     x_quantized = (x_clamped * 2.0).round() / 2.0
     return x_quantized * scale
-
 
 class FP4Linear(nn.Module):
     """FP4 quantized linear layer."""
@@ -92,7 +88,6 @@ class FP4Linear(nn.Module):
             weight = self.weight
         
         return nn.functional.linear(x, weight, self.bias)
-
 
 class SimpleTransformerFP4(nn.Module):
     """Simple transformer with FP4 quantization."""
@@ -140,7 +135,6 @@ class SimpleTransformerFP4(nn.Module):
         
         return x
 
-
 class OptimizedFP4Benchmark(Benchmark):
     """FP4 precision optimization - fastest inference with aggressive quantization."""
     
@@ -149,15 +143,9 @@ class OptimizedFP4Benchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.inputs = None
         self.batch_size = 4
@@ -213,7 +201,6 @@ class OptimizedFP4Benchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_precision_fp4", enable=enable_nvtx):
             with torch.no_grad():
                 _ = self.model(self.inputs)
@@ -239,11 +226,9 @@ class OptimizedFP4Benchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedFP4Benchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

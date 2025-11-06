@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch18")
     return torch.device("cuda")
-
 
 class OptimizedQuantizationBenchmark(Benchmark):
     """Optimized: Quantization for reduced precision operations.
@@ -43,18 +41,6 @@ class OptimizedQuantizationBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
         self.input = None
     
     def setup(self) -> None:
@@ -68,20 +54,22 @@ class OptimizedQuantizationBenchmark(Benchmark):
         # Optimization: Quantization - reduced precision
         # Quantization reduces precision (e.g., INT8, FP8) for performance/memory
         
+        # Optimization: FP8 Quantization on CUDA (native support on GB10/H100+)
+        # FP8 provides 2x memory reduction vs FP16, 4x vs FP32
+        # This is the proper way to do quantization on CUDA, not CPU-only qint8
+        from common.python.quantization_utils import quantize_model_to_fp8, get_quantization_dtype
+        
         hidden_dim = 256
         self.model = nn.MultiheadAttention(
             embed_dim=hidden_dim,
             num_heads=8,
             batch_first=True
-        ).to(self.device).eval()
-        
-        # Quantize model (quantization: reduced precision)
-        self.model = torch.quantization.quantize_dynamic(
-            self.model, {nn.Linear}, dtype=torch.qint8
         )
         
-        # Quantized input (quantization: INT8 precision)
-        self.input = torch.randn(4, 128, hidden_dim, device=self.device, dtype=torch.float32)
+        # Quantize model to FP8 for CUDA-native quantization
+        self.model = quantize_model_to_fp8(self.model, self.device, precision='fp8')
+        input_dtype = get_quantization_dtype('fp8')
+        self.input = torch.randn(4, 128, hidden_dim, device=self.device, dtype=input_dtype)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -94,19 +82,18 @@ class OptimizedQuantizationBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_quantization", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Quantization
-                # Uses quantized model (INT8 precision)
-                # Quantization: reduced precision for performance/memory
+                # Optimization: FP8 Quantization on CUDA
+                # Uses FP8 quantized model (native CUDA support on GB10/H100+)
+                # FP8 provides 2x memory reduction vs FP16, 4x vs FP32
                 output, _ = self.model(self.input, self.input, self.input)
                 
-                # Optimization: Quantization benefits
-                # - Reduced memory usage (lower precision)
-                # - Improved performance (faster computation)
-                # - Better memory bandwidth utilization
-                # - Efficient precision reduction
+                # Optimization: FP8 Quantization benefits
+                # - Reduced memory usage (FP8: 2x vs FP16, 4x vs FP32)
+                # - Improved performance (faster FP8 computation on Tensor Cores)
+                # - Better memory bandwidth utilization (less data to transfer)
+                # - Native CUDA support (not CPU-only like qint8)
                 _ = output.sum()
 
     
@@ -131,11 +118,9 @@ class OptimizedQuantizationBenchmark(Benchmark):
             return "Input not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedQuantizationBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -154,7 +139,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

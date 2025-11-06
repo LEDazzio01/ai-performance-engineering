@@ -18,7 +18,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -28,13 +27,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch20")
     return torch.device("cuda")
-
 
 class PagedKVCache:
     """Paged KV cache for efficient memory management."""
@@ -101,7 +98,6 @@ class PagedKVCache:
                 self.free_page(page_idx)
             del self.allocated_pages[request_id]
 
-
 class AttentionLayer(nn.Module):
     """Attention layer with integrated KV cache."""
     
@@ -140,7 +136,6 @@ class AttentionLayer(nn.Module):
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(out)
 
-
 class OptimizedIntegratedKVCacheBenchmark(Benchmark):
     """Integrated KV cache in full inference pipeline."""
     
@@ -149,15 +144,9 @@ class OptimizedIntegratedKVCacheBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.kv_cache = None
         self.inputs = None
@@ -212,7 +201,6 @@ class OptimizedIntegratedKVCacheBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("integrated_kv_cache", enable=enable_nvtx):
             for seq_idx, x in enumerate(self.inputs):
                 request_id = f"req_{seq_idx}"
@@ -249,11 +237,9 @@ class OptimizedIntegratedKVCacheBenchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedIntegratedKVCacheBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

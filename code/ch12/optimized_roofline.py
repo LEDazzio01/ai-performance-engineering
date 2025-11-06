@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch12")
     return torch.device("cuda")
-
 
 class OptimizedRooflineBenchmark(Benchmark):
     """Optimized: Roofline analysis with CUDA graphs.
@@ -45,15 +43,9 @@ class OptimizedRooflineBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.input = None
         self.input_static = None
@@ -135,7 +127,6 @@ class OptimizedRooflineBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_roofline", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Roofline analysis with CUDA graphs
@@ -178,11 +169,9 @@ class OptimizedRooflineBenchmark(Benchmark):
             return "Roofline analysis not performed"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedRooflineBenchmark()
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -201,7 +190,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

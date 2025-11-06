@@ -28,13 +28,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch20")
     return torch.device("cuda")
-
 
 class MoELayer(nn.Module):
     """Mixture of Experts layer with sparse activation."""
@@ -93,7 +91,6 @@ class MoELayer(nn.Module):
         # Reshape back
         return output.view(batch_size, seq_len, hidden_dim)
 
-
 class OptimizedMoeBenchmark(Benchmark):
     """Optimized: Mixture of Experts with sparse activation.
     
@@ -106,15 +103,9 @@ class OptimizedMoeBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.input = None
         self.hidden_dim = 256
@@ -160,7 +151,6 @@ class OptimizedMoeBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_moe", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: MoE with sparse activation
@@ -194,7 +184,6 @@ def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedMoeBenchmark()
 
-
 def main() -> None:
     """Standalone execution (for testing)."""
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
@@ -212,7 +201,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

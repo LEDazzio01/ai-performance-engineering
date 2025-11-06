@@ -202,4 +202,42 @@ def dump_environment_and_capabilities(stream=None, *, force: bool = False) -> No
     except Exception:
         cudnn_version = None
     print(f"cuDNN Version: {cudnn_version or 'unavailable'}", file=stream)
+    
+    # Check profiling tool availability
+    print("\n" + "=" * 80, file=stream)
+    print("PROFILING TOOLS", file=stream)
+    print("=" * 80, file=stream)
+    
+    # Check nsys availability
+    nsys_available = False
+    try:
+        import subprocess
+        import shutil
+        if shutil.which("nsys"):
+            result = subprocess.run(
+                ["nsys", "--version"],
+                capture_output=True,
+                timeout=5,
+                check=False
+            )
+            nsys_available = result.returncode == 0
+    except Exception:
+        pass
+    print(f"nsys available: {nsys_available}", file=stream)
+    
+    # Check ncu availability
+    ncu_available = False
+    try:
+        if shutil.which("ncu"):
+            result = subprocess.run(
+                ["ncu", "--version"],
+                capture_output=True,
+                timeout=5,
+                check=False
+            )
+            ncu_available = result.returncode == 0
+    except Exception:
+        pass
+    print(f"ncu available: {ncu_available}", file=stream)
+    
     _ENV_AND_CAPABILITIES_LOGGED = True

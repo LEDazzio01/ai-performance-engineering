@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -29,13 +28,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch13")
     return torch.device("cuda")
-
 
 class SyntheticDataset(Dataset):
     """Synthetic dataset for DataLoader benchmarking."""
@@ -54,7 +51,6 @@ class SyntheticDataset(Dataset):
         # Simulate some processing overhead
         return self.data[idx], self.labels[idx]
 
-
 class SimpleModel(nn.Module):
     """Simple model for training demonstration."""
     
@@ -69,7 +65,6 @@ class SimpleModel(nn.Module):
         x = self.fc2(x)
         return x
 
-
 class OptimizedDataloaderTunedBenchmark(Benchmark):
     """Optimized DataLoader - tuned for performance."""
     
@@ -78,15 +73,9 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.dataloader = None
         self.optimizer = None
@@ -150,7 +139,6 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_dataloader_tuned", enable=enable_nvtx):
             # Process one batch (optimized DataLoader: overlapped loading)
             data, labels = next(iter(self.dataloader))
@@ -182,11 +170,9 @@ class OptimizedDataloaderTunedBenchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedDataloaderTunedBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

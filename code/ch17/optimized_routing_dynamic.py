@@ -25,13 +25,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch17")
     return torch.device("cuda")
-
 
 class SimpleModel(nn.Module):
     """Simple model with configurable size."""
@@ -50,7 +48,6 @@ class SimpleModel(nn.Module):
             x = torch.relu(layer(x))
         return self.output(x)
 
-
 def estimate_complexity(prompt: str) -> float:
     """Estimate prompt complexity [0, 1]."""
     # Simple heuristic: length, vocabulary diversity, special tokens
@@ -68,7 +65,6 @@ def estimate_complexity(prompt: str) -> float:
     )
     return min(complexity, 1.0)
 
-
 class OptimizedRoutingBenchmark(Benchmark):
     """Benchmark implementation following Benchmark protocol."""
     
@@ -77,9 +73,6 @@ class OptimizedRoutingBenchmark(Benchmark):
         self.small_model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.medium_model = None
         self.large_model = None
@@ -128,7 +121,6 @@ class OptimizedRoutingBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("routing_dynamic", enable=enable_nvtx):
             with torch.no_grad():
                         # Use a simple counter approach: cycle through models based on distribution
@@ -167,11 +159,9 @@ class OptimizedRoutingBenchmark(Benchmark):
         """Optional validation."""
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedRoutingBenchmark()
-
 
 def main() -> None:
     """Standalone execution with timing."""
@@ -207,7 +197,6 @@ def main() -> None:
     print(f"Average cost: {avg_cost:.1f} (vs {baseline_cost:.1f} baseline)")
     print(f"Cost reduction: {cost_reduction:.2f}x")
     print("Status: Dynamic routing (adaptive, cost-efficient)")
-
 
 if __name__ == "__main__":
     main()

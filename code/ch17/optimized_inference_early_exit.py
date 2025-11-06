@@ -26,13 +26,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch17")
     return torch.device("cuda")
-
 
 class EarlyExitModel(nn.Module):
     """Model with early exit points."""
@@ -85,7 +83,6 @@ class EarlyExitModel(nn.Module):
         
         return self.exits[exit_idx](x)
 
-
 class OptimizedEarlyExitBenchmark(Benchmark):
     """Benchmark implementation following Benchmark protocol."""
     
@@ -94,15 +91,9 @@ class OptimizedEarlyExitBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.x = None
         self.batch_size = 16
@@ -146,7 +137,6 @@ class OptimizedEarlyExitBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("inference_early_exit", enable=enable_nvtx):
             with torch.no_grad():
                         _ = self.model.forward_early_exit(self.x, exit_distribution=self.exit_distribution)
@@ -167,11 +157,9 @@ class OptimizedEarlyExitBenchmark(Benchmark):
         """Optional validation."""
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedEarlyExitBenchmark()
-
 
 def main() -> None:
     """Standalone execution with timing."""
@@ -203,7 +191,6 @@ def main() -> None:
     print(f"Average layers executed: {avg_layers:.1f} (vs {benchmark.num_layers} full)")
     print("Status: Early exit (adaptive, efficient)")
     print(f"Expected speedup: ~{benchmark.num_layers / avg_layers:.2f}x for mixed-difficulty workloads")
-
 
 if __name__ == "__main__":
     main()

@@ -18,7 +18,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -28,13 +27,11 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch20")
     return torch.device("cuda")
-
 
 class SimpleModel(nn.Module):
     """Simple model for batching demonstration."""
@@ -50,7 +47,6 @@ class SimpleModel(nn.Module):
         x = self.fc2(x)
         return x
 
-
 class OptimizedBatchingContinuousBenchmark(Benchmark):
     """Continuous batching optimization - processes requests immediately."""
     
@@ -59,15 +55,9 @@ class OptimizedBatchingContinuousBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.request_queue = None
         self.hidden_dim = 1024
@@ -107,7 +97,6 @@ class OptimizedBatchingContinuousBenchmark(Benchmark):
         config = self.get_config()
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
 
         with nvtx_range("optimized_batching_continuous", enable=enable_nvtx):
             # Continuous batching: group requests by similar length and process immediately
@@ -153,11 +142,9 @@ class OptimizedBatchingContinuousBenchmark(Benchmark):
             return "Model not initialized"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for benchmark discovery."""
     return OptimizedBatchingContinuousBenchmark()
-
 
 if __name__ == "__main__":
     benchmark = get_benchmark()

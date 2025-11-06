@@ -79,16 +79,15 @@ class MoELayer(nn.Module):
         # Process through selected experts
         output = torch.zeros_like(x_flat)
         for expert_idx in range(self.num_experts):
-            pass
-    # Find tokens routed to this expert
+            # Find tokens routed to this expert
             mask = (indices_flat == expert_idx).any(dim=1)
             if mask.any():
                 expert_output = self.experts[expert_idx](x_flat[mask])
-        # Weight by router probability
-        weights = router_flat[mask].gather(
-        1, (indices_flat[mask] == expert_idx).long().argmax(dim=1, keepdim=True)
-        )
-        output[mask] += expert_output * weights
+                # Weight by router probability
+                weights = router_flat[mask].gather(
+                    1, (indices_flat[mask] == expert_idx).long().argmax(dim=1, keepdim=True)
+                )
+                output[mask] += expert_output * weights
         
         return output.view(batch_size, seq_len, hidden_dim)
 
@@ -111,23 +110,17 @@ class OptimizedMemoryMoEBenchmark(Benchmark):
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
-            pass
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         # MoE layer with adaptive routing
+        # Optimization: Use BF16 for faster computation + Tensor Core acceleration
+        # BF16 provides 2x memory reduction vs FP32 with better numerical stability than FP16
         self.model = MoELayer(
             hidden_dim=self.hidden_dim,
             num_experts=self.num_experts,
             top_k=2
         )
-        self.model = self.model.to(self.device).to(dtype=torch.bfloat16)
-        # Optimization: Use FP16 for faster computation
-        if self.device.type == "cuda":
-            try:
-                self.model = self.model.half()
-            except Exception:
-                 pass
-        self.model.eval()
+        self.model = self.model.to(self.device).to(dtype=torch.bfloat16).eval()
         
         self.x = torch.randn(
             self.batch_size, self.seq_len, self.hidden_dim,
@@ -146,19 +139,18 @@ class OptimizedMemoryMoEBenchmark(Benchmark):
 
         with nvtx_range("optimized_memory_moe", enable=enable_nvtx):
             with torch.no_grad():
-                pass
-        # Optimization: MoE allows adaptive memory usage
-        # Only selected experts are activated per token
-        # This reduces memory footprint compared to dense models
-        _ = self.model(self.x)
+                # Optimization: MoE allows adaptive memory usage
+                # Only selected experts are activated per token
+                # This reduces memory footprint compared to dense models
+                # BF16 precision provides 2x memory reduction + Tensor Core acceleration
+                _ = self.model(self.x)
 
     
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.x
         if torch.cuda.is_available():
-            pass
-        torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
@@ -175,11 +167,9 @@ class OptimizedMemoryMoEBenchmark(Benchmark):
             return "Input tensor not initialized"
         try:
             with torch.no_grad():
-                pass
-            output = self.model(self.x)
+                output = self.model(self.x)
             if output.shape != self.x.shape:
-                pass
-            return f"Output shape mismatch"
+                return f"Output shape mismatch: expected {self.x.shape}, got {output.shape}"
         except Exception as e:
             return f"MoE forward pass failed: {e}"
         return None

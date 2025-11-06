@@ -12,12 +12,14 @@ import inspect
 import os
 import random
 import re
+import shutil
 import statistics
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import warnings
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -47,8 +49,8 @@ class BenchmarkConfig:
     seed: Optional[int] = None
     device: Optional[torch.device] = None
     enable_profiling: bool = True  # Enable nsys/ncu/PyTorch profiler (default: True - always profiling)
-    enable_nsys: bool = False  # Enable nsys profiling (requires CUDA, wraps entire process)
-    enable_ncu: bool = False  # Enable ncu profiling (requires CUDA, wraps entire process)
+    enable_nsys: bool = True  # Enable nsys profiling (requires CUDA, wraps entire process) - default: True
+    enable_ncu: bool = True  # Enable ncu profiling (requires CUDA, wraps entire process) - default: True
     profiling_output_dir: Optional[str] = None  # Directory for profiling outputs
     enable_nvtx: Optional[bool] = None  # Enable NVTX ranges (None = auto: True if profiling, False otherwise)
     timeout_seconds: int = 15  # Required timeout for benchmark execution in seconds (prevents hangs) - DEFAULT 15s
@@ -230,7 +232,12 @@ class BenchmarkHarness:
                     errors.append(f"Validation failed: {validation_error}")
                 
             except Exception as e:
-                errors.append(f"Benchmark execution failed: {str(e)}")
+                error_msg = str(e)
+                # Handle generator errors gracefully (common with torch.compile)
+                if "generator didn't stop after throw" in error_msg:
+                    errors.append(f"Benchmark execution failed: Generator error (likely from torch.compile or async operations)")
+                else:
+                    errors.append(f"Benchmark execution failed: {error_msg}")
                 times_ms = []
             finally:
                 # Always cleanup
@@ -375,6 +382,40 @@ class BenchmarkHarness:
             # Fallback to non-profiling benchmark
             return self._benchmark_without_profiling(fn, config), {}
     
+    def _check_nsys_available(self) -> bool:
+        """Check if nsys is available on the system."""
+        # First try shutil.which to find the tool
+        if shutil.which("nsys") is None:
+            return False
+        try:
+            result = subprocess.run(
+                ["nsys", "--version"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+                env=os.environ.copy()
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+    
+    def _check_ncu_available(self) -> bool:
+        """Check if ncu is available on the system."""
+        # First try shutil.which to find the tool
+        if shutil.which("ncu") is None:
+            return False
+        try:
+            result = subprocess.run(
+                ["ncu", "--version"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+                env=os.environ.copy()
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+    
     def _benchmark_with_nsys_ncu(
         self, benchmark: Benchmark, config: BenchmarkConfig
     ) -> Dict[str, Any]:
@@ -385,6 +426,8 @@ class BenchmarkHarness:
         """
         if not torch.cuda.is_available():
             # Fallback to regular profiling if CUDA not available
+            if config.enable_nsys or config.enable_ncu:
+                print("  Note: CUDA not available - skipping nsys/ncu profiling (using PyTorch profiler only)")
             times_ms, profiling_outputs = self._benchmark_with_profiling(
                 benchmark.benchmark_fn, config
             )
@@ -395,13 +438,35 @@ class BenchmarkHarness:
                 "ncu_metrics": {},
             }
         
-        # Create profiling output directory
-        if config.profiling_output_dir:
-            prof_dir = Path(config.profiling_output_dir)
-            prof_dir.mkdir(parents=True, exist_ok=True)
+        # Check tool availability early and disable profiling if tools aren't available
+        nsys_available = self._check_nsys_available() if config.enable_nsys else False
+        ncu_available = self._check_ncu_available() if config.enable_ncu else False
+        
+        # Inform user if tools are requested but not available (degraded mode)
+        if config.enable_nsys and not nsys_available:
+            print("  Note: nsys not available - skipping nsys profiling (benchmarks will run normally)")
+        if config.enable_ncu and not ncu_available:
+            print("  Note: ncu not available - skipping ncu profiling (benchmarks will run normally)")
+        
+        # Create profiling output directory only if at least one tool is available
+        if nsys_available or ncu_available:
+            if config.profiling_output_dir:
+                prof_dir = Path(config.profiling_output_dir)
+                prof_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                prof_dir = Path("profiling_results")
+                prof_dir.mkdir(parents=True, exist_ok=True)
         else:
-            prof_dir = Path("profiling_results")
-            prof_dir.mkdir(parents=True, exist_ok=True)
+            # No tools available, fall back to regular profiling
+            times_ms, profiling_outputs = self._benchmark_with_profiling(
+                benchmark.benchmark_fn, config
+            )
+            return {
+                "times_ms": times_ms,
+                "profiling_outputs": profiling_outputs,
+                "nsys_metrics": {},
+                "ncu_metrics": {},
+            }
         
         times_ms = []
         profiling_outputs = {}
@@ -412,18 +477,40 @@ class BenchmarkHarness:
         benchmark_module = inspect.getmodule(benchmark)
         benchmark_class = benchmark.__class__.__name__
         
+        # If module is None, try to get it from the class
+        if benchmark_module is None:
+            benchmark_module = inspect.getmodule(benchmark.__class__)
+        
+        # If still None, we can't create wrapper script (degraded mode)
+        if benchmark_module is None:
+            # Fall back to regular profiling or non-profiling benchmark
+            # Don't return empty times_ms - that causes benchmark to fail
+            if config.enable_profiling:
+                times_ms, profiling_outputs = self._benchmark_with_profiling(
+                    benchmark.benchmark_fn, config
+                )
+            else:
+                times_ms = self._benchmark_without_profiling(benchmark.benchmark_fn, config)
+                profiling_outputs = {}
+            return {
+                "times_ms": times_ms,
+                "profiling_outputs": profiling_outputs,
+                "nsys_metrics": {},
+                "ncu_metrics": {},
+            }
+        
         # Run regular benchmark first to get timing (nsys/ncu are for metrics, not timing)
         times_ms = self._benchmark_without_profiling(benchmark.benchmark_fn, config)
         
-        # Run nsys profiling if enabled
-        if config.enable_nsys:
+        # Run nsys profiling if enabled and available
+        if config.enable_nsys and nsys_available:
             nsys_result = self._run_nsys_profiling(benchmark, benchmark_module, benchmark_class, prof_dir, config)
             if nsys_result:
                 profiling_outputs.update(nsys_result.get("profiling_outputs", {}))
                 nsys_metrics = nsys_result.get("metrics", {})
         
-        # Run ncu profiling if enabled
-        if config.enable_ncu:
+        # Run ncu profiling if enabled and available
+        if config.enable_ncu and ncu_available:
             ncu_result = self._run_ncu_profiling(benchmark, benchmark_module, benchmark_class, prof_dir, config)
             if ncu_result:
                 profiling_outputs.update(ncu_result.get("profiling_outputs", {}))
@@ -440,19 +527,18 @@ class BenchmarkHarness:
         self, benchmark: Benchmark, benchmark_module, benchmark_class: str,
         prof_dir: Path, config: BenchmarkConfig
     ) -> Optional[Dict[str, Any]]:
-        """Run nsys profiling on benchmark."""
-        try:
-            # Check if nsys is available
-            subprocess.run(["nsys", "--version"], capture_output=True, check=True, timeout=5)
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return None
+        """Run nsys profiling on benchmark.
         
+        Note: Tool availability should be checked before calling this method.
+        """
         # Create wrapper script
         wrapper_script = self._create_benchmark_wrapper(
             benchmark, benchmark_module, benchmark_class, config
         )
         
         if not wrapper_script:
+            # Only inform if we actually tried to create the script (tool was available)
+            print(f"  Note: Could not create wrapper script for nsys profiling of {benchmark_class} - skipping nsys profiling")
             return None
         
         try:
@@ -481,7 +567,8 @@ class BenchmarkHarness:
                 nsys_command,
                 capture_output=True,
                 timeout=config.nsys_timeout_seconds,
-                check=False
+                check=False,
+                env=os.environ.copy()
             )
             
             # Find the generated .nsys-rep file
@@ -496,12 +583,22 @@ class BenchmarkHarness:
                 profiling_outputs = {"nsys_rep": str(nsys_rep_path)}
                 # Extract metrics
                 metrics = self._extract_nsys_metrics(nsys_rep_path)
+                if not metrics:
+                    # Metrics extraction failed, but profiling file exists - this is OK
+                    pass
                 return {
                     "profiling_outputs": profiling_outputs,
                     "metrics": metrics,
                 }
+            else:
+                # nsys completed but file not found - skip silently (degraded mode)
+                pass
+        except subprocess.TimeoutExpired:
+            print(f"  Note: nsys profiling timed out for {benchmark_class} - skipping nsys profiling")
         except Exception as e:
-            pass
+            # Only log if in debug mode
+            if os.environ.get("BENCHMARK_DEBUG", "").lower() in ("1", "true", "yes"):
+                print(f"  Debug: nsys profiling failed for {benchmark_class}: {e}")
         finally:
             # Clean up wrapper script
             try:
@@ -516,30 +613,54 @@ class BenchmarkHarness:
         self, benchmark: Benchmark, benchmark_module, benchmark_class: str,
         prof_dir: Path, config: BenchmarkConfig
     ) -> Optional[Dict[str, Any]]:
-        """Run ncu profiling on benchmark."""
-        try:
-            # Check if ncu is available
-            subprocess.run(["ncu", "--version"], capture_output=True, check=True, timeout=5)
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return None
+        """Run ncu profiling on benchmark.
         
+        Note: Tool availability should be checked before calling this method.
+        """
         # Create wrapper script
         wrapper_script = self._create_benchmark_wrapper(
             benchmark, benchmark_module, benchmark_class, config
         )
         
         if not wrapper_script:
+            # Only inform if we actually tried to create the script (tool was available)
+            print(f"  Note: Could not create wrapper script for ncu profiling of {benchmark_class} - skipping ncu profiling")
             return None
         
         try:
             # Create output path
             ncu_output = prof_dir / f"ncu_{benchmark_class}"
             
-            # Build ncu command
+            # Build ncu command with comprehensive metrics for roofline analysis
+            # Based on book recommendations (ch13.md): roofline analysis metrics
+            # Includes: compute throughput, memory throughput (DRAM/L2), occupancy, and efficiency
+            ncu_metrics = [
+                # Kernel timing
+                "gpu__time_duration.avg",
+                # Compute throughput (SM)
+                "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+                # Memory throughput - DRAM (HBM)
+                "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+                # Memory throughput - L2 cache
+                "lts__throughput.avg.pct_of_peak_sustained_elapsed",
+                # Compute proxy - FP32 instructions
+                "sm__sass_thread_inst_executed_op_fp32_pred_on.sum",
+                # Occupancy - active warps
+                "sm__warps_active.avg.pct_of_peak_sustained_active",
+                # Memory efficiency metrics (from ch7.md)
+                "dram__sectors_read.sum",
+                "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",
+                "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
+                # Memory load efficiency
+                "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum",
+                # Tensor Core utilization (if applicable)
+                "sm__inst_executed_pipe_tensor.sum",
+            ]
+            
             ncu_command = [
                 "ncu",
                 "--set", "full",
-                "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
+                "--metrics", ",".join(ncu_metrics),
                 "--replay-mode", "kernel",
                 "-o", str(ncu_output),
                 sys.executable,
@@ -551,7 +672,8 @@ class BenchmarkHarness:
                 ncu_command,
                 capture_output=True,
                 timeout=config.ncu_timeout_seconds,
-                check=False
+                check=False,
+                env=os.environ.copy()
             )
             
             # Find the generated .ncu-rep file
@@ -566,12 +688,22 @@ class BenchmarkHarness:
                 profiling_outputs = {"ncu_rep": str(ncu_rep_path)}
                 # Extract metrics
                 metrics = self._extract_ncu_metrics(ncu_rep_path)
+                if not metrics:
+                    # Metrics extraction failed, but profiling file exists - this is OK
+                    pass
                 return {
                     "profiling_outputs": profiling_outputs,
                     "metrics": metrics,
                 }
+            else:
+                # ncu completed but file not found - skip silently (degraded mode)
+                pass
+        except subprocess.TimeoutExpired:
+            print(f"  Note: ncu profiling timed out for {benchmark_class} - skipping ncu profiling")
         except Exception as e:
-            pass
+            # Only log if in debug mode
+            if os.environ.get("BENCHMARK_DEBUG", "").lower() in ("1", "true", "yes"):
+                print(f"  Debug: ncu profiling failed for {benchmark_class}: {e}")
         finally:
             # Clean up wrapper script
             try:
@@ -598,10 +730,21 @@ class BenchmarkHarness:
             module_name = benchmark_module.__name__
             module_file = getattr(benchmark_module, "__file__", None)
             
+            # Try to get file from spec if __file__ is not available
             if module_file is None:
+                spec = getattr(benchmark_module, "__spec__", None)
+                if spec is not None:
+                    module_file = getattr(spec, "origin", None)
+            
+            if module_file is None:
+                # Can't determine module file - skip wrapper creation (degraded mode)
                 return None
             
             module_path = Path(module_file).resolve()
+            if not module_path.exists():
+                # Module file doesn't exist - skip wrapper creation (degraded mode)
+                return None
+            
             module_dir = module_path.parent
             
             # Create temporary wrapper script
@@ -680,6 +823,11 @@ except Exception as e:
             
             return Path(wrapper_script.name)
         except Exception as e:
+            # Log the error for debugging but don't raise (caller will handle None return)
+            # Only log if in debug mode, otherwise silently fail (degraded mode is OK)
+            if os.environ.get("BENCHMARK_DEBUG", "").lower() in ("1", "true", "yes"):
+                import traceback
+                print(f"  Debug: Failed to create wrapper script for {benchmark_class}: {e}")
             return None
     
     def _extract_nsys_metrics(self, nsys_rep_path: Path) -> Dict[str, float]:
@@ -782,27 +930,162 @@ except Exception as e:
         
         return metrics
     
-    def _parse_ncu_csv(self, csv_text: str) -> Dict[str, float]:
-        """Parse ncu CSV output for key metrics."""
-        metrics = {}
+    # Mapping of metric identifiers to natural language descriptions
+    NCU_METRIC_DESCRIPTIONS = {
+        "gpu__time_duration.avg": "Kernel Execution Time",
+        "sm__throughput.avg.pct_of_peak_sustained_elapsed": "SM Compute Throughput (% of peak)",
+        "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed": "DRAM/HBM Memory Throughput (% of peak)",
+        "lts__throughput.avg.pct_of_peak_sustained_elapsed": "L2 Cache Throughput (% of peak)",
+        "sm__sass_thread_inst_executed_op_fp32_pred_on.sum": "FP32 Instructions Executed (compute proxy)",
+        "sm__warps_active.avg.pct_of_peak_sustained_active": "Achieved Occupancy (% active warps)",
+        "dram__sectors_read.sum": "DRAM Sectors Read",
+        "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum": "L1 Global Memory Load Sectors",
+        "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum": "L1 Global Memory Store Sectors",
+        "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum": "Shared Memory Bank Conflicts",
+        "sm__inst_executed_pipe_tensor.sum": "Tensor Core Instructions Executed",
+    }
+    
+    @classmethod
+    def get_metric_description(cls, metric_key: str, fallback_to_key: bool = True) -> str:
+        """Get natural language description for a metric key.
         
-        # Look for key metrics in CSV
+        Args:
+            metric_key: The metric identifier (cryptic ID or clean name)
+            fallback_to_key: If True, return the key itself if no description found
+        
+        Returns:
+            Natural language description, or the key itself if not found and fallback_to_key=True
+        """
+        # First check if it's directly in our mapping
+        if metric_key in cls.NCU_METRIC_DESCRIPTIONS:
+            return cls.NCU_METRIC_DESCRIPTIONS[metric_key]
+        
+        # Try to find matching cryptic ID
+        # If metric_key is a clean name like "ncu_sm_throughput_pct", try to match
+        # to cryptic IDs by pattern matching
+        clean_key = metric_key.replace("ncu_", "").replace("_pct", "").replace("_ms", "")
+        for cryptic_id, description in cls.NCU_METRIC_DESCRIPTIONS.items():
+            # Extract key parts from cryptic ID for matching
+            cryptic_parts = cryptic_id.replace("__", "_").replace(".", "_").split("_")
+            key_parts = clean_key.split("_")
+            
+            # Check if significant parts match (e.g., "sm_throughput" matches "sm__throughput")
+            if len(set(cryptic_parts) & set(key_parts)) >= 2:  # At least 2 common parts
+                return description
+            # Also check if cryptic ID appears in key or vice versa
+            if cryptic_id.replace("__", "_").replace(".", "_") in clean_key or clean_key in cryptic_id.replace("__", "_").replace(".", "_"):
+                return description
+        
+        # If no match found and fallback is enabled, return a cleaned version of the key
+        if fallback_to_key:
+            # Try to make the key more readable
+            cleaned = metric_key.replace("ncu_", "").replace("__", " ").replace("_", " ").replace(".", " ")
+            # Capitalize first letter of each word
+            cleaned = " ".join(word.capitalize() for word in cleaned.split())
+            return cleaned
+        
+        return metric_key
+    
+    def _parse_ncu_csv(self, csv_text: str) -> Dict[str, float]:
+        """Parse ncu CSV output for comprehensive roofline and performance metrics.
+        
+        Extracts metrics recommended in the book for roofline analysis and memory efficiency.
+        Returns dict with both cryptic identifiers and natural language descriptions.
+        """
+        metrics = {}
+        metric_descriptions = {}  # Store descriptions separately
+        
+        # Parse CSV format: metric names in header, values in rows
+        # Handle both CSV with headers and simple key-value formats
+        lines = csv_text.strip().split('\n')
+        if not lines:
+            return metrics
+        
+        # Try to parse as CSV with headers
+        import csv as csv_module
+        from io import StringIO
+        
+        try:
+            reader = csv_module.DictReader(StringIO(csv_text))
+            for row in reader:
+                # Look for metric name and value columns
+                metric_name = row.get('Metric Name') or row.get('Name') or row.get('Metric')
+                metric_id = row.get('ID') or row.get('Metric ID')  # Try to get the cryptic ID
+                value_str = row.get('Metric Value') or row.get('Value') or row.get('Avg')
+                
+                if metric_name and value_str:
+                    try:
+                        # Clean up value (remove commas, %, etc.)
+                        value_clean = value_str.replace(',', '').replace('%', '').strip()
+                        value = float(value_clean)
+                        
+                        # Create clean metric key from natural name
+                        clean_name = metric_name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('-', '_')
+                        key = f"ncu_{clean_name}"
+                        metrics[key] = value
+                        
+                        # Store the natural language description from CSV (this is the best source)
+                        # This handles metrics not in NCU_METRIC_DESCRIPTIONS
+                        metric_descriptions[key] = metric_name
+                        
+                        # Also store by cryptic ID if available
+                        if metric_id:
+                            metrics[metric_id] = value
+                            # Use CSV name if available, otherwise try our mapping
+                            if metric_id in self.NCU_METRIC_DESCRIPTIONS:
+                                metric_descriptions[metric_id] = self.NCU_METRIC_DESCRIPTIONS[metric_id]
+                            else:
+                                metric_descriptions[metric_id] = metric_name  # Fallback to CSV name
+                    except (ValueError, AttributeError):
+                        pass
+        except Exception:
+            # Fallback to regex patterns for non-CSV format
+            pass
+        
+        # Regex patterns for key metrics (fallback and additional extraction)
+        # Map cryptic IDs to both clean keys and descriptions
         patterns = {
-            "ncu_sm_throughput_percent": r"sm__throughput.*?,(\d+\.?\d*)",
-            "ncu_dram_throughput_percent": r"dram__throughput.*?,(\d+\.?\d*)",
-            "ncu_tensor_core_utilization": r"tensor.*?active.*?,(\d+\.?\d*)",
-            "ncu_occupancy": r"achieved.*?occupancy.*?,(\d+\.?\d*)",
-            "ncu_gpu_time_duration": r"gpu__time_duration.*?,(\d+\.?\d*)",
+            # Timing
+            ("ncu_gpu_time_duration_ms", "gpu__time_duration.avg"): r"gpu__time_duration\.avg[^,]*,\s*(\d+\.?\d*)",
+            # Compute throughput
+            ("ncu_sm_throughput_pct", "sm__throughput.avg.pct_of_peak_sustained_elapsed"): r"sm__throughput\.avg\.pct_of_peak_sustained_elapsed[^,]*,\s*(\d+\.?\d*)",
+            # Memory throughput - DRAM
+            ("ncu_dram_throughput_pct", "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed"): r"gpu__dram_throughput\.avg\.pct_of_peak_sustained_elapsed[^,]*,\s*(\d+\.?\d*)",
+            # Memory throughput - L2
+            ("ncu_l2_throughput_pct", "lts__throughput.avg.pct_of_peak_sustained_elapsed"): r"lts__throughput\.avg\.pct_of_peak_sustained_elapsed[^,]*,\s*(\d+\.?\d*)",
+            # FP32 instructions (compute proxy)
+            ("ncu_fp32_instructions", "sm__sass_thread_inst_executed_op_fp32_pred_on.sum"): r"sm__sass_thread_inst_executed_op_fp32_pred_on\.sum[^,]*,\s*(\d+\.?\d*)",
+            # Occupancy
+            ("ncu_warps_active_pct", "sm__warps_active.avg.pct_of_peak_sustained_active"): r"sm__warps_active\.avg\.pct_of_peak_sustained_active[^,]*,\s*(\d+\.?\d*)",
+            # Memory sectors
+            ("ncu_dram_sectors_read", "dram__sectors_read.sum"): r"dram__sectors_read\.sum[^,]*,\s*(\d+\.?\d*)",
+            ("ncu_l1_global_load_sectors", "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum"): r"l1tex__t_sectors_pipe_lsu_mem_global_op_ld\.sum[^,]*,\s*(\d+\.?\d*)",
+            ("ncu_l1_global_store_sectors", "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum"): r"l1tex__t_sectors_pipe_lsu_mem_global_op_st\.sum[^,]*,\s*(\d+\.?\d*)",
+            # Tensor Core
+            ("ncu_tensor_instructions", "sm__inst_executed_pipe_tensor.sum"): r"sm__inst_executed_pipe_tensor\.sum[^,]*,\s*(\d+\.?\d*)",
         }
         
-        for metric_name, pattern in patterns.items():
-            match = re.search(pattern, csv_text, re.IGNORECASE)
+        for (clean_key, cryptic_id), pattern in patterns.items():
+            match = re.search(pattern, csv_text, re.IGNORECASE | re.MULTILINE)
             if match:
                 try:
-                    metrics[metric_name] = float(match.group(1))
+                    value = float(match.group(1))
+                    metrics[clean_key] = value
+                    metrics[cryptic_id] = value  # Also store by cryptic ID
+                    
+                    # Add description if available in our mapping
+                    if cryptic_id in self.NCU_METRIC_DESCRIPTIONS:
+                        metric_descriptions[clean_key] = self.NCU_METRIC_DESCRIPTIONS[cryptic_id]
+                        metric_descriptions[cryptic_id] = self.NCU_METRIC_DESCRIPTIONS[cryptic_id]
+                    else:
+                        # Metric not in our mapping - use cleaned cryptic ID as fallback description
+                        metric_descriptions[clean_key] = self.get_metric_description(cryptic_id, fallback_to_key=True)
+                        metric_descriptions[cryptic_id] = self.get_metric_description(cryptic_id, fallback_to_key=True)
                 except (ValueError, IndexError):
                     pass
         
+        # Store descriptions separately - they'll be accessible via NCU_METRIC_DESCRIPTIONS
+        # For now, return only float values (descriptions are in the class constant)
         return metrics
     
     def _benchmark_without_profiling(

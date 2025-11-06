@@ -100,20 +100,7 @@ class OptimizedPagedAttentionBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
-        self.kv_cache = None
+        self.model = None        self.kv_cache = None
         self.inputs = None
     
     def setup(self) -> None:

@@ -28,13 +28,11 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch13")
     return torch.device("cuda")
-
 
 class SyntheticDataset(Dataset):
     """Synthetic dataset for training benchmarking."""
@@ -51,7 +49,6 @@ class SyntheticDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx], self.labels[idx]
 
-
 class OptimizedContinuousBatchingBenchmark(Benchmark):
     """Optimized: Continuous batching - dynamic batch composition.
     
@@ -65,15 +62,9 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.sample_queue = None
     
@@ -118,7 +109,6 @@ class OptimizedContinuousBatchingBenchmark(Benchmark):
         config = self.get_config()
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
 
         with nvtx_range("optimized_continuous_batching", enable=enable_nvtx):
             # Optimization: Continuous batching
@@ -186,7 +176,6 @@ def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedContinuousBatchingBenchmark()
 
-
 def main() -> None:
     """Standalone execution (for testing)."""
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
@@ -204,7 +193,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

@@ -30,7 +30,6 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
 )
 
-
 def resolve_device() -> torch.device:
     """Return a usable device, falling back to CPU if CUDA is unavailable or unsupported."""
     if not torch.cuda.is_available():
@@ -42,7 +41,6 @@ def resolve_device() -> torch.device:
         print(f"WARNING: CUDA unavailable or unsupported ({exc}); falling back to CPU.")
         return torch.device("cpu")
 
-
 class OptimizedPerformanceGraphsBenchmark(Benchmark):
     """Benchmark implementation with CUDA Graphs optimization."""
     
@@ -52,15 +50,9 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
         self.model = None
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         # Optimization: Compile model for kernel fusion and optimization
         try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
 
         self.data_buf = None
         self.target_buf = None
@@ -129,7 +121,6 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("optimized_performance_graphs", enable=enable_nvtx):
             self.host_data.normal_(0, 1)
             # Generate targets in valid range [0, 9] for 10-class classification
@@ -175,11 +166,9 @@ class OptimizedPerformanceGraphsBenchmark(Benchmark):
             return f"Buffer validation failed: {e}"
         return None
 
-
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedPerformanceGraphsBenchmark(batch_size=128)
-
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -199,7 +188,6 @@ def main() -> None:
     print(f"Average time: {result.mean_ms:.3f} ms")
     print(f"Median: {result.median_ms:.3f} ms")
     print(f"Std: {result.std_ms:.3f} ms")
-
 
 if __name__ == "__main__":
     main()

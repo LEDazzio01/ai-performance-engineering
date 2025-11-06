@@ -506,11 +506,13 @@ benchmark.teardown()
             wrapper_script.name
         ]
         
+        # nsys profiling timeout: 120 seconds (matches benchmark_harness.nsys_timeout_seconds)
+        # nsys needs time to initialize, run benchmark (up to 15s), and collect profiling data
         result = subprocess.run(
             nsys_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=15,
+            timeout=120,  # Increased from 15s - nsys profiling needs more time
             check=False
         )
         
@@ -574,11 +576,13 @@ def profile_cuda_executable(
     ]
     
     try:
+        # nsys profiling timeout: 120 seconds (matches benchmark_harness.nsys_timeout_seconds)
+        # nsys needs time to initialize, run executable, and collect profiling data
         result = subprocess.run(
             nsys_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=15,
+            timeout=120,  # Increased from 15s - nsys profiling needs more time
             check=False
         )
         
@@ -664,11 +668,13 @@ benchmark.teardown()
             wrapper_script.name
         ]
         
+        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=60,  # ncu can be slow
+            timeout=180,  # Increased from 60s - ncu profiling needs more time
             check=False
         )
         
@@ -735,11 +741,13 @@ def profile_cuda_executable_ncu(
     ]
     
     try:
+        # ncu profiling timeout: 180 seconds (matches benchmark_harness.ncu_timeout_seconds)
+        # ncu is slower than nsys and needs more time for metric collection
         result = subprocess.run(
             ncu_command,
             cwd=str(chapter_dir),
             capture_output=True,
-            timeout=60,  # ncu can be slow
+            timeout=180,  # Increased from 60s - ncu profiling needs more time
             check=False
         )
         

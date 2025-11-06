@@ -44,20 +44,7 @@ class OptimizedTilingBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
-        # Optimization: Compile model for kernel fusion and optimization
-        try:
-            self.model = torch.compile(None, mode="reduce-overhead", backend="inductor")
-        except Exception:
-            pass  # Fallback to eager if compilation fails
-
-        self.input = None
+        self.model = None        self.input = None
         self.tile_size = 256
     
     def setup(self) -> None:
