@@ -15,6 +15,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 _LEGACY_TF32_PATCHED = False
+_COMPILE_WARNED = False
 
 
 def _patch_legacy_tf32_attributes() -> None:
@@ -125,15 +126,41 @@ def get_optimal_compile_mode(preferred_mode: str = "max-autotune", sm_threshold:
 
 def compile_model(module: torch.nn.Module, **_: Any) -> torch.nn.Module:
     """
-    Placeholder compile helper.
+    Compile a module with torch.compile when available.
 
-    Historically these benchmarks relied on chapter-specific `arch_config`
-    modules that exposed a `compile_model()` wrapper. Many chapters still
-    import that helper defensively, but most workloads run uncompiled for
-    stability. For now, keep behaviour identical to the legacy fallback by
-    returning the module unchanged.
+    Parameters follow the historical signature used throughout the chapters.
+    Unknown keyword arguments are ignored intentionally to preserve backwards
+    compatibility with chapter-specific wrappers.
     """
-    return module
+    compile_fn = getattr(torch, "compile", None)
+    if compile_fn is None:
+        return module
+
+    if getattr(module, "_is_compiled_benchmark_module", False):
+        return module
+
+    mode = _.get("mode", "max-autotune")
+    fullgraph = _.get("fullgraph", False)
+    dynamic = _.get("dynamic", False)
+    options = _.get("options")
+
+    chosen_mode = get_optimal_compile_mode(mode)
+    try:
+        compiled = compile_fn(
+            module,
+            mode=chosen_mode,
+            fullgraph=fullgraph,
+            dynamic=dynamic,
+            options=options,
+        )
+        setattr(compiled, "_is_compiled_benchmark_module", True)
+        return compiled
+    except Exception as exc:
+        global _COMPILE_WARNED
+        if not _COMPILE_WARNED:
+            logger.warning("torch.compile failed (falling back to eager): %s", exc)
+            _COMPILE_WARNED = True
+        return module
 
 
 def enable_tf32(
