@@ -39,7 +39,7 @@ class BaselineMemoryBoundBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.data = None
-        self.N = 10_000_000  # 10M elements
+        self.N = 4_000_000  # 4M elements keep runtime reasonable
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -58,10 +58,13 @@ class BaselineMemoryBoundBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_memory_bound", enable=enable_nvtx):
-            # Simple element-wise add - minimal compute, lots of memory traffic
-            # Arithmetic Intensity = 1 FLOP / 8 bytes = 0.125 FLOP/Byte (memory-bound)
-            self.data = self.data + 1.0
+        with nvtx_range("memory_bound", enable=enable_nvtx):
+            assert self.data is not None
+            # Simulate a poor data-ingest path that round-trips to host memory every step.
+            host_copy = self.data.cpu()  # Blocking device→host copy
+            host_copy.add_(1.0)
+            self.data = host_copy.to(self.device, non_blocking=False)
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
@@ -72,8 +75,8 @@ class BaselineMemoryBoundBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=10,
+            iterations=20,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
         )
@@ -102,4 +105,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Memory Bound: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

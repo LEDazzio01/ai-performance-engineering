@@ -1,15 +1,10 @@
-"""optimized_moe.py - Optimized Mixture of Experts in hardware overview context.
-
-Demonstrates MoE optimized for hardware capabilities.
-MoE: Uses Mixture of Experts with hardware-aware expert routing.
-Sparse activation optimized for GPU hardware characteristics.
-Implements Benchmark protocol for harness integration.
-"""
+"""Sparse MoE benchmark for Chapter 2."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,193 +12,117 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch2")
+        raise RuntimeError("CUDA required for ch2 MoE example")
     return torch.device("cuda")
 
-class MoELayer(nn.Module):
-    """Mixture of Experts layer optimized for hardware."""
-    
-    def __init__(self, hidden_dim: int = 256, num_experts: int = 4, top_k: int = 2):
+
+class Expert(nn.Module):
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.ff = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 2, bias=False),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 2, hidden_dim, bias=False),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.ff(x)
+
+
+class RoutedMoE(nn.Module):
+    """Top-k routed experts with lightweight token bucketing."""
+
+    def __init__(self, hidden_dim: int, num_experts: int, top_k: int = 2):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_experts = num_experts
         self.top_k = top_k
-        
-        # Router (gating network)
-        self.router = nn.Linear(hidden_dim, num_experts)
-        
-        # Experts optimized for hardware
-        self.experts = nn.ModuleList([
-            nn.Sequential(
-        nn.Linear(hidden_dim, hidden_dim * 2),
-        nn.ReLU(),
-        nn.Linear(hidden_dim * 2, hidden_dim),
-            )
-            for _ in range(num_experts)
-        ])
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass with MoE routing optimized for hardware."""
-        batch_size, seq_len, hidden_dim = x.shape
-        
-        # Router output (MoE: expert selection)
-        router_logits = self.router(x)
-        router_probs = F.softmax(router_logits, dim=-1)
-        
-        # Top-k expert selection (MoE: sparse activation)
-        top_k_probs, top_k_indices = torch.topk(router_probs, self.top_k, dim=-1)
-        top_k_probs = top_k_probs / top_k_probs.sum(dim=-1, keepdim=True)
-        
-        # Process with selected experts (MoE: sparse computation optimized for hardware)
-        output = torch.zeros_like(x)
-        for expert_idx in range(self.num_experts):
-            # Find which positions use this expert (across batch and sequence)
-            expert_mask = (top_k_indices == expert_idx).any(dim=-1)  # (batch_size, seq_len)
-            if expert_mask.any():
-                expert_input = x[expert_mask]  # (num_selected, hidden_dim)
-                expert_output = self.experts[expert_idx](expert_input)  # (num_selected, hidden_dim)
-                
-                # Weight by router probability (MoE: weighted combination)
-                # Get probabilities for this expert at selected positions
-                selected_probs = top_k_probs[expert_mask]  # (num_selected, top_k)
-                selected_indices = top_k_indices[expert_mask]  # (num_selected, top_k)
-                # Find which of the top_k positions correspond to this expert
-                expert_pos_mask = (selected_indices == expert_idx)  # (num_selected, top_k)
-                # Sum probabilities for this expert (weighted combination)
-                expert_weight = (selected_probs * expert_pos_mask).sum(dim=-1, keepdim=True)  # (num_selected, 1)
-                
-                output[expert_mask] += expert_output * expert_weight
-        
-        return output
+        self.router = nn.Linear(hidden_dim, num_experts, bias=False)
+        self.experts = nn.ModuleList(Expert(hidden_dim) for _ in range(num_experts))
 
-class OptimizedMoeBenchmark(Benchmark):
-    """Optimized: Mixture of Experts optimized for hardware.
-    
-    MoE: Uses Mixture of Experts with hardware-aware expert routing.
-    Sparse activation optimized for GPU hardware characteristics.
-    """
-    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        bsz, seq, hidden = x.shape
+        tokens = x.view(-1, hidden)
+        logits = self.router(tokens)
+        topk_vals, topk_idx = torch.topk(logits, self.top_k, dim=-1)
+        weights = torch.softmax(topk_vals, dim=-1)
+
+        output = torch.zeros_like(tokens)
+        for expert_id in range(self.num_experts):
+            assigned = (topk_idx == expert_id)
+            if not assigned.any():
+                continue
+            token_mask = assigned.any(dim=-1)
+            expert_in = tokens[token_mask]
+            expert_out = self.experts[expert_id](expert_in)
+            expert_weights = (weights[token_mask] * assigned[token_mask].float()).sum(dim=-1)
+            output[token_mask] += expert_out * expert_weights.unsqueeze(-1)
+
+        return output.view(bsz, seq, hidden)
+
+
+class OptimizedMoEBenchmark(Benchmark):
+    """Sparse routed MoE with compilation + FP16 dispatch."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
+        self.hidden_dim = 768
+        self.num_experts = 16
+        self.top_k = 2
+        self.batch = 16
+        self.seq = 256
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
 
-        self.input = None
-    
     def setup(self) -> None:
-        """Setup: Initialize MoE model optimized for hardware."""
-        
-        torch.manual_seed(42)
-        # Optimization: MoE (Mixture of Experts) optimized for hardware
-        # MoE uses router to select top-k experts for each input
-        # Sparse activation optimized for GPU hardware characteristics
-        
-        hidden_dim = 256
-        num_experts = 4
-        self.model = MoELayer(hidden_dim=hidden_dim, num_experts=num_experts, top_k=2)
-        self.model = self.model.to(self.device)
-        # Optimization: Use FP16 for faster computation
-        if self.device.type == "cuda":
-            try:
-                self.model = self.model.half()
-            except Exception:
-                 pass
-        self.model.eval()
-        
-        # Input should be 3D: (batch_size, seq_len, hidden_dim) for MoE layer
-        batch_size = 32
-        seq_len = 1
-        self.input = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
-        # Convert input to match model dtype (FP16 if model was converted)
-        # Check dtype of first parameter to determine model dtype
-        try:
-            first_param = next(self.model.parameters())
-            if first_param.dtype == torch.float16:
-                self.input = self.input.half()
-        except StopIteration:
-            pass  # No parameters, use default dtype
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: MoE optimized for hardware."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        torch.manual_seed(0)
+        self.model = RoutedMoE(self.hidden_dim, self.num_experts, self.top_k).to(self.device).half().eval()
+        self.inputs = torch.randn(self.batch, self.seq, self.hidden_dim, device=self.device, dtype=torch.float16)
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        with torch.no_grad():
+            _ = self.model(self.inputs)
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-        with nvtx_range("optimized_moe", enable=enable_nvtx):
+        assert self.model is not None and self.inputs is not None
+        with nvtx_range("optimized_moe_sparse", enable=enable_nvtx):
             with torch.no_grad():
-                pass
-        # Optimization: MoE (Mixture of Experts) optimized for hardware
-        # Router selects top-k experts for each input
-        # Sparse activation optimized for GPU hardware characteristics
-        # MoE benefits: reduces computation, optimized for hardware capabilities
-        output = self.model(self.input)
-                
-        # Optimization: MoE benefits for hardware
-        # - Sparse activation (only selected experts)
-        # - Optimized for GPU hardware characteristics
-        # - Better hardware utilization
-        # - Efficient expert routing
-        _ = output.sum()
+                _ = self.model(self.inputs)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=10, warmup=2)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.model is None or self.inputs is None:
+            return "Model/input not initialized"
         return None
 
-def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
-    return OptimizedMoeBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedMoeBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: moe")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
+def get_benchmark() -> Benchmark:
+    return OptimizedMoEBenchmark()
+
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=5, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized sparse MoE latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

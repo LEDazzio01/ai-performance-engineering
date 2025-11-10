@@ -12,6 +12,7 @@ if str(repo_root) not in sys.path:
 from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 from common.python.cuda_binary_benchmark import CudaBinaryBenchmark
 
+from ch10.cluster_group_utils import raise_cluster_skip
 
 class BaselineClusterGroupBenchmark(CudaBinaryBenchmark):
     """Wraps the baseline cooperative group example without clusters."""
@@ -25,7 +26,15 @@ class BaselineClusterGroupBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=1,
             timeout_seconds=180,
+            time_regex=r"TIME_MS:\s*([0-9.]+)",
         )
+
+    def benchmark_fn(self) -> None:
+        try:
+            super().benchmark_fn()
+        except RuntimeError as exc:
+            raise_cluster_skip(str(exc))
+            raise
 
 
 def get_benchmark() -> BaselineClusterGroupBenchmark:
@@ -41,4 +50,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Cluster Group: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

@@ -23,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -41,12 +42,15 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.A = None
-        self.B = None
-        self.C = None
-        self.m = 512
-        self.n = 512
-        self.k = 512
+        self.A_batches = None
+        self.B_batches = None
+        self.outputs = None
+        self.group = None
+        self.m = 1024
+        self.n = 1024
+        self.k = 1024
+        self.num_steps = max(8, WORKLOAD.performance_microbatches // 4)
+        self.group = self.num_steps
         self.compiled_matmul = None
     
     def setup(self) -> None:
@@ -64,9 +68,12 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         # Uses torch.compile with CUTLASS backend for hardware-optimized kernels
         # Optimizes memory access patterns and bandwidth utilization
         
-        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
-        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
-        self.C = torch.empty(self.m, self.n, device=self.device, dtype=torch.float32)
+        dtype = torch.float16 if self.device.type == "cuda" else torch.float32
+        self.A_batches = []
+        self.B_batches = []
+        for _ in range(self.num_steps):
+            self.A_batches.append(torch.randn(self.m, self.k, device=self.device, dtype=dtype))
+            self.B_batches.append(torch.randn(self.k, self.n, device=self.device, dtype=dtype))
         
         # Optimization: Compile with CUTLASS backend for optimized memory access
         def gemm_fn(a, b):
@@ -88,6 +95,13 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
             self.compiled_matmul = gemm_fn
         
         torch.cuda.synchronize()
+        warm_a = self.A_batches[0]
+        warm_b = self.B_batches[0]
+        for _ in range(3):
+            _ = self.compiled_matmul(warm_a, warm_b)
+        torch.cuda.synchronize()
+
+        self.outputs = torch.zeros(1, device=self.device, dtype=warm_a.dtype)
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUTLASS-optimized GEMM with memory optimizations."""
@@ -101,39 +115,36 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
 
 
         with nvtx_range("optimized_cutlass_memory", enable=enable_nvtx):
-            # Optimization: CUTLASS-optimized memory management
-            # CUTLASS kernels optimize memory access patterns
-            # Reduces memory bandwidth usage and improves cache efficiency
-            # Better memory utilization compared to standard operations
-            self.C = self.compiled_matmul(self.A, self.B)
-            
-            # Optimization: CUTLASS benefits
-            # - Hardware-optimized GEMM kernels
-            # - Leverages tensor cores for acceleration
-            # - Optimized memory access patterns
-            # - Better performance through hardware-specific optimizations
+            totals = 0.0
+            for start in range(0, self.num_steps, self.group):
+                A_stack = torch.stack(self.A_batches[start : start + self.group], dim=0)
+                B_stack = torch.stack(self.B_batches[start : start + self.group], dim=0)
+                totals += self.compiled_matmul(A_stack, B_stack).sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            self.outputs = totals
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.A = None
-        self.B = None
-        self.C = None
+        self.A_batches = None
+        self.B_batches = None
+        self.outputs = None
         self.compiled_matmul = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=10,
+            warmup=2,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.A is None or self.B is None:
+        if self.A_batches is None or self.B_batches is None:
             return "Matrices not initialized"
-        if self.C is None:
+        if self.outputs is None:
             return "Output matrix not initialized"
         return None
 

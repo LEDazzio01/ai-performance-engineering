@@ -46,7 +46,7 @@ class BaselineAdaptiveBenchmark(Benchmark):
         self.input = None
         self.output = None
         self.N = 10_000_000
-        self.tile_size = 256
+        self.tile_size = 64
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -62,7 +62,7 @@ class BaselineAdaptiveBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("baseline_adaptive_fixed", enable=enable_nvtx):
+        with nvtx_range("adaptive", enable=enable_nvtx):
             run_kernel(self.input, self.output, self.tile_size)
             torch.cuda.synchronize()
     

@@ -1,15 +1,10 @@
-"""baseline_triton.py - Baseline without Triton optimization in infrastructure/OS tuning context.
-
-Demonstrates operations using standard PyTorch kernels (not Triton).
-Triton: This baseline does not use Triton kernels.
-Uses PyTorch's default CUDA kernels without Triton optimization.
-Implements Benchmark protocol for harness integration.
-"""
+"""Baseline elementwise kernel using multiple PyTorch launches."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,109 +12,66 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 triton example")
     return torch.device("cuda")
 
 
 class BaselineTritonBenchmark(Benchmark):
-    """Baseline: Standard PyTorch operations (not Triton kernels).
-    
-    Triton: This baseline does not use Triton kernels.
-    Uses PyTorch's default CUDA kernels without Triton optimization.
-    """
-    
+    """Uses three separate kernels for sin/scale/bias."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.N = 1_000_000
-    
-    def setup(self) -> None:
-        """Setup: Initialize tensors."""
-        torch.manual_seed(42)
-        # Baseline: Standard PyTorch operations
-        # Triton is a GPU programming language for writing efficient kernels
-        # This baseline does not use Triton kernels
-        
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Standard PyTorch operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.input: Optional[torch.Tensor] = None
+        self.scale: Optional[torch.Tensor] = None
+        self.bias: Optional[torch.Tensor] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(55)
+        self.input = torch.randn(8_388_608, device=self.device, dtype=torch.float16)
+        self.scale = torch.full((1,), 1.7, device=self.device, dtype=torch.float16)
+        self.bias = torch.full((1,), -0.5, device=self.device, dtype=torch.float16)
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
+        assert self.input is not None and self.scale is not None and self.bias is not None
         with nvtx_range("baseline_triton", enable=enable_nvtx):
-            # Baseline: Standard PyTorch operations
-            # Triton provides a Python-like language for writing GPU kernels
-            # This baseline uses PyTorch's default CUDA kernels
-            # Triton kernels can be more efficient through explicit optimization
-            self.output = self.input * 2.0 + 1.0
-            # Without Triton, uses PyTorch's default kernel implementations
+            tmp = torch.sin(self.input)
+            tmp = tmp * self.scale
+            _ = tmp + self.bias
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.input = None
-        self.output = None
+        self.scale = None
+        self.bias = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
-        )
-    
+        return BenchmarkConfig(iterations=100, warmup=10)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.output is None:
-            return "Output tensor not initialized"
+        if self.input is None:
+            return "Input tensor missing"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineTritonBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=100, warmup=10)
+        config=BenchmarkConfig(iterations=10, warmup=2),
     )
-    benchmark = BaselineTritonBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Triton")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()
-
+    result = harness.benchmark(get_benchmark())
+    print(f"\nBaseline Triton latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

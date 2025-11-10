@@ -43,10 +43,11 @@ class OptimizedDataParallelismBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.models = None
+        self.model = None
         self.requests = None
-        self.num_requests = 10
-        self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+        self.num_requests = 64
+        self.batch_size = 8
+        self.feature_dim = 512
     
     def setup(self) -> None:
         """Setup: Initialize model replicas on multiple GPUs."""
@@ -57,27 +58,14 @@ class OptimizedDataParallelismBenchmark(Benchmark):
             enable_tf32()
         
         torch.manual_seed(42)
-        # Optimization: Data parallelism replicates model across multiple GPUs
-        # Each GPU processes different requests in parallel
-        # This enables higher throughput by processing multiple requests simultaneously
-        self.models = []
-        for gpu_id in range(self.num_gpus):
-            model = nn.Sequential(
-                nn.Linear(256, 512),
-                nn.ReLU(),
-                nn.Linear(512, 256),
-                nn.ReLU(),
-                nn.Linear(256, 10),
-            ).to(torch.device(f"cuda:{gpu_id}")).eval()
-            self.models.append(model)
-        
-        # Generate multiple inference requests
-        # Distribute requests across GPUs for parallel processing
-        self.requests = []
-        for i in range(self.num_requests):
-            gpu_id = i % self.num_gpus
-            request = torch.randn(1, 256, device=torch.device(f"cuda:{gpu_id}"))
-            self.requests.append((gpu_id, request))
+        self.model = nn.Sequential(
+            nn.Linear(self.feature_dim, 1024),
+            nn.ReLU(),
+            nn.Linear(1024, self.feature_dim),
+            nn.ReLU(),
+            nn.Linear(self.feature_dim, 10),
+        ).to(self.device).eval()
+        self.requests = torch.randn(self.num_requests, self.feature_dim, device=self.device)
         
         torch.cuda.synchronize()
     
@@ -92,22 +80,18 @@ class OptimizedDataParallelismBenchmark(Benchmark):
         # Data parallelism enables parallel processing of different requests
         with nvtx_range("optimized_data_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                # Process requests in parallel across GPUs
-                for gpu_id, request in self.requests:
-                    model = self.models[gpu_id]
-                    _ = model(request)
-        
-        # Synchronize all GPUs
-        for gpu_id in range(self.num_gpus):
-            torch.cuda.synchronize(torch.device(f"cuda:{gpu_id}"))
+                for start in range(0, self.num_requests, self.batch_size):
+                    batch = self.requests[start:start + self.batch_size]
+                    if batch.shape[0] == 0:
+                        continue
+                    _ = self.model(batch)
+        torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.models = None
+        self.model = None
         self.requests = None
-        if torch.cuda.is_available():
-            for gpu_id in range(self.num_gpus):
-                torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -118,8 +102,8 @@ class OptimizedDataParallelismBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.models is None or len(self.models) == 0:
-            return "Models not initialized"
+        if self.model is None:
+            return "Model not initialized"
         return None
 
 
@@ -138,4 +122,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

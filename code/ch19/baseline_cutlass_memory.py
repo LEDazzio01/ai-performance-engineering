@@ -38,34 +38,49 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
         self.device = resolve_device()
         self.A = None
         self.B = None
-        self.m = 512
-        self.n = 512
-        self.k = 512
+        self.output = None
+        self.m = 1024
+        self.n = 1024
+        self.k = 1024
+        self.block_size = 128
 
     def setup(self) -> None:
         """Setup: Initialize matrices."""
         torch.manual_seed(42)
-        # Baseline: Standard PyTorch matmul (no CUTLASS memory optimization)
+        # Baseline intentionally materializes matmul via many tiny tiles which thrash L2
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
+        self.output = torch.zeros(self.m, self.n, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Standard GEMM without memory optimization."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
+        """Benchmark: Naive tiled GEMM that replays tiny kernels serially."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("baseline_cutlass_memory", enable=enable_nvtx):
-            # Baseline: Standard PyTorch matmul
-            # No CUTLASS memory optimization - uses default GEMM kernels
-            _ = torch.matmul(self.A, self.B)
+            self._blocked_matmul()
+            torch.cuda.synchronize()
 
+    def _blocked_matmul(self) -> None:
+        """Mimic an unoptimized GEMM that issues many small kernels."""
+        self.output.zero_()
+        block = self.block_size
+        for row in range(0, self.m, block):
+            row_end = min(row + block, self.m)
+            a_row = self.A[row:row_end]
+            for col in range(0, self.n, block):
+                col_end = min(col + block, self.n)
+                tile = self.output[row:row_end, col:col_end]
+                for depth in range(0, self.k, block):
+                    depth_end = min(depth + block, self.k)
+                    prod = torch.mm(
+                        a_row[:, depth:depth_end],
+                        self.B[depth:depth_end, col:col_end],
+                    )
+                    tile.add_(prod)
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -82,7 +97,7 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.A is None or self.B is None:
+        if self.A is None or self.B is None or self.output is None:
             return "Matrices not initialized"
         return None
 

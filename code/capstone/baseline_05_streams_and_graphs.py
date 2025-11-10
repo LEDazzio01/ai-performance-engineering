@@ -1,0 +1,34 @@
+"""Baseline capstone scenario: streams and CUDA graphs."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from capstone.scenario_benchmark import CapstoneScenarioBenchmark, ScenarioVariant
+
+
+class BaselineStreamsAndGraphsBenchmark(CapstoneScenarioBenchmark):
+    def __init__(self) -> None:
+        super().__init__("05_streams_and_graphs", ScenarioVariant.BASELINE)
+
+
+def get_benchmark() -> CapstoneScenarioBenchmark:
+    return BaselineStreamsAndGraphsBenchmark()
+
+
+if __name__ == "__main__":
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    benchmark = get_benchmark()
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=benchmark.get_config(),
+    )
+    result = harness.benchmark(benchmark)
+    mean_ms = result.timing.mean_ms if result.timing else 0.0
+    print(f"\nCapstone baseline streams and CUDA graphs: {mean_ms:.3f} ms")

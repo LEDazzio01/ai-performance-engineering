@@ -30,6 +30,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from common.python.cutlass_binding import cutlass_gemm_fp16
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -51,6 +52,7 @@ class OptimizedCutlassBenchmark(Benchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
+        self._cutlass_ready = False
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -59,21 +61,21 @@ class OptimizedCutlassBenchmark(Benchmark):
         enable_tf32()
         torch.manual_seed(42)
         # Optimization: CUTLASS-optimized GEMM
-                
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
         
-        # Optimization: Compile with CUTLASS backend
-        # CUTLASS provides hardware-optimized GEMM kernels
-        # Select optimal compile mode based on GPU SM count
-        from common.python.compile_utils import get_optimal_compile_mode
-        compile_mode = get_optimal_compile_mode("max-autotune")
-        self.compiled_matmul = torch.compile(
-            lambda a, b: torch.matmul(a, b),
-            mode=compile_mode,
-            backend="inductor"
-        )
-        torch.cuda.synchronize()
+        # Warm the CUTLASS kernel so the extension build + autotuning cost stays in setup.
+        try:
+            for _ in range(3):
+                _ = cutlass_gemm_fp16(self.A, self.B)
+            torch.cuda.synchronize()
+            self._cutlass_ready = True
+        except Exception as exc:
+            raise RuntimeError(
+                "CUTLASS GEMM extension failed to initialize. "
+                "Install nvidia-cutlass-dsl>=4.2 and ensure CUDA development "
+                "headers are available."
+            ) from exc
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUTLASS-optimized GEMM."""
@@ -86,22 +88,16 @@ class OptimizedCutlassBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_cutlass", enable=enable_nvtx):
-    # Optimization: CUTLASS-optimized GEMM
-    # Leverages hardware-optimized kernels (tensor cores, optimized memory access)
-            _ = self.compiled_matmul(self.A, self.B)
-            
-    # Optimization: CUTLASS benefits
-    # - Hardware-optimized GEMM kernels
-    # - Leverages tensor cores for acceleration
-    # - Optimized memory access patterns
-    # - Better performance through hardware-specific optimizations
+            if not self._cutlass_ready:
+                raise RuntimeError("CUTLASS kernel not initialized")
+            _ = cutlass_gemm_fp16(self.A, self.B)
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.A = None
         self.B = None
-        self.compiled_matmul = None
+        self._cutlass_ready = False
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

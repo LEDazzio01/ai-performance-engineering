@@ -1,4 +1,4 @@
-"""Baseline stream-ordered single-GPU (no distributed)."""
+"""Baseline roofline quantization – scalar CPU path plus redundant memory traffic."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+import numpy as np
 import torch
 from typing import Optional
 
@@ -26,28 +27,23 @@ def resolve_device() -> torch.device:
 
 
 class BaselineRooflineQuantizationBenchmark(Benchmark):
-    """Baseline: Single-GPU stream-ordered (no distributed computing)."""
+    """Baseline: emulate quantization with scalar CPU loops + extra memory traffic."""
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.tensor = None
+        self.chunk_len = 1 << 13
+        self.num_chunks = 32
+        self._last = 0.0
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: Initialize synthetic activations."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.tensor = torch.randn(self.num_chunks, self.chunk_len, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
+        """Benchmark: Scalar quantization with redundant host/device copies."""
         # Use conditional NVTX ranges - only enabled when profiling
 
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
@@ -58,20 +54,24 @@ class BaselineRooflineQuantizationBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_roofline_quantization", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch17 for full distributed training implementations
+            if self.tensor is None:
+                raise RuntimeError("Tensor not initialized")
+            total = 0.0
+            for idx in range(self.num_chunks):
+                chunk = self.tensor[idx].detach().cpu().numpy()
+                max_abs = max(abs(chunk).max(), 1e-6)
+                scale = 127.0 / max_abs
+                q = (chunk * scale).round().clip(-127, 127).astype("int8")
+                dq = (q.astype("float32") / scale).astype("float32")
+                total += float(dq.sum())
+                self.tensor[idx].copy_(torch.from_numpy(dq).to(self.device))
+            self._last = total
+            torch.cuda.synchronize(self.device)
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
-        self.output = None
+        self.tensor = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -83,8 +83,8 @@ class BaselineRooflineQuantizationBenchmark(Benchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.output is None:
-            return "Output tensor not initialized"
+        if self.tensor is None:
+            return "Tensor not initialized"
         return None
 
 

@@ -8,8 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N (10 * 1024 * 1024)  // 10M elements
-#define BLOCK_SIZE 256
+#define N (64 * 1024 * 1024)  // 64M elements (power of two for mask)
+#define BLOCK_SIZE 128
+#define STRIDE 17
 
 #define CUDA_CHECK(call) \
     do { \
@@ -22,13 +23,18 @@
     } while (0)
 
 // Baseline kernel: Simple multiply (low AI)
-__global__ void baseline_kernel(const float* __restrict__ a, 
-                                const float* __restrict__ b, 
-                                float* __restrict__ out, 
+__global__ void baseline_kernel(const float* __restrict__ a,
+                                const float* __restrict__ b,
+                                float* __restrict__ out,
                                 int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        out[idx] = a[idx] * b[idx];
+    int grid_stride = blockDim.x * gridDim.x;
+    const int mask = n - 1;
+    for (int linear = idx; linear < n; linear += grid_stride) {
+        int scatter = (linear * STRIDE) & mask;  // strided, non-coalesced reads
+        float aval = a[scatter];
+        float bval = b[scatter];
+        out[linear] = aval * bval;
     }
 }
 
@@ -61,7 +67,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(d_a, h_a, N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_b, h_b, N * sizeof(float), cudaMemcpyHostToDevice));
     
-    int iterations = 100;
+    int iterations = 200;
     int n = N;
     
     // Warmup
@@ -108,4 +114,3 @@ int main() {
     
     return 0;
 }
-

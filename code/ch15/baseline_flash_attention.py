@@ -17,8 +17,9 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+from contextlib import contextmanager
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -35,79 +36,101 @@ def resolve_device() -> torch.device:
 
 class BaselineFlashAttentionBenchmark(Benchmark):
     """Baseline: Standard attention without FlashAttention.
-    
+
     Flash attention: This baseline does not use FlashAttention.
     Uses standard attention with quadratic memory complexity.
     """
-    
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
+        self.hidden_dim = 512
+        self.num_heads = 8
+        self.head_dim = self.hidden_dim // self.num_heads
+        self.seq_len = 2048
+        self.batch_size = 4
+        self.qkv_proj: Optional[nn.Linear] = None
+        self.inputs: Optional[torch.Tensor] = None
+
     def setup(self) -> None:
-        """Setup: Initialize attention model without FlashAttention."""
+        """Setup: Initialize projection weights and dense attention inputs."""
         torch.manual_seed(42)
-        # Baseline: Standard attention - no FlashAttention optimization
-        # FlashAttention reduces memory complexity from O(seq_len^2) to O(seq_len)
-        # This baseline does not use FlashAttention
-        
-        hidden_dim = 256
-        num_heads = 8
-        
-        self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        ).to(self.device).eval()
-        
-        # Input sequence
-        batch_size = 4
-        seq_len = 512  # Long sequence to show FlashAttention benefit
-        self.input = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
+        self.qkv_proj = nn.Linear(self.hidden_dim, self.hidden_dim * 3, bias=True).to(
+            self.device, dtype=torch.float32
+        )
+        self.inputs = torch.randn(
+            self.batch_size,
+            self.seq_len,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float32,
+        )
         torch.cuda.synchronize()
-    
+
+    def _project_qkv(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        assert self.qkv_proj is not None
+        qkv = self.qkv_proj(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+        return q, k, v
+
+    def _reshape_heads(self, tensor: torch.Tensor) -> torch.Tensor:
+        batch, seq_len, _ = tensor.shape
+        return tensor.view(batch, seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+    @contextmanager
+    def _force_math_kernels(self):
+        """Disable FlashAttention kernels so the baseline pays quadratic cost."""
+        if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "sdp_kernel"):
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_math=True,
+                enable_mem_efficient=False,
+            ):
+                yield
+        else:
+            yield
+
     def benchmark_fn(self) -> None:
         """Benchmark: Standard attention without FlashAttention."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self.inputs is None or self.qkv_proj is None:
+            raise RuntimeError("Inputs not initialized")
 
         with nvtx_range("baseline_flash_attention", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Standard attention (no FlashAttention)
-                # Computes full attention matrix: O(seq_len^2) memory
-                # FlashAttention would use tiling to reduce memory
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Baseline: No FlashAttention benefits
-                # Quadratic memory complexity for long sequences
+                q, k, v = self._project_qkv(self.inputs)
+                q = self._reshape_heads(q)
+                k = self._reshape_heads(k)
+                v = self._reshape_heads(v)
+                # Force math kernel to emulate the O(N^2) baseline.
+                with self._force_math_kernels():
+                    _ = torch.nn.functional.scaled_dot_product_attention(
+                        q, k, v, is_causal=False
+                    )
+        torch.cuda.synchronize()
 
-    
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.model = None
-        self.input = None
+        self.qkv_proj = None
+        self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=20,
+            warmup=3,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.qkv_proj is None:
+            return "Projection layer not initialized"
+        if self.inputs is None:
+            return "Inputs not initialized"
         return None
 
 def get_benchmark() -> Benchmark:

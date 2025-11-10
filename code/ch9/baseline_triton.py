@@ -67,7 +67,7 @@ class BaselineTritonBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_triton", enable=enable_nvtx):
+        with nvtx_range("triton", enable=enable_nvtx):
             # Baseline: Standard PyTorch operations
             # Triton provides a Python-like language for writing GPU kernels
             # This baseline uses PyTorch's default CUDA kernels

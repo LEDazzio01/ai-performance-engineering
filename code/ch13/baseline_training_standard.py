@@ -20,7 +20,7 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode
 )
-from common.python.benchmark_utils import warn_benchmark_scaling
+from ch13.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -57,42 +57,21 @@ class BaselineTrainingBenchmark(Benchmark):
         self.targets = None
         self.optimizer = None
         self.criterion = None
-        
-        # Target model size for optimal demonstration of checkpointing benefits
-        # More layers = more activations stored = bigger memory benefit from checkpointing
-        original_num_layers = 50  # Target: 50 layers (~75GB params+gradients)
-        
-        # Scale down based on available GPU memory to prevent OOM
-        if torch.cuda.is_available():
-            total_memory_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-            if total_memory_gb >= 80:  # Large GPU - can use target size
-                self.num_layers = 50
-            elif total_memory_gb >= 60:  # Medium-large GPU
-                self.num_layers = 40  # ~60GB params+gradients
-            else:  # Smaller GPU
-                self.num_layers = 30  # ~45GB params+gradients
-        else:
-            self.num_layers = 40  # Fallback
-        
-        # Warn if model size was reduced
-        warn_benchmark_scaling(
-            scaling_type="Training model size",
-            original_values={"num_layers": original_num_layers},
-            scaled_values={"num_layers": self.num_layers},
-            impact_description="Fewer layers may reduce the memory savings benefit demonstrated by checkpointing; speedup ratios may differ",
-            recommendation="For accurate production benchmarks, use GPUs with >=80GB memory"
-        )
-        
-        self.batch_size = 8
-        self.hidden_dim = 4096
+        self.workload = WORKLOAD
+        self.hidden_dim = self.workload.training_hidden_dim
+        self.num_layers = self.workload.training_layers_baseline
+        self.global_batch = self.workload.global_batch_size
+        self.micro_batch = self.workload.micro_batch_size
+        self.accum_steps = self.global_batch // self.micro_batch
+        self.batch_size = self.micro_batch
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
         self.model = DeepModel(hidden_dim=self.hidden_dim, num_layers=self.num_layers)
         self.model = self.model.to(self.device).train()
         
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device)
+        self.inputs = torch.randn(self.global_batch, self.hidden_dim, device=self.device)
+        self.targets = torch.randn(self.global_batch, self.hidden_dim, device=self.device)
         
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
@@ -109,10 +88,14 @@ class BaselineTrainingBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_training_standard", enable=enable_nvtx):
-            self.optimizer.zero_grad()
-            outputs = self.model(self.inputs)
-            loss = self.criterion(outputs, self.targets)
-            loss.backward()
+            self.optimizer.zero_grad(set_to_none=True)
+            for start in range(0, self.global_batch, self.micro_batch):
+                end = start + self.micro_batch
+                inputs = self.inputs[start:end]
+                targets = self.targets[start:end]
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, targets) / self.accum_steps
+                loss.backward()
             self.optimizer.step()
 
     

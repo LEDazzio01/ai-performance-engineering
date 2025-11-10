@@ -102,7 +102,7 @@ class OptimizedTritonBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_triton", enable=enable_nvtx):
+        with nvtx_range("triton", enable=enable_nvtx):
             if TRITON_AVAILABLE:
                 # Optimization: Triton kernel
                 # Uses Triton for efficient custom GPU kernels

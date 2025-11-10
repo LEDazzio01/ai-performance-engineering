@@ -60,6 +60,12 @@ class OptimizedKernelFusionBenchmark(Benchmark):
         torch.manual_seed(42)
         self.data = torch.arange(self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
+        # Dry run so CUDA graph / kernel fusion setup cost is prepaid
+        self._extension.fused_kernel(self.data, 1)
+        torch.cuda.synchronize()
+        torch.manual_seed(42)
+        self.data = torch.arange(self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Fused kernel (single memory round trip)."""
@@ -72,7 +78,7 @@ class OptimizedKernelFusionBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_kernel_fusion_fused", enable=enable_nvtx):
+        with nvtx_range("kernel_fusion", enable=enable_nvtx):
             # Call CUDA extension with fused kernel
             self._extension.fused_kernel(self.data, self.iterations)
 

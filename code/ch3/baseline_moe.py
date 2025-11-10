@@ -1,15 +1,10 @@
-"""baseline_moe.py - Baseline dense model (no MoE) in infrastructure/OS tuning context.
-
-Demonstrates dense model where all parameters are active.
-MoE: This baseline does not use Mixture of Experts.
-All parameters process every input, not optimized for hardware capabilities.
-Implements Benchmark protocol for harness integration.
-"""
+"""Chapter 3 MoE baseline: dense compute with no routing."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -18,121 +13,94 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 MoE example")
     return torch.device("cuda")
 
 
-class BaselineMoeBenchmark(Benchmark):
-    """Baseline: Dense model (no MoE - all parameters active).
-    
-    MoE: This baseline does not use Mixture of Experts.
-    All parameters are active for every input, not optimized for hardware capabilities.
-    """
-    
+class DenseExpert(nn.Module):
+    def __init__(self, hidden_dim: int):
+        super().__init__()
+        self.ff = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 2, bias=False),
+            nn.GELU(),
+            nn.Linear(hidden_dim * 2, hidden_dim, bias=False),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.ff(x)
+
+
+class DenseMoE(nn.Module):
+    def __init__(self, hidden_dim: int, num_experts: int):
+        super().__init__()
+        self.experts = nn.ModuleList(DenseExpert(hidden_dim) for _ in range(num_experts))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        outputs = [expert(x) for expert in self.experts]
+        return torch.stack(outputs, dim=0).mean(dim=0)
+
+
+class BaselineMoEBenchmark(Benchmark):
+    """Runs every expert for each token (no routing)."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize dense model."""
-        torch.manual_seed(42)
-        # Baseline: Dense model - all parameters are active for every input
-        # MoE (Mixture of Experts) uses sparse activation optimized for hardware
-        # This baseline does not use MoE - all parameters are always active
-        
-        hidden_dim = 256
-        self.model = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim * 4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 4, hidden_dim),
-        ).to(self.device).eval()
-        
-        self.input = torch.randn(32, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Dense model (no MoE)."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.hidden_dim = 768
+        self.num_experts = 12
+        self.batch = 4
+        self.seq = 128
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(7)
+        self.model = DenseMoE(self.hidden_dim, self.num_experts).to(self.device).float().eval()
+        self.inputs = torch.randn(self.batch, self.seq, self.hidden_dim, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
+        assert self.model is not None and self.inputs is not None
         with nvtx_range("baseline_moe", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Dense model - all parameters active
-                # MoE would use sparse activation optimized for hardware
-                # This baseline uses all parameters (inefficient)
-                output = self.model(self.input)
-                
-                # Baseline: No MoE benefits
-                # All parameters active for every input (inefficient)
-                # MoE would use sparse activation
-                _ = output.sum()
+                outputs = []
+                for expert in self.model.experts:  # type: ignore[attr-defined]
+                    outputs.append(expert(self.inputs))
+                    torch.cuda.synchronize()
+                _ = torch.stack(outputs, dim=0).mean(dim=0)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=8, warmup=2)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.model is None or self.inputs is None:
+            return "Model/input not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
-    return BaselineMoeBenchmark()
-
-
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = BaselineMoeBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: MoE")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
+    return BaselineMoEBenchmark()
 
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=4, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nDense MoE latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

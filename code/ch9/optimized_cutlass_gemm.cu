@@ -1,117 +1,225 @@
-// optimized_cutlass_gemm.cu -- Optimized GEMM kernel with shared memory (optimized).
+// optimized_cutlass_gemm.cu -- Optimized GEMM using cuBLASLt tensor cores.
 
+#include <cublasLt.h>
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
-#include <cooperative_groups.h>
+
 #include <iostream>
-#include <chrono>
 #include <random>
-#include <algorithm>
 
-namespace cg = cooperative_groups;
+#define CUDA_CHECK(call)                                                         \
+  do {                                                                           \
+    cudaError_t status = (call);                                                 \
+    if (status != cudaSuccess) {                                                 \
+      std::cerr << "CUDA error " << __FILE__ << ":" << __LINE__ << " "           \
+                << cudaGetErrorString(status) << std::endl;                      \
+      std::exit(EXIT_FAILURE);                                                   \
+    }                                                                            \
+  } while (0)
 
-// Optimized GEMM kernel with shared memory
-__global__ void optimized_gemm_kernel(
-    const float* A, const float* B, float* C,
-    int M, int N, int K, float alpha, float beta) {
-    
-    __shared__ float sA[32][32];
-    __shared__ float sB[32][32];
-    cg::thread_block block = cg::this_thread_block();
-    
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    float sum = 0.0f;
-    
-    for (int k = 0; k < K; k += 32) {
-        // Load tiles into shared memory
-        if (row < M && k + threadIdx.x < K) {
-            sA[threadIdx.y][threadIdx.x] = A[row * K + k + threadIdx.x];
-        } else {
-            sA[threadIdx.y][threadIdx.x] = 0.0f;
-        }
-        
-        if (col < N && k + threadIdx.y < K) {
-            sB[threadIdx.y][threadIdx.x] = B[(k + threadIdx.y) * N + col];
-        } else {
-            sB[threadIdx.y][threadIdx.x] = 0.0f;
-        }
-        
-        block.sync();
-        
-        // Compute partial dot product
-        int tile_size = min(32, K - k);
-        for (int i = 0; i < tile_size; ++i) {
-            sum += sA[threadIdx.y][i] * sB[i][threadIdx.x];
-        }
-        
-        block.sync();
-    }
-    
-    if (row < M && col < N) {
-        C[row * N + col] = alpha * sum + beta * C[row * N + col];
-    }
-}
+#define CUBLAS_CHECK(call)                                                       \
+  do {                                                                           \
+    cublasStatus_t status = (call);                                              \
+    if (status != CUBLAS_STATUS_SUCCESS) {                                       \
+      std::cerr << "cuBLAS error " << __FILE__ << ":" << __LINE__ << " code "    \
+                << status << std::endl;                                          \
+      std::exit(EXIT_FAILURE);                                                   \
+    }                                                                            \
+  } while (0)
+
+#define CUBLASLT_CHECK(call)                                                     \
+  do {                                                                           \
+    cublasStatus_t status = (call);                                              \
+    if (status != CUBLAS_STATUS_SUCCESS) {                                       \
+      std::cerr << "cuBLASLt error " << __FILE__ << ":" << __LINE__ << " code "  \
+                << status << std::endl;                                          \
+      std::exit(EXIT_FAILURE);                                                   \
+    }                                                                            \
+  } while (0)
 
 int main() {
-    const int M = 256, N = 256, K = 256;
-    const size_t size_A = M * K * sizeof(float);
-    const size_t size_B = K * N * sizeof(float);
-    const size_t size_C = M * N * sizeof(float);
-    
-    float *h_A = new float[M * K];
-    float *h_B = new float[K * N];
-    float *h_C = new float[M * N];
-    
-    // Initialize matrices
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    constexpr int M = 1024;
+    constexpr int N = 1024;
+    constexpr int K = 1024;
+    constexpr int batch_count = 32;
+    constexpr int iterations = 5;
+    constexpr size_t workspace_bytes = 64ull * 1024ull * 1024ull;
+
+    const size_t elems_A = static_cast<size_t>(M) * K;
+    const size_t elems_B = static_cast<size_t>(K) * N;
+    const size_t elems_C = static_cast<size_t>(M) * N;
+    const size_t size_A = elems_A * sizeof(float) * batch_count;
+    const size_t size_B = elems_B * sizeof(float) * batch_count;
+    const size_t size_C = elems_C * sizeof(float) * batch_count;
+
+    float* h_A = nullptr;
+    float* h_B = nullptr;
+    float* h_C = nullptr;
+    CUDA_CHECK(cudaMallocHost(&h_A, size_A));
+    CUDA_CHECK(cudaMallocHost(&h_B, size_B));
+    CUDA_CHECK(cudaMallocHost(&h_C, size_C));
+
+    std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    
-    for (int i = 0; i < M * K; ++i) h_A[i] = dis(gen);
-    for (int i = 0; i < K * N; ++i) h_B[i] = dis(gen);
-    for (int i = 0; i < M * N; ++i) h_C[i] = 0.0f;
-    
-    float *d_A, *d_B, *d_C;
-    cudaMalloc(&d_A, size_A);
-    cudaMalloc(&d_B, size_B);
-    cudaMalloc(&d_C, size_C);
-    
-    cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_C, h_C, size_C, cudaMemcpyHostToDevice);
-    
-    dim3 block_size(32, 32);
-    dim3 grid_size((N + block_size.x - 1) / block_size.x, 
-                   (M + block_size.y - 1) / block_size.y);
-    
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
-    const int iterations = 100;
-    cudaEventRecord(start);
-    for (int i = 0; i < iterations; i++) {
-        optimized_gemm_kernel<<<grid_size, block_size>>>(d_A, d_B, d_C, M, N, K, 1.0f, 0.0f);
+    for (size_t i = 0; i < elems_A * batch_count; ++i) {
+        h_A[i] = dis(gen);
     }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    
-    float time_total;
-    cudaEventElapsedTime(&time_total, start, stop);
-    float time_avg = time_total / iterations;
-    
-    std::cout << "Optimized GEMM (with shared memory): " << time_avg << " ms" << std::endl;
-    
-    delete[] h_A;
-    delete[] h_B;
-    delete[] h_C;
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    
+    for (size_t i = 0; i < elems_B * batch_count; ++i) {
+        h_B[i] = dis(gen);
+    }
+    std::fill(h_C, h_C + (elems_C * batch_count), 0.0f);
+
+    float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_A, size_A));
+    CUDA_CHECK(cudaMalloc(&d_B, size_B));
+    CUDA_CHECK(cudaMalloc(&d_C, size_C));
+    CUDA_CHECK(cudaMemcpy(d_A, h_A, size_A, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B, size_B, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_C, h_C, size_C, cudaMemcpyHostToDevice));
+
+    cublasLtHandle_t ltHandle;
+    CUBLASLT_CHECK(cublasLtCreate(&ltHandle));
+    cublasHandle_t fallbackHandle;
+    CUBLAS_CHECK(cublasCreate(&fallbackHandle));
+    CUBLAS_CHECK(cublasSetMathMode(fallbackHandle, CUBLAS_TF32_TENSOR_OP_MATH));
+
+    cublasLtMatmulDesc_t operationDesc;
+    CUBLASLT_CHECK(cublasLtMatmulDescCreate(&operationDesc, CUBLAS_COMPUTE_32F_FAST_TF32, CUDA_R_32F));
+    cublasOperation_t trans = CUBLAS_OP_N;
+    CUBLASLT_CHECK(cublasLtMatmulDescSetAttribute(
+        operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &trans, sizeof(trans)));
+    CUBLASLT_CHECK(cublasLtMatmulDescSetAttribute(
+        operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &trans, sizeof(trans)));
+
+    cublasLtMatrixLayout_t Adesc, Bdesc, Cdesc;
+    CUBLASLT_CHECK(cublasLtMatrixLayoutCreate(&Adesc, CUDA_R_32F, M, K, K));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutCreate(&Bdesc, CUDA_R_32F, K, N, N));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutCreate(&Cdesc, CUDA_R_32F, M, N, N));
+    cublasLtOrder_t order = CUBLASLT_ORDER_ROW;
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Adesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Bdesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Cdesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order, sizeof(order)));
+
+    const long long strideA = static_cast<long long>(elems_A);
+    const long long strideB = static_cast<long long>(elems_B);
+    const long long strideC = static_cast<long long>(elems_C);
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Adesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideA, sizeof(strideA)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Bdesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideB, sizeof(strideB)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Cdesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideC, sizeof(strideC)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Adesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Bdesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutSetAttribute(
+        Cdesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batch_count, sizeof(batch_count)));
+
+    cublasLtMatmulPreference_t preference;
+    CUBLASLT_CHECK(cublasLtMatmulPreferenceCreate(&preference));
+    CUBLASLT_CHECK(cublasLtMatmulPreferenceSetAttribute(
+        preference,
+        CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+        &workspace_bytes,
+        sizeof(workspace_bytes)));
+
+    cublasLtMatmulHeuristicResult_t heuristic{};
+    int returnedResults = 0;
+    CUBLASLT_CHECK(cublasLtMatmulAlgoGetHeuristic(
+        ltHandle,
+        operationDesc,
+        Adesc,
+        Bdesc,
+        Cdesc,
+        Cdesc,
+        preference,
+        1,
+        &heuristic,
+        &returnedResults));
+
+    void* workspace = nullptr;
+    CUDA_CHECK(cudaMalloc(&workspace, workspace_bytes));
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        if (returnedResults > 0) {
+            CUBLASLT_CHECK(cublasLtMatmul(
+                ltHandle,
+                operationDesc,
+                &alpha,
+                d_A,
+                Adesc,
+                d_B,
+                Bdesc,
+                &beta,
+                d_C,
+                Cdesc,
+                d_C,
+                Cdesc,
+                &heuristic.algo,
+                workspace,
+                workspace_bytes,
+                0));
+        } else {
+            CUBLAS_CHECK(cublasSgemmStridedBatched(
+                fallbackHandle,
+                CUBLAS_OP_N,
+                CUBLAS_OP_N,
+                N,
+                M,
+                K,
+                &alpha,
+                d_B,
+                N,
+                strideB,
+                d_A,
+                K,
+                strideA,
+                &beta,
+                d_C,
+                N,
+                strideC,
+                batch_count));
+        }
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    float total_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
+    const float avg_ms = total_ms / (iterations * batch_count);
+    std::cout << "cuBLASLt batched GEMM (optimized): " << avg_ms << " ms" << std::endl;
+
+    CUDA_CHECK(cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost));
+    std::cout << "Checksum sample: " << h_C[0] << std::endl;
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaFree(workspace));
+    CUBLASLT_CHECK(cublasLtMatmulPreferenceDestroy(preference));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutDestroy(Adesc));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutDestroy(Bdesc));
+    CUBLASLT_CHECK(cublasLtMatrixLayoutDestroy(Cdesc));
+    CUBLASLT_CHECK(cublasLtMatmulDescDestroy(operationDesc));
+    CUBLASLT_CHECK(cublasLtDestroy(ltHandle));
+    CUBLAS_CHECK(cublasDestroy(fallbackHandle));
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
+    CUDA_CHECK(cudaFreeHost(h_A));
+    CUDA_CHECK(cudaFreeHost(h_B));
+    CUDA_CHECK(cudaFreeHost(h_C));
+
     return 0;
 }
-

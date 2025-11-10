@@ -25,7 +25,6 @@ class BaselineTransposeBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=1,
             timeout_seconds=90,
-            time_regex=None,
         )
 
 

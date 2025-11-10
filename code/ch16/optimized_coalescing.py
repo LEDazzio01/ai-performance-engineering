@@ -16,16 +16,13 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
-import torch.nn as nn
-
-from common.python.compile_utils import compile_model
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.cuda_extensions import load_coalescing_extension
 
 
 def resolve_device() -> torch.device:
@@ -36,76 +33,54 @@ def resolve_device() -> torch.device:
 
 
 class OptimizedCoalescingBenchmark(Benchmark):
-    """Optimized: Coalesced memory access.
-    
-    Coalescing: Optimizes memory access for coalescing.
-    Combines accesses into single transactions for better bandwidth utilization.
-    """
-    
+    """Optimized: Coalesced memory access using CUDA extension helpers."""
+
     def __init__(self):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 10_000_000
-    
+        self.N = 16_000_000
+        self._extension = None
+
     def setup(self) -> None:
-        """Setup: Initialize tensors."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        """Setup: Initialize tensors and load coalesced kernel."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Coalesced memory access
-        # Coalescing combines memory accesses into single transactions
-        # Accesses consecutive memory locations for coalescing
-        
-        # Optimization: Use BF16 for better memory bandwidth (2x reduction)
-        # This improves coalesced access performance
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.bfloat16)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.bfloat16)
+        self._extension = load_coalescing_extension()
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self._extension.coalesced_copy(self.output, self.input)
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
         """Benchmark: Coalesced memory access."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self._extension is None or self.input is None or self.output is None:
+            raise RuntimeError("Extension/tensors not initialized")
 
         with nvtx_range("optimized_coalescing_coalesced", enable=enable_nvtx):
-            # Optimization: Coalesced access - consecutive memory locations
-            # Threads access consecutive elements, enabling coalescing
-            # Combines accesses into single 128-byte transactions
-            # Better memory bandwidth utilization
-            
-            # Process in consecutive chunks (coalesced access)
-            self.output = self.input * 2.0
-            
-            # Optimization: Coalescing benefits
-            # - Consecutive memory access (enables coalescing)
-            # - Single transaction for multiple accesses
-            # - Better memory bandwidth utilization
-            # - Improved performance
+            self._extension.coalesced_copy(self.output, self.input)
 
-    
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.input = None
         self.output = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
-            warmup=2,
+            iterations=20,
+            warmup=4,
+            setup_timeout_seconds=180,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.input is None or self.output is None:

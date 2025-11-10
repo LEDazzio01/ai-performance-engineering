@@ -58,7 +58,7 @@ class BaselineOccupancyBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_occupancy_low", enable=enable_nvtx):
+        with nvtx_range("occupancy", enable=enable_nvtx):
             # Many small kernel launches - low occupancy
             # Each launch processes small amount of work
             chunk_size = 1000

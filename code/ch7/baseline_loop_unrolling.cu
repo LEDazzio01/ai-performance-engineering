@@ -6,16 +6,30 @@
 #include "../common/headers/cuda_helpers.cuh"
 
 constexpr int N = 1 << 20;
+constexpr int INNER_ITERS = 512;
+constexpr int STRIDE = 73;
+
+__device__ __forceinline__ float compute_contribution(float sample, int iteration) {
+  const float weight = 1.0001f + 0.0002f * static_cast<float>(iteration & 7);
+  const float phase = static_cast<float>(iteration) * 0.0005f;
+  const float s = __sinf(sample * 0.05f + phase);
+  const float c = __cosf(sample * 0.025f - phase);
+  return fmaf(sample * weight, s * 0.1f + 0.9f, c * 0.05f);
+}
 
 __global__ void kernel_no_unroll(const float* in, float* out, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
-    float val = in[idx];
-    // No unroll pragma - sequential loop
-    for (int i = 0; i < 16; ++i) {
-      val = val * 1.001f + 0.001f;
+    float accumulator = 0.0f;
+    const int mask = n - 1;
+    int offset = idx;
+    #pragma unroll 1
+    for (int i = 0; i < INNER_ITERS; ++i) {
+      float sample = in[offset];
+      accumulator += compute_contribution(sample, i);
+      offset = (offset + STRIDE) & mask;
     }
-    out[idx] = val;
+    out[idx] = accumulator;
   }
 }
 
@@ -30,7 +44,7 @@ int main() {
   CUDA_CHECK(cudaMalloc(&d_out, N * sizeof(float)));
   CUDA_CHECK(cudaMemcpy(d_in, h_in, N * sizeof(float), cudaMemcpyHostToDevice));
 
-  dim3 block(256);
+  dim3 block(64);
   dim3 grid((N + block.x - 1) / block.x);
   
   cudaEvent_t start, stop;
@@ -47,7 +61,9 @@ int main() {
   
   float ms;
   CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-  printf("Loop without unroll (baseline): %.3f ms\n", ms / iterations);
+  float avg_ms = ms / iterations;
+  printf("Loop without unroll (baseline): %.3f ms\n", avg_ms);
+  printf("TIME_MS: %.6f\n", avg_ms);
 
   CUDA_CHECK(cudaFree(d_in));
   CUDA_CHECK(cudaFree(d_out));
@@ -57,4 +73,3 @@ int main() {
   CUDA_CHECK(cudaEventDestroy(stop));
   return 0;
 }
-

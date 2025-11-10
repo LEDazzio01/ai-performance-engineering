@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -45,11 +45,13 @@ class BaselinePagedAttentionBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.kv_cache = None
         self.inputs = None
-        self.hidden_dim = 256
-        self.num_heads = 8
+        self.hidden_dim = 512
+        self.num_heads = 16
         self.head_dim = self.hidden_dim // self.num_heads
+        self.batch_size = 4
+        self.max_seq_len = 256
+        self.steps = 512
     
     def setup(self) -> None:
         """Setup: Initialize model and contiguous KV cache."""
@@ -65,19 +67,10 @@ class BaselinePagedAttentionBenchmark(Benchmark):
             batch_first=True
         ).to(self.device).eval()
         
-        # Baseline: Contiguous KV cache allocation (no paging)
-        # Each sequence gets full contiguous memory allocation
-        batch_size = 2
-        max_seq_len = 128
-        self.kv_cache = {
-            'k': torch.zeros(batch_size, max_seq_len, self.num_heads, self.head_dim, device=self.device),
-            'v': torch.zeros(batch_size, max_seq_len, self.num_heads, self.head_dim, device=self.device),
-        }
-        
         # Simulate autoregressive generation
         self.inputs = [
-            torch.randn(batch_size, 1, self.hidden_dim, device=self.device)
-            for _ in range(32)
+            torch.randn(self.batch_size, 1, self.hidden_dim, device=self.device)
+            for _ in range(self.steps)
         ]
         torch.cuda.synchronize()
 
@@ -104,23 +97,20 @@ class BaselinePagedAttentionBenchmark(Benchmark):
 
         with nvtx_range("baseline_paged_attention", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Contiguous KV cache (no paging)
-                # Memory is allocated contiguously, causing fragmentation
-                # Cannot efficiently handle variable-length sequences
-                
+                k_history: List[torch.Tensor] = []
+                v_history: List[torch.Tensor] = []
                 for step, query in enumerate(self.inputs):
                     q_proj, k_proj, v_proj = self._project_qkv(query)
                     q_heads = self._split_heads(q_proj)  # (B, H, 1, Dh)
                     k_new = self._split_heads(k_proj).permute(0, 2, 1, 3)  # (B, 1, H, Dh)
                     v_new = self._split_heads(v_proj).permute(0, 2, 1, 3)
                     
-                    # Store in contiguous cache (inefficient for variable lengths)
-                    self.kv_cache['k'][:, step:step+1, :, :] = k_new
-                    self.kv_cache['v'][:, step:step+1, :, :] = v_new
+                    # Naive baseline: reallocate storage via torch.cat each step
+                    k_history.append(k_new.clone())
+                    v_history.append(v_new.clone())
                     
-                    # Attention computation using all cached K, V
-                    k_all = self.kv_cache['k'][:, :step+1, :, :]  # (B, T, H, Dh)
-                    v_all = self.kv_cache['v'][:, :step+1, :, :]
+                    k_all = torch.cat(k_history, dim=1)  # (B, T, H, Dh)
+                    v_all = torch.cat(v_history, dim=1)
                     k_heads = k_all.permute(0, 2, 1, 3).contiguous()  # (B, H, T, Dh)
                     v_heads = v_all.permute(0, 2, 1, 3).contiguous()
                     
@@ -138,7 +128,6 @@ class BaselinePagedAttentionBenchmark(Benchmark):
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.kv_cache = None
         self.inputs = None
         torch.cuda.empty_cache()
     
@@ -153,8 +142,6 @@ class BaselinePagedAttentionBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.kv_cache is None:
-            return "KV cache not initialized"
         return None
 
 def get_benchmark() -> Benchmark:

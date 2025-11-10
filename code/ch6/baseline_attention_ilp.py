@@ -20,6 +20,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -36,16 +37,33 @@ class BaselineAttentionILPBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input = None
-    
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.batch = self.workload.attention_batch
+        self.embed_dim = self.workload.attention_embed_dim
+        self.tokens = self.workload.attention_tokens_for_mode(self.smoke_test)
+        self.query_chunk = self.workload.attention_chunk_for_mode(self.smoke_test)
+
     def setup(self) -> None:
         """Setup: Initialize attention model."""
         torch.manual_seed(42)
         # Baseline: Attention with low ILP
         # Sequential attention operations limit instruction-level parallelism
         # This baseline does not optimize for ILP
-        self.model = nn.MultiheadAttention(256, 8, batch_first=True)
-        self.model = self.model.to(self.device).eval()
-        self.input = torch.randn(4, 32, 256, device=self.device)
+        self.model = nn.MultiheadAttention(
+            self.embed_dim,
+            self.workload.attention_heads,
+            batch_first=True,
+        ).to(self.device).eval()
+        self.model = self.model.half()
+        self.input = torch.randn(
+            self.batch,
+            self.tokens,
+            self.embed_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self._last_sum = torch.tensor(0.0, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -61,12 +79,12 @@ class BaselineAttentionILPBenchmark(Benchmark):
 
         with nvtx_range("baseline_attention_ilp", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Sequential attention operations (low ILP)
-                # Attention operations performed sequentially limit ILP
-                # This baseline does not optimize for instruction-level parallelism
-                # Attention mechanism processes queries, keys, values sequentially
-                _ = self.model(self.input, self.input, self.input)[0]
-                # Low ILP: Sequential attention operations don't expose parallelism
+                accum = torch.zeros(1, device=self.device, dtype=self.input.dtype)
+                for query in self.input.split(self.query_chunk, dim=1):
+                    out = self.model(query, self.input, self.input)[0]
+                    accum += out.sum()
+                    torch.cuda.synchronize()
+                self._last_sum = accum
 
     
     def teardown(self) -> None:
@@ -78,8 +96,8 @@ class BaselineAttentionILPBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=self.workload.ilp_iterations,
+            warmup=self.workload.ilp_warmup,
         )
     
     def validate_result(self) -> Optional[str]:

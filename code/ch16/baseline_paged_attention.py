@@ -19,8 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from common.python.compile_utils import compile_model
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -38,113 +36,96 @@ def resolve_device() -> torch.device:
 
 class BaselinePagedAttentionBenchmark(Benchmark):
     """Baseline: Attention without paged attention.
-    
+
     Paged attention: This baseline does not use paged attention for KV cache management.
     Uses contiguous memory allocation, causing fragmentation and inefficient memory usage.
     """
-    
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.kv_cache = None
+        self.batch_size = 2
+        self.hidden_dim = 512
+        self.num_heads = 8
+        self.head_dim = self.hidden_dim // self.num_heads
+        self.max_seq_len = 2048
+        self.steps = 512
+        self.qkv_proj = None
+        self.k_cache = None
+        self.v_cache = None
         self.inputs = None
-    
+
     def setup(self) -> None:
         """Setup: Initialize model and contiguous KV cache."""
         torch.manual_seed(42)
-        # Baseline: No paged attention - contiguous memory allocation
-        # Paged attention uses non-contiguous pages for efficient memory management
-        # This baseline allocates contiguous memory for each sequence
-        
-        hidden_dim = 512
-        num_heads = 8
-        head_dim = hidden_dim // num_heads
-        
-        # Simple attention model
-        self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        ).to(self.device).eval()
-        
-        # Baseline: Contiguous KV cache allocation (no paging)
-        # Each sequence gets full contiguous memory allocation
-        batch_size = 4
-        max_seq_len = 256
-        self.kv_cache = {
-            'k': torch.zeros(batch_size, max_seq_len, num_heads, head_dim, device=self.device),
-            'v': torch.zeros(batch_size, max_seq_len, num_heads, head_dim, device=self.device),
-        }
-        
-        # Simulate autoregressive generation
+        self.qkv_proj = nn.Linear(self.hidden_dim, self.hidden_dim * 3, bias=True).to(
+            self.device, dtype=torch.float16
+        )
+        self.qkv_proj.eval()
+        self.k_cache = torch.zeros(
+            self.batch_size,
+            self.max_seq_len,
+            self.num_heads,
+            self.head_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self.v_cache = torch.zeros_like(self.k_cache)
         self.inputs = [
-            torch.randn(batch_size, 1, hidden_dim, device=self.device)
-            for _ in range(64)
+            torch.randn(self.batch_size, 1, self.hidden_dim, device=self.device, dtype=torch.float16)
+            for _ in range(self.steps)
         ]
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
         """Benchmark: Attention without paged attention."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self.inputs is None or self.qkv_proj is None or self.k_cache is None or self.v_cache is None:
+            raise RuntimeError("Paged attention baseline not initialized")
 
+        seq_ptr = 0
         with nvtx_range("baseline_paged_attention", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Contiguous KV cache (no paging)
-                # Memory is allocated contiguously, causing fragmentation
-                # Cannot efficiently handle variable-length sequences
-                
-                model_dtype = next(self.model.parameters()).dtype
-                
-                for step, query in enumerate(self.inputs):
-                    query = query.to(dtype=model_dtype)
-                    
-                    # Compute new Q/K/V projections manually to expose tensors
-                    qkv = F.linear(query, self.model.in_proj_weight, self.model.in_proj_bias)
-                    batch_size, seq_len = query.shape[:2]
-                    num_heads = self.model.num_heads
-                    head_dim = self.model.embed_dim // num_heads
-                    
-                    qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
-                    q, k, v = qkv.unbind(dim=2)  # Each: (batch, seq, num_heads, head_dim)
-                    
-                    # Store in contiguous cache (inefficient for variable lengths)
-                    self.kv_cache['k'][:, step:step+seq_len, :, :] = k
-                    self.kv_cache['v'][:, step:step+seq_len, :, :] = v
-                    
-                    # Attention computation using all cached K, V
-                    k_all = self.kv_cache['k'][:, :step+1, :, :]
-                    v_all = self.kv_cache['v'][:, :step+1, :, :]
-                    
-                    # Baseline: No paged attention
-                    # Contiguous allocation causes memory waste for variable-length sequences
+                for query in self.inputs:
+                    qkv = self.qkv_proj(query)
+                    qkv = qkv.view(self.batch_size, 1, 3, self.num_heads, self.head_dim)
+                    q, k, v = qkv.unbind(dim=2)
+                    self.k_cache[:, seq_ptr : seq_ptr + 1, :, :] = k[:, :1]
+                    self.v_cache[:, seq_ptr : seq_ptr + 1, :, :] = v[:, :1]
+                    seq_ptr += 1
+                    k_all = self.k_cache[:, :seq_ptr, :, :].clone()  # Contiguous copy every step.
+                    v_all = self.v_cache[:, :seq_ptr, :, :].clone()
+                    q_heads = q.permute(0, 2, 1, 3)
+                    k_heads = k_all.permute(0, 2, 1, 3)
+                    v_heads = v_all.permute(0, 2, 1, 3)
+                    _ = torch.nn.functional.scaled_dot_product_attention(
+                        q_heads, k_heads, v_heads, is_causal=False
+                    )
+        torch.cuda.synchronize()
 
-    
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.model = None
-        self.kv_cache = None
+        self.qkv_proj = None
+        self.k_cache = None
+        self.v_cache = None
         self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
+            iterations=6,
             warmup=2,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.kv_cache is None:
+        if self.qkv_proj is None:
+            return "Projection layer not initialized"
+        if self.k_cache is None or self.v_cache is None:
             return "KV cache not initialized"
         return None
 

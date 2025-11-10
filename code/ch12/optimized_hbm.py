@@ -41,14 +41,12 @@ class OptimizedHbmBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.input = None
-        self.input_static = None
-        self.output_static = None
+        self.device_input = None
+        self.graph_input = None
+        self.graph_output = None
         self.graph = None
+        self.batch = 2048
+        self._last_total = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model with HBM optimization and CUDA graphs."""
@@ -68,34 +66,21 @@ class OptimizedHbmBenchmark(Benchmark):
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
         
-        # HBM-optimized memory allocation
-        # Large contiguous tensors maximize HBM bandwidth utilization
-        self.input = torch.randn(256, 1024, device=self.device)  # Larger batch for HBM
+        self.device_input = torch.randn(self.batch, 1024, device=self.device)
         
-        # CUDA graphs: warm-up before capture for stable graph creation
-        # Warm-up iterations ensure CUDA kernels are compiled and cached
-        for _ in range(3):
+        for _ in range(2):
             with torch.no_grad():
-                output_warmup = self.model(self.input)
-                output_warmup = output_warmup.contiguous()
-                _ = output_warmup.sum()
+                _ = self.model(self.device_input)
         torch.cuda.synchronize()
         
-        # CUDA graphs: capture HBM-optimized operations with static buffers
-        # HBM: large contiguous operations maximize bandwidth
-        # Create static copies for graph capture (graph captures tensor addresses)
-        self.input_static = self.input.clone()
-        self.output_static = torch.empty_like(self.model(self.input_static))
+        self.graph_input = self.device_input.clone()
+        self.graph_output = torch.empty_like(self.device_input)
         
         self.graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.graph):
             with torch.no_grad():
-                output = self.model(self.input_static)
-                output = output.contiguous()  # Ensure contiguous layout for HBM
-                self.output_static.copy_(output)
-                _ = self.output_static.sum()
-        
-        torch.cuda.synchronize()
+                out = self.model(self.graph_input)
+                self.graph_output.copy_(out)
     
     def benchmark_fn(self) -> None:
         """Benchmark: HBM-optimized operations with CUDA graphs."""
@@ -113,22 +98,20 @@ class OptimizedHbmBenchmark(Benchmark):
                 # HBM: large contiguous memory access maximizes bandwidth
                 # CUDA graphs: replay captured kernels (low overhead)
                 # Copy input to static buffer before replay (graph uses static addresses)
-                self.input_static.copy_(self.input)
+                if self.graph_input is None or self.graph_output is None or self.device_input is None:
+                    raise RuntimeError("Benchmark not initialized")
+                self.graph_input.copy_(self.device_input)
                 self.graph.replay()
-                # Result is already in output_static (no copy needed if not used)
-                
-                # Optimization: HBM and CUDA graphs benefits
-                # - High bandwidth memory access (HBM)
-                # - Reduced kernel launch overhead (CUDA graphs)
-                # - Better performance through graph replay
+                self._last_total = float(self.graph_output.sum())
+                torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
-        self.input_static = None
-        self.output_static = None
+        self.device_input = None
+        self.graph_input = None
+        self.graph_output = None
         self.graph = None
         torch.cuda.empty_cache()
     
@@ -143,7 +126,7 @@ class OptimizedHbmBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
+        if self.device_input is None:
             return "Input not initialized"
         return None
 
@@ -171,4 +154,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

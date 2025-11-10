@@ -1,132 +1,207 @@
-// optimized_double_buffered_pipeline.cu -- GEMM with double-buffered pipeline (optimized).
+// optimized_double_buffered_pipeline.cu -- Shared-memory tiled GEMM with double buffering.
 
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
 #include <cuda/pipeline>
+
+#include <cmath>
 #include <cstdio>
+#include <random>
+#include <vector>
+
+#define CUDA_CHECK(call)                                                     \
+    do {                                                                     \
+        cudaError_t status = (call);                                         \
+        if (status != cudaSuccess) {                                         \
+            std::fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__,\
+                        cudaGetErrorString(status));                         \
+            std::exit(EXIT_FAILURE);                                         \
+        }                                                                    \
+    } while (0)
 
 namespace cg = cooperative_groups;
 
-constexpr int PIPELINE_STAGES = 2;
-
-template<int TILE_M, int TILE_N, int CHUNK_K>
-__global__ void gemm_tiled_pipeline_kernel(
+template<int TILE_M, int TILE_N, int CHUNK_K, int THREAD_TILE_M, int THREAD_TILE_N>
+__global__ void gemm_double_buffered_kernel(
     const float* __restrict__ A,
     const float* __restrict__ B,
     float* __restrict__ C,
     int M, int N, int K) {
-    cg::thread_block cta = cg::this_thread_block();
     const int block_row = blockIdx.y * TILE_M;
     const int block_col = blockIdx.x * TILE_N;
-
-    extern __shared__ float shared[];
-    float* A_tiles[PIPELINE_STAGES];
-    float* B_tiles[PIPELINE_STAGES];
-    float* stage_ptr = shared;
-    for (int stage = 0; stage < PIPELINE_STAGES; ++stage) {
-        A_tiles[stage] = stage_ptr;
-        stage_ptr += TILE_M * CHUNK_K;
-        B_tiles[stage] = stage_ptr;
-        stage_ptr += CHUNK_K * TILE_N;
-    }
-
-    using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>;
-    __shared__ alignas(pipeline_state_t) unsigned char pipe_storage[sizeof(pipeline_state_t)];
-    auto* pipe_state = reinterpret_cast<pipeline_state_t*>(pipe_storage);
-    if (threadIdx.x == 0 && threadIdx.y == 0) {
-        new (pipe_state) pipeline_state_t();
-    }
-    cta.sync();
-    auto pipe = cuda::make_pipeline(cta, pipe_state);
-
     const int thread_row = threadIdx.y;
     const int thread_col = threadIdx.x;
-    float sum = 0.0f;
+    cg::thread_block block = cg::this_thread_block();
+
+    extern __shared__ float shared[];
+    const int tileA_elems = TILE_M * CHUNK_K;
+    const int tileB_elems = CHUNK_K * TILE_N;
+    float* A_tiles[2];
+    float* B_tiles[2];
+    A_tiles[0] = shared;
+    B_tiles[0] = A_tiles[0] + tileA_elems;
+    A_tiles[1] = B_tiles[0] + tileB_elems;
+    B_tiles[1] = A_tiles[1] + tileA_elems;
 
     const int total_chunks = (K + CHUNK_K - 1) / CHUNK_K;
+    const int valid_cols = min(TILE_N, max(0, N - block_col));
 
-    // Preload first stages
-    for (int stage = 0; stage < PIPELINE_STAGES && stage < total_chunks; ++stage) {
+    using pipeline_state_t = cuda::pipeline_shared_state<cuda::thread_scope_block, 2>;
+    __shared__ pipeline_state_t pipe_state;
+    auto pipe = cuda::make_pipeline(block, &pipe_state);
+
+    auto zero_stage = [&](int stage) {
+        const int threads = blockDim.x * blockDim.y;
+        const int linear_idx = threadIdx.y * blockDim.x + threadIdx.x;
+        for (int idx = linear_idx; idx < tileA_elems; idx += threads) {
+            A_tiles[stage][idx] = 0.0f;
+        }
+        for (int idx = linear_idx; idx < tileB_elems; idx += threads) {
+            B_tiles[stage][idx] = 0.0f;
+        }
+    };
+
+    auto stage_async = [&](int stage, int chunk_index) {
+        const int chunk_base = chunk_index * CHUNK_K;
+        const int valid_k = max(0, min(CHUNK_K, K - chunk_base));
+        zero_stage(stage);
+        block.sync();
         pipe.producer_acquire();
-        const int chunk_base = stage * CHUNK_K;
-        // Simplified copy (would use async copy in real implementation)
-        cta.sync();
-        pipe.producer_commit();
-    }
-
-    for (int chunk = 0; chunk < total_chunks; ++chunk) {
-        const int stage = chunk % PIPELINE_STAGES;
-        const int chunk_base = chunk * CHUNK_K;
-
-        pipe.consumer_wait();
-        cta.sync();
-
-        // Compute using pipelined tiles
-        for (int kk = 0; kk < CHUNK_K; ++kk) {
-            if (chunk_base + kk < K) {
-                sum += A_tiles[stage][thread_row * CHUNK_K + kk] * 
-                       B_tiles[stage][kk * TILE_N + thread_col];
+        if (chunk_base < K) {
+            for (int row = 0; row < TILE_M; ++row) {
+                const int global_row = block_row + row;
+                if (global_row < M && valid_k > 0) {
+                    float* dst = A_tiles[stage] + row * CHUNK_K;
+                    const float* src = A + global_row * K + chunk_base;
+                    cuda::memcpy_async(block, dst, src, valid_k * sizeof(float), pipe);
+                }
+            }
+            for (int row = 0; row < valid_k; ++row) {
+                const int global_row = chunk_base + row;
+                if (global_row < K && valid_cols > 0) {
+                    float* dst = B_tiles[stage] + row * TILE_N;
+                    const float* src = B + global_row * N + block_col;
+                    cuda::memcpy_async(block, dst, src, valid_cols * sizeof(float), pipe);
+                }
             }
         }
+        pipe.producer_commit();
+    };
 
-        cta.sync();
+    int next_chunk = 0;
+    for (int stage = 0; stage < 2 && next_chunk < total_chunks; ++stage) {
+        stage_async(stage, next_chunk++);
+    }
+
+    float accum[THREAD_TILE_M][THREAD_TILE_N] = {0.0f};
+
+    for (int chunk = 0; chunk < total_chunks; ++chunk) {
+        const int stage = chunk % 2;
+        pipe.consumer_wait();
+        block.sync();
+        const int chunk_base = chunk * CHUNK_K;
+        for (int kk = 0; kk < CHUNK_K; ++kk) {
+            if (chunk_base + kk >= K) {
+                continue;
+            }
+            float a_frag[THREAD_TILE_M];
+            float b_frag[THREAD_TILE_N];
+            for (int i = 0; i < THREAD_TILE_M; ++i) {
+                int local_row = threadIdx.y * THREAD_TILE_M + i;
+                a_frag[i] = A_tiles[stage][local_row * CHUNK_K + kk];
+            }
+            for (int j = 0; j < THREAD_TILE_N; ++j) {
+                int local_col = threadIdx.x * THREAD_TILE_N + j;
+                b_frag[j] = B_tiles[stage][kk * TILE_N + local_col];
+            }
+            for (int i = 0; i < THREAD_TILE_M; ++i) {
+                for (int j = 0; j < THREAD_TILE_N; ++j) {
+                    accum[i][j] += a_frag[i] * b_frag[j];
+                }
+            }
+        }
         pipe.consumer_release();
-
-        // Prefetch next chunk
-        const int next_chunk = chunk + PIPELINE_STAGES;
         if (next_chunk < total_chunks) {
-            const int next_stage = next_chunk % PIPELINE_STAGES;
-            pipe.producer_acquire();
-            // Simplified copy (would use async copy in real implementation)
-            cta.sync();
-            pipe.producer_commit();
+            stage_async(stage, next_chunk++);
         }
     }
 
-    if (block_row + thread_row < M && block_col + thread_col < N) {
-        C[(block_row + thread_row) * N + (block_col + thread_col)] = sum;
+    block.sync();
+    for (int i = 0; i < THREAD_TILE_M; ++i) {
+        const int row = block_row + threadIdx.y * THREAD_TILE_M + i;
+        if (row >= M) continue;
+        for (int j = 0; j < THREAD_TILE_N; ++j) {
+            const int col = block_col + threadIdx.x * THREAD_TILE_N + j;
+            if (col >= N) continue;
+            C[row * N + col] = accum[i][j];
+        }
     }
 }
 
 int main() {
-    const int M = 512, N = 512, K = 512;
-    const size_t bytes_A = M * K * sizeof(float);
-    const size_t bytes_B = K * N * sizeof(float);
-    const size_t bytes_C = M * N * sizeof(float);
-    
-    float *d_A, *d_B, *d_C;
-    cudaMalloc(&d_A, bytes_A);
-    cudaMalloc(&d_B, bytes_B);
-    cudaMalloc(&d_C, bytes_C);
-    
-    constexpr int TILE_M = 32, TILE_N = 32, CHUNK_K = 32;
-    dim3 block(TILE_N, TILE_M);
+    const int M = 1024;
+    const int N = 1024;
+    const int K = 1024;
+    const size_t bytes_A = static_cast<size_t>(M) * K * sizeof(float);
+    const size_t bytes_B = static_cast<size_t>(K) * N * sizeof(float);
+    const size_t bytes_C = static_cast<size_t>(M) * N * sizeof(float);
+
+    std::vector<float> h_A(M * K);
+    std::vector<float> h_B(K * N);
+    std::vector<float> h_C(M * N, 0.0f);
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (auto& v : h_A) v = dist(rng);
+    for (auto& v : h_B) v = dist(rng);
+
+    float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_A, bytes_A));
+    CUDA_CHECK(cudaMalloc(&d_B, bytes_B));
+    CUDA_CHECK(cudaMalloc(&d_C, bytes_C));
+    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_C, 0, bytes_C));
+
+    constexpr int THREAD_TILE_M = 4;
+    constexpr int THREAD_TILE_N = 4;
+    constexpr int TILE_M = THREAD_TILE_M * 16;
+    constexpr int TILE_N = THREAD_TILE_N * 16;
+    constexpr int CHUNK_K = 32;
+    dim3 block(16, 16);
     dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
-    size_t smem = PIPELINE_STAGES * (TILE_M * CHUNK_K + CHUNK_K * TILE_N) * sizeof(float);
-    
+    size_t shared_bytes = 2 * (TILE_M * CHUNK_K + CHUNK_K * TILE_N) * sizeof(float);
+
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
     const int iterations = 10;
-    cudaEventRecord(start);
-    for (int i = 0; i < iterations; i++) {
-        gemm_tiled_pipeline_kernel<TILE_M, TILE_N, CHUNK_K><<<grid, block, smem>>>(
-            d_A, d_B, d_C, M, N, K);
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        gemm_double_buffered_kernel<TILE_M, TILE_N, CHUNK_K, THREAD_TILE_M, THREAD_TILE_N>
+            <<<grid, block, shared_bytes>>>(d_A, d_B, d_C, M, N, K);
     }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    
-    float ms;
-    cudaEventElapsedTime(&ms, start, stop);
-    printf("GEMM pipeline (optimized): %.2f ms\n", ms / iterations);
-    
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-    
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    float elapsed_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+    const float avg_ms = elapsed_ms / static_cast<float>(iterations);
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
+
+    double checksum = 0.0;
+    for (float v : h_C) checksum += v;
+    checksum /= static_cast<double>(M * N);
+
+    std::printf("Optimized GEMM (double buffered tiles): %.3f ms (avg over %d iters)\n",
+                avg_ms, iterations);
+    std::printf("TIME_MS: %.6f\n", avg_ms);
+    std::printf("Checksum: %.6f\n", checksum);
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
     return 0;
 }
-

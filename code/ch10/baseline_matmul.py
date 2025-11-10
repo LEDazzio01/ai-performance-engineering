@@ -1,4 +1,9 @@
-"""baseline_matmul.py - Baseline without Matmul optimization. Demonstrates memory transfer without Matmul (uses PCIe). Implements Benchmark protocol for harness integration. """
+"""baseline_matmul.py - Baseline FP32 matmul with serial tiling.
+
+Demonstrates an intentionally under-optimized GEMM that processes tiles
+sequentially with FP32 accumulate. Highlights the cost of redundant reads,
+lack of tensor cores, and absence of CUDA Graph capture.
+"""
 
 from __future__ import annotations
 
@@ -32,24 +37,38 @@ def resolve_device() -> torch.device:
 
 
 class BaselineMatmulBenchmark(Benchmark):
-    """Baseline: Memory transfer without Matmul (PCIe only)."""
+    """Baseline: FP32 matmul with serialized tiling and no tensor cores."""
 
     def __init__(self):
         self.device = resolve_device()
-        self.host_data = None
-        self.device_data = None
-        self.N = 10_000_000
+        self.A: torch.Tensor | None = None
+        self.B: torch.Tensor | None = None
+        self.C: torch.Tensor | None = None
+        self.n = 8192
+        self.tile_k = 128
 
     def setup(self) -> None:
-        """Setup: Initialize host and device memory."""
+        """Setup: initialize FP32 matrices and scratch buffer."""
         torch.manual_seed(42)
-        # Baseline: Standard host-device transfer without Matmul
-        self.host_data = torch.randn(self.N, dtype=torch.float32)
-        self.device_data = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.A = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
+        self.B = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)
+        self.C = torch.zeros(self.n, self.n, device=self.device, dtype=torch.float32)
+        self._chunked_matmul()
         torch.cuda.synchronize()
 
+    def _chunked_matmul(self) -> None:
+        """Multiply using many FP32 tiles to emphasize poor reuse."""
+        assert self.A is not None and self.B is not None and self.C is not None
+        self.C.zero_()
+        for k in range(0, self.n, self.tile_k):
+            k_end = min(k + self.tile_k, self.n)
+            a_tile = self.A[:, k:k_end]
+            b_tile = self.B[k:k_end, :]
+            # Repeated addmm launches mimic per-stage kernel launches.
+            self.C.addmm_(a_tile, b_tile, beta=1.0, alpha=1.0)
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Memory transfer without Matmul optimization."""
+        """Benchmark: serialized FP32 matmul tiles."""
         # Use conditional NVTX ranges - only enabled when profiling
 
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
@@ -58,29 +77,31 @@ class BaselineMatmulBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
-        with nvtx_range("baseline_matmul", enable=enable_nvtx):
-            # Baseline: Standard PCIe transfer (no Matmul)
-            self.device_data = self.host_data.to(self.device)
+        with nvtx_range("matmul", enable=enable_nvtx):
+            if self.A is None or self.B is None or self.C is None:
+                raise RuntimeError("Matrices not initialized")
+            self._chunked_matmul()
+            torch.cuda.synchronize(self.device)
 
 
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.host_data = None
-        self.device_data = None
+        """Teardown: clean up tensors."""
+        self.A = None
+        self.B = None
+        self.C = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=10,
+            warmup=2,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.device_data is None:
-            return "Device tensor not initialized"
+        if self.A is None or self.B is None or self.C is None:
+            return "Matrices not initialized"
         return None
 
 
@@ -98,5 +119,5 @@ if __name__ == '__main__':
         config=benchmark.get_config()
     )
     result = harness.benchmark(benchmark)
-    print(f"\nBaseline Matmul (PCIe): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(" Note: Uses PCIe transfer, not Matmul-optimized")
+    print(f"\nBaseline Matmul (Tiled FP32): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print(" Note: Serialized addmm tiles emulate poor scheduling and FP32 only math.")

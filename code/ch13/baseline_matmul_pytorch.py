@@ -43,6 +43,7 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
         self.A = None
         self.B = None
         self.C = None
+        self.bias = None
         self.m = 2048
         self.n = 2048
         self.k = 2048
@@ -52,12 +53,13 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
         torch.manual_seed(42)
         
         # Standard PyTorch matmul
-        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
-        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
-        self.C = torch.empty(self.m, self.n, device=self.device, dtype=torch.float16)
+        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
+        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
+        self.C = torch.empty(self.m, self.n, device=self.device, dtype=torch.float32)
+        self.bias = torch.randn(self.m, self.n, device=self.device, dtype=torch.float32)
         
         # Warmup
-        _ = torch.matmul(self.A, self.B)
+        _ = torch.relu(torch.matmul(self.A, self.B) + self.bias)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -73,11 +75,12 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
 
         with nvtx_range("baseline_matmul_pytorch", enable=enable_nvtx):
             # Standard PyTorch matrix multiplication
-            self.C = torch.matmul(self.A, self.B)
+            out = torch.matmul(self.A, self.B)
+            self.C = torch.relu(out + self.bias)
 
     def teardown(self) -> None:
         """Cleanup."""
-        del self.A, self.B, self.C
+        del self.A, self.B, self.C, self.bias
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -90,8 +93,8 @@ class BaselineMatmulPyTorchBenchmark(Benchmark):
         )
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.A is None:
-            return "A not initialized"
+        if self.A is None or self.B is None or self.bias is None:
+            return "Tensors not initialized"
         return None
 
 
@@ -108,4 +111,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline PyTorch Matmul: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

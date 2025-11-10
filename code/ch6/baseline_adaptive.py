@@ -15,6 +15,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 from typing import Optional
+import torch.nn.functional as F
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -35,7 +36,8 @@ class BaselineAdaptiveBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.N = 4_000_000
+        self.static_chunk = 2048
     
     def setup(self) -> None:
         """Setup: Initialize with static configuration."""
@@ -46,6 +48,12 @@ class BaselineAdaptiveBenchmark(Benchmark):
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
+
+    def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        """Shared math used by both baseline and optimized variants."""
+        out = tensor.mul(1.75)
+        out = out.add(0.1)
+        return F.silu(out)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Static configuration operations."""
@@ -59,11 +67,14 @@ class BaselineAdaptiveBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_adaptive", enable=enable_nvtx):
-            # Baseline: Static configuration (no adaptation)
-            # Adaptive optimization adjusts kernel parameters at runtime
-            # This baseline does not adapt to workload characteristics
-            self.output = self.input * 2.0 + 1.0
-            # Static configuration may not be optimal for varying workloads
+            # Baseline: iterate with a fixed micro-chunk regardless of device characteristics.
+            # Each chunk launches several tiny kernels, which under-utilizes modern GPUs.
+            for start in range(0, self.N, self.static_chunk):
+                end = min(start + self.static_chunk, self.N)
+                window = self.input[start:end]
+                transformed = self._transform(window)
+                self.output[start:end].copy_(transformed)
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

@@ -33,73 +33,76 @@ def resolve_device() -> torch.device:
 
 
 class ExpertLayer(nn.Module):
-    """Single expert in MoE model."""
-    
-    def __init__(self, hidden_size: int = 256):
+    """Single expert in the MoE model."""
+
+    def __init__(self, hidden_size: int = 256, expansion: int = 2):
         super().__init__()
         self.expert = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size * 2),
+            nn.Linear(hidden_size, hidden_size * expansion),
             nn.ReLU(),
-            nn.Linear(hidden_size * 2, hidden_size),
+            nn.Linear(hidden_size * expansion, hidden_size),
         )
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.expert(x)
 
 
+class DenseMoELayer(nn.Module):
+    """Naive MoE that executes *all* experts for every token."""
+
+    def __init__(self, hidden_size: int, num_experts: int):
+        super().__init__()
+        self.experts = nn.ModuleList([ExpertLayer(hidden_size) for _ in range(num_experts)])
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        outputs = torch.zeros_like(tokens)
+        # Every expert processes the full batch which is prohibitively expensive.
+        for expert in self.experts:
+            outputs += expert(tokens)
+        return outputs / len(self.experts)
+
+
 class BaselineExpertParallelismBenchmark(Benchmark):
     """Baseline: MoE without expert parallelism (all experts on single GPU)."""
-    
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input_data = None
-        self.num_experts = 8
-        self.top_k = 2  # Top-k experts per token
-    
+        self.model: Optional[nn.Module] = None
+        self.input_tokens: Optional[torch.Tensor] = None
+        # Large dense workload to highlight the cost of executing every expert.
+        self.num_experts = 32
+        self.hidden_size = 768
+        self.batch_size = 4096
+
     def setup(self) -> None:
-        """Setup: Initialize MoE model with all experts on single GPU."""
+        """Setup: Initialize dense MoE where every expert runs for every token."""
         torch.manual_seed(42)
-        # Baseline: All experts on single GPU
-        # Expert parallelism distributes experts across multiple GPUs
-        # This baseline processes all experts sequentially on one GPU
-        self.experts = nn.ModuleList([
-            ExpertLayer(256).to(self.device) for _ in range(self.num_experts)
-        ])
-        
-        # Simple router (gating network) to select top-k experts
-        self.router = nn.Linear(256, self.num_experts).to(self.device)
-        
-        self.input_data = torch.randn(32, 256, device=self.device)  # Batch of 32 tokens
+        dense_layer = DenseMoELayer(self.hidden_size, self.num_experts).to(self.device).eval()
+        self.model = dense_layer
+
+        self.input_tokens = torch.randn(
+            self.batch_size,
+            self.hidden_size,
+            device=self.device,
+            dtype=torch.float32,
+        )
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Sequential expert processing without parallelism."""
+        """Benchmark: Run every expert sequentially for each token."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-        
+
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
-        
-        # Baseline: Process all experts sequentially on single GPU
-        # No expert parallelism - all experts on one device
+
+        if self.model is None or self.input_tokens is None:
+            raise RuntimeError("Model/input not initialized")
+
         with nvtx_range("baseline_expert_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                router_logits = self.router(self.input_data)  # [batch, num_experts]
-                top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
-                top_k_weights = torch.softmax(top_k_weights, dim=-1)
-                
-                # Process each expert sequentially
-                output = torch.zeros_like(self.input_data)
-                for expert_id in range(self.num_experts):
-                    expert_mask = (top_k_indices == expert_id).any(dim=-1)
-                    if expert_mask.any():
-                        expert_input = self.input_data[expert_mask]
-                        expert_output = self.experts[expert_id](expert_input)
-                        # Aggregate outputs (simplified)
-                        output[expert_mask] += expert_output
-        
+                _ = self.model(self.input_tokens)
         torch.cuda.synchronize()
-    
+
     def teardown(self) -> None:
         """Cleanup: Clear CUDA cache."""
         if torch.cuda.is_available():
@@ -108,18 +111,16 @@ class BaselineExpertParallelismBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=6,
+            warmup=2,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.experts is None or len(self.experts) == 0:
-            return "Experts not initialized"
-        if self.router is None:
-            return "Router not initialized"
-        if self.input_data is None:
-            return "Input data not initialized"
+        if self.model is None:
+            return "Dense MoE not initialized"
+        if self.input_tokens is None:
+            return "Input tokens not initialized"
         return None
 
 
@@ -145,4 +146,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

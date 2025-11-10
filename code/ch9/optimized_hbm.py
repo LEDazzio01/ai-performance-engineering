@@ -48,24 +48,22 @@ class OptimizedHbmBenchmark(Benchmark):
     def setup(self) -> None:
         """Setup: Initialize model with HBM optimization."""
         
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: HBM memory optimization
-        # HBM (High Bandwidth Memory) provides high memory bandwidth
-        # Optimizes access patterns to maximize HBM bandwidth
-        
+
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(1024, 2048, bias=False),
+            nn.GELU(),
+            nn.Linear(2048, 1024, bias=False),
         ).to(self.device).eval()
-        
-        # HBM-optimized memory allocation
-        # Large contiguous tensors maximize HBM bandwidth utilization
-        self.input = torch.randn(256, 1024, device=self.device)  # Larger batch for HBM
+
+        self.batch = 512
+        host_input = torch.randn(self.batch, 1024)
+        self.host_pinned = host_input.pin_memory()
+        self.device_input = host_input.to(self.device, non_blocking=True)
+        self.prefetch_stream = torch.cuda.Stream()
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -81,21 +79,14 @@ class OptimizedHbmBenchmark(Benchmark):
 
         with nvtx_range("optimized_hbm", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: HBM memory optimization
-                # Large contiguous memory access maximizes HBM bandwidth
-                # HBM: high bandwidth memory access patterns
-                output = self.model(self.input)
-                
-                # Additional HBM optimization: contiguous operations
-                # HBM benefits: high bandwidth memory throughput
-                output2 = output.contiguous()  # Ensure contiguous layout for HBM
-                
-                # Optimization: HBM optimization benefits
-                # - High bandwidth memory access
-                # - Contiguous memory patterns
-                # - Maximized HBM bandwidth utilization
-                # - Better performance through HBM optimization
-                _ = output2.sum()
+                with torch.cuda.stream(self.prefetch_stream):
+                    self.device_input.copy_(self.host_pinned, non_blocking=True)
+                torch.cuda.current_stream().wait_stream(self.prefetch_stream)
+
+                fused = self.model(self.device_input)
+                if fused.shape[0] == self.device_input.shape[0]:
+                    fused = self.model(fused)
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
@@ -146,4 +137,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

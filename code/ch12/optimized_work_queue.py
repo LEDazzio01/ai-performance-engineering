@@ -62,6 +62,12 @@ class OptimizedWorkQueueBenchmark(Benchmark):
         self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
+        self._extension.dynamic_work_queue(self.input_data, self.output_data, 1)
+        torch.cuda.synchronize()
+        torch.manual_seed(42)
+        self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
+        self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Dynamic work queue with atomics."""
@@ -74,7 +80,7 @@ class OptimizedWorkQueueBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_work_queue_dynamic", enable=enable_nvtx):
+        with nvtx_range("work_queue", enable=enable_nvtx):
             # Call CUDA extension with dynamic work queue
             self._extension.dynamic_work_queue(self.input_data, self.output_data, self.iterations)
 
@@ -119,4 +125,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Work Queue (Dynamic Distribution): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

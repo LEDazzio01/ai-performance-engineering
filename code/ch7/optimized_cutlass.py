@@ -29,7 +29,8 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
-from common.python.compile_utils import get_optimal_compile_mode, enable_tf32
+from common.python.compile_utils import enable_tf32
+from common.python.cutlass_binding import cutlass_gemm_fp16
 
 
 def resolve_device() -> torch.device:
@@ -53,6 +54,7 @@ class OptimizedCutlassBenchmark(Benchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
+        self._cutlass_ready = False
     
     def setup(self) -> None:
         """Setup: Initialize matrices."""
@@ -70,27 +72,15 @@ class OptimizedCutlassBenchmark(Benchmark):
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
         
-        # Optimization: Compile with CUTLASS backend
-        # CUTLASS provides hardware-optimized GEMM kernels
-        # Select optimal compile mode based on GPU SM count
-        compile_mode = get_optimal_compile_mode("max-autotune")
         try:
-            self.compiled_matmul = torch.compile(
-                lambda a, b: torch.matmul(a, b),
-                mode=compile_mode,
-                backend="inductor"
-            )
+            for _ in range(3):
+                _ = cutlass_gemm_fp16(self.A, self.B)
+            torch.cuda.synchronize()
+            self._cutlass_ready = True
         except Exception as exc:
-            # Handle C++ compilation errors (e.g., missing .torch_inductor directory)
-            # Fall back to eager execution so the benchmark still runs
-            error_msg = str(exc)
-            if "CppCompileError" in error_msg or "torch._inductor" in error_msg or "No such file or directory" in error_msg:
-                print(f"WARNING: torch.compile failed due to C++ compilation error: {error_msg[:200]}. Falling back to eager execution.")
-                self.compiled_matmul = lambda a, b: torch.matmul(a, b)
-            else:
-                # Re-raise unknown errors
-                raise
-        torch.cuda.synchronize()
+            raise RuntimeError(
+                "CUTLASS GEMM extension unavailable; install nvidia-cutlass-dsl>=4.2."
+            ) from exc
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUTLASS-optimized GEMM."""
@@ -107,7 +97,9 @@ class OptimizedCutlassBenchmark(Benchmark):
             # Optimization: CUTLASS-optimized GEMM
             # Uses torch.compile with CUTLASS backend
             # Leverages hardware-optimized kernels (tensor cores, optimized memory access)
-            _ = self.compiled_matmul(self.A, self.B)
+            if not self._cutlass_ready:
+                raise RuntimeError("CUTLASS kernel not initialized")
+            _ = cutlass_gemm_fp16(self.A, self.B)
             
             # Optimization: CUTLASS benefits
             # - Hardware-optimized GEMM kernels
@@ -120,7 +112,7 @@ class OptimizedCutlassBenchmark(Benchmark):
         """Teardown: Clean up resources."""
         self.A = None
         self.B = None
-        self.compiled_matmul = None
+        self._cutlass_ready = False
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

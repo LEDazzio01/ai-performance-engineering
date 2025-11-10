@@ -1,15 +1,10 @@
-"""optimized_roofline.py - Optimized with roofline analysis in storage I/O context.
-
-Demonstrates roofline analysis for performance optimization.
-Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
-Guides optimization strategy based on arithmetic intensity.
-Implements Benchmark protocol for harness integration.
-"""
+"""Roofline optimization: increase arithmetic intensity via fused ops."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,160 +12,81 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.compile_utils import enable_tf32
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch5")
     return torch.device("cuda")
 
 
 class OptimizedRooflineBenchmark(Benchmark):
-    """Optimized: Roofline analysis for performance optimization.
-    
-    Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
-    Guides optimization strategy based on arithmetic intensity.
-    """
-    
+    """Uses torch.compile to fuse multiple FLOPs per byte loaded."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.data = None
-        self.roofline_data = None
-        self.N = 10_000_000
-    
-    def setup(self) -> None:
-        """Setup: Initialize data with roofline analysis."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-        torch.manual_seed(42)
-        # Optimization: Roofline analysis
-        # Identifies compute-bound vs memory-bound operations
-        # Guides optimization strategy
-        
-        self.data = torch.randn(self.N, device=self.device)
-        
-        # Roofline data for analysis
-        self.roofline_data = {
-            'compute_bound': False,
-            'memory_bound': True,
-            'arithmetic_intensity': 0.0,
-        }
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations with roofline analysis."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.data: Optional[torch.Tensor] = None
+        self.weights: Optional[torch.Tensor] = None
+        self.kernel = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(2)
+        enable_tf32()
+        self.data = torch.randn(64_000_000, device=self.device, dtype=torch.float16)
+        self.weights = torch.randn_like(self.data)
+
+        def fused_op(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+            acc = torch.addcmul(x, w, x)
+            acc = acc * 1.5 + torch.sin(acc)
+            return acc.mean()
+
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is not None:
+            try:
+                self.kernel = compile_fn(fused_op, mode="reduce-overhead")
+            except Exception:
+                self.kernel = fused_op
+        else:
+            self.kernel = fused_op
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
+        assert self.data is not None and self.weights is not None
         with nvtx_range("optimized_roofline", enable=enable_nvtx):
-            # Optimization: Roofline analysis
-            # Measure execution time and estimate arithmetic intensity
-            torch.cuda.synchronize()
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
-            
-            start_event.record()
-            result = self.data.sum()
-            end_event.record()
-            torch.cuda.synchronize()
-            
-            elapsed_ms = start_event.elapsed_time(end_event)
-            
-            # Estimate arithmetic intensity (simplified)
-            # Arithmetic intensity = FLOPs / Bytes accessed
-            data_bytes = self.data.numel() * self.data.element_size()
-            
-            # Estimate FLOPs (simplified: sum operation)
-            flops = self.N  # Sum operation
-            arithmetic_intensity = flops / data_bytes if data_bytes > 0 else 0.0
-            
-            # Roofline analysis: determine bottleneck
-            is_memory_bound = arithmetic_intensity < 1.0
-            self.roofline_data['compute_bound'] = not is_memory_bound
-            self.roofline_data['memory_bound'] = is_memory_bound
-            self.roofline_data['arithmetic_intensity'] = arithmetic_intensity
-            self.roofline_data['elapsed_ms'] = elapsed_ms
-            
-            # Use roofline analysis to guide optimization
-            if is_memory_bound:
-                # Memory-bound: optimize memory access patterns
-                # Roofline analysis guides memory optimization
-                pass
-            else:
-                # Compute-bound: optimize compute operations
-                # Roofline analysis guides compute optimization
-                pass
-            
-            # Optimization: Roofline analysis benefits
-            # - Identifies compute vs memory bottlenecks
-            # - Guides optimization strategy
-            # - Measures arithmetic intensity
-            # - Performance-based optimization decisions
-            _ = result
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = self.kernel(self.data, self.weights)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.data = None
-        self.roofline_data = None
+        self.weights = None
+        self.kernel = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=40, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.data is None:
-            return "Data not initialized"
+        if self.kernel is None:
+            return "Kernel not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedRooflineBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=5, warmup=1),
     )
-    benchmark = OptimizedRooflineBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Roofline")
-    print("=" * 70)
-    timing = result.timing
-    if timing:
-        print(f"Average time: {timing.mean_ms:.3f} ms")
-        print(f"Median: {timing.median_ms:.3f} ms")
-        print(f"Std: {timing.std_ms:.3f} ms")
-    else:
-        print("No timing data available")
-
-
-if __name__ == "__main__":
-    main()
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized roofline latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

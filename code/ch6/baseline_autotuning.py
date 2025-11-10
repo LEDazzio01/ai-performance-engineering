@@ -15,6 +15,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 from typing import Optional
+import torch.nn.functional as F
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -35,8 +36,8 @@ class BaselineAutotuningBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
-        self.block_size = 256  # Fixed block size
+        self.N = 4_000_000
+        self.block_size = 2048  # Fixed micro-chunk
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -47,6 +48,11 @@ class BaselineAutotuningBenchmark(Benchmark):
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
+
+    def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        out = tensor.mul(1.75)
+        out = out.add(0.1)
+        return F.silu(out)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with fixed parameters."""
@@ -60,12 +66,12 @@ class BaselineAutotuningBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_autotuning", enable=enable_nvtx):
-            # Baseline: Fixed block size (no autotuning)
-            # Autotuning searches for optimal kernel parameters (block size, tile size, etc.)
-            # This baseline uses a fixed configuration that may not be optimal
-            # Without autotuning, parameters are chosen manually or use defaults
-            self.output = self.input * 2.0 + 1.0
-            # Fixed parameters may not be optimal for the specific hardware/workload
+            for start in range(0, self.N, self.block_size):
+                end = min(start + self.block_size, self.N)
+                window = self.input[start:end]
+                transformed = self._transform(window)
+                self.output[start:end].copy_(transformed)
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

@@ -34,31 +34,10 @@ def profile() -> Dict[str, Any]:
     """Compare all baseline/optimized pairs using formal harness."""
     chapter_dir = Path(__file__).parent
     
-    # Use template with custom metrics callback for chapter-specific metrics
-    def add_chapter_metrics(all_metrics: Dict[str, Any]) -> None:
-        """Add chapter-specific metrics."""
-        # Calculate goodput approximation from best speedup
-        best_speedup = all_metrics.get('speedup', 1.0)
-        if best_speedup > 1.0:
-            # Higher speedup suggests better goodput
-            all_metrics['goodput'] = min(0.95, 0.50 + (best_speedup - 1.0) * 0.1)
-        else:
-            all_metrics['goodput'] = 0.50
-        
-        # Estimate throughput based on speedups
-        if 'performance_best_speedup' in all_metrics:
-            speedup = all_metrics['performance_best_speedup']
-            # Base throughput increases with speedup
-            base_throughput = 100.0
-            all_metrics['tokens_per_s'] = base_throughput * speedup
-            all_metrics['requests_per_s'] = max(10.0, 32.0 * speedup)
-            all_metrics['latency_s'] = max(0.001, 1.0 / (all_metrics['tokens_per_s'] / 100.0))
-    
     return profile_template(
         chapter='ch1',
         chapter_dir=chapter_dir,
         harness_config=BenchmarkConfig(iterations=20, warmup=5),
-        custom_metrics_callback=add_chapter_metrics,
     )
 
 

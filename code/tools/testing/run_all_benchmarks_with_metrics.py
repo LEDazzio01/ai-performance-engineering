@@ -459,6 +459,10 @@ def test_cuda_pair_with_metrics(
         status.baseline_failed = True
         status.error_msg = "Baseline execution failed or timed out"
         return status
+    if baseline_result.skip_reason:
+        status.baseline_failed = True
+        status.error_msg = baseline_result.skip_reason
+        return status
     
     status.baseline_executed = True
     status.baseline_time_ms = baseline_result.mean_ms
@@ -488,6 +492,10 @@ def test_cuda_pair_with_metrics(
     if optimized_result is None:
         status.optimized_failed = True
         status.error_msg = "Optimized execution failed or timed out"
+        return status
+    if optimized_result.skip_reason:
+        status.optimized_failed = True
+        status.error_msg = optimized_result.skip_reason
         return status
     
     status.optimized_executed = True
@@ -784,4 +792,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-

@@ -19,7 +19,6 @@ import torch
 import torch.nn as nn
 
 from common.python.compile_utils import enable_tf32
-from common.python.compile_utils import compile_model
 
 from typing import Optional
 
@@ -44,12 +43,14 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
         self.input = None
         self.cached_data = None
+        self.graph_input = None
+        self.graph_output = None
+        self.graph = None
+        self.micro_batches = 64
+        self.micro_batch = 8
+        self._last_loss = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model and data with shared memory optimization."""
@@ -73,13 +74,18 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
         
         self.model.train()
         
-        # Data in global memory
-        self.input = torch.randn(32, 1024, device=self.device)
-        
-        # Optimization: Cache data for reuse (simulating shared memory)
-        # In CUDA kernels, this would use __shared__ memory
-        # For PyTorch, we use tensor caching to simulate shared memory benefit
-        self.cached_data = self.input.clone()  # Cache copy (shared memory simulation)
+        total_batch = self.micro_batches * self.micro_batch
+        self.input = torch.randn(total_batch, 1024, device=self.device)
+        self.cached_data = self.input.clone()
+        self.graph_input = self.cached_data.clone()
+        self.graph_output = torch.empty(total_batch, 256, device=self.device)
+        with torch.no_grad():
+            _ = self.model(self.cached_data)
+        torch.cuda.synchronize()
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.graph):
+            out = self.model(self.graph_input)
+            self.graph_output.copy_(out)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -100,16 +106,12 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
             # Use cached data (shared memory benefit)
             # In CUDA kernels, this would use __shared__ memory arrays
             # For PyTorch, caching reduces repeated memory access
-            output1 = self.model(self.cached_data)
-            output2 = self.model(self.cached_data)  # Access from cache (shared memory)
-            output3 = self.model(self.cached_data)  # Access from cache (shared memory)
-            
-            # Optimization: Shared memory benefits
-            # - Fast access to cached data (shared memory)
-            # - Reduced global memory access
-            # - Better cache utilization
-            # - Improved performance for repeated data access
-            _ = output1 + output2 + output3
+            if self.graph is None or self.graph_input is None or self.graph_output is None:
+                raise RuntimeError("CUDA graph not initialized")
+            self.graph_input.copy_(self.cached_data)
+            self.graph.replay()
+            self._last_loss = float(self.graph_output.sum())
+            torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
@@ -117,6 +119,9 @@ class OptimizedSharedMemoryBenchmark(Benchmark):
         self.model = None
         self.input = None
         self.cached_data = None
+        self.graph_input = None
+        self.graph_output = None
+        self.graph = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

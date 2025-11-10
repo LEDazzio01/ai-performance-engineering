@@ -24,6 +24,10 @@ benchmark_results_*.json
 benchmark_test_results_*.json
 benchmark_test_results_*.json
 DUPLICATE_ANALYSIS.md
+HIGH_PRIORITY_DUPLICATES.md
+DUPLICATE_ANALYSIS_UPDATED.md
+proof_of_benefit.csv
+reports/
 
 # Python
 __pycache__/
@@ -156,6 +160,10 @@ ch*/warp_specialized_two_pipelines_multistream
 !ch*/*.py
 !ch*/*.cu
 !ch*/Makefile
+
+# Third-party downloads
+third_party/cutlass/
+third_party/llvm/
 !ch*/README.md
 !ch*/arch_config.py
 !ch*/compare.py

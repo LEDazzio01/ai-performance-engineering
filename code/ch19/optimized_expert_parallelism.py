@@ -56,8 +56,10 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
         self.experts = None
         self.router = None
         self.input_data = None
-        self.num_experts = 8
-        self.top_k = 2  # Top-k experts per token
+        self.compute_streams: list[torch.cuda.Stream] | None = None
+        self.last_output = None
+        self.num_experts = 32
+        self.top_k = 4  # Top-k experts per token
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
     
     def setup(self) -> None:
@@ -75,13 +77,14 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
         self.experts = nn.ModuleList()
         for expert_id in range(self.num_experts):
             gpu_id = expert_id % self.num_gpus
-            expert = ExpertLayer(256).to(torch.device(f"cuda:{gpu_id}"))
+            expert = ExpertLayer(256).to(torch.device(f"cuda:{gpu_id}")).half().eval()
             self.experts.append(expert)
         
         # Router on first GPU
         self.router = nn.Linear(256, self.num_experts).to(self.device)
+        self.compute_streams = [torch.cuda.Stream() for _ in range(min(self.num_experts, 8))]
         
-        self.input_data = torch.randn(32, 256, device=self.device)  # Batch of 32 tokens
+        self.input_data = torch.randn(512, 256, device=self.device, dtype=torch.float16)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -95,31 +98,48 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
         # Expert parallelism enables parallel processing of different experts
         with nvtx_range("optimized_expert_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                router_logits = self.router(self.input_data)  # [batch, num_experts]
+                router_logits = self.router(self.input_data.float())
                 top_k_weights, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
                 top_k_weights = torch.softmax(top_k_weights, dim=-1)
                 
-                # Process experts in parallel across GPUs
-                output = torch.zeros_like(self.input_data)
+                output = torch.zeros(self.input_data.shape[0], self.input_data.shape[1], device=self.device, dtype=torch.float32)
+                work_items = []
                 for expert_id in range(self.num_experts):
                     expert_mask = (top_k_indices == expert_id).any(dim=-1)
                     if expert_mask.any():
+                        token_indices = torch.nonzero(expert_mask, as_tuple=False).squeeze(-1)
+                        work_items.append((expert_id, token_indices))
+
+                pending = []
+                if work_items and self.compute_streams:
+                    for idx, (expert_id, token_indices) in enumerate(work_items):
+                        stream = self.compute_streams[idx % len(self.compute_streams)]
                         expert = self.experts[expert_id]
-                        gpu_id = expert_id % self.num_gpus
-                        expert_input = self.input_data[expert_mask].to(torch.device(f"cuda:{gpu_id}"))
-                        expert_output = expert(expert_input)
-                        # Transfer back and aggregate
-                        output[expert_mask] += expert_output.to(self.device)
+                        expert_device = torch.device(f"cuda:{expert_id % self.num_gpus}")
+                        with torch.cuda.stream(stream):
+                            expert_input = torch.index_select(self.input_data, 0, token_indices).to(
+                                expert_device, dtype=torch.float16
+                            )
+                            expert_output = expert(expert_input)
+                            event = torch.cuda.Event(blocking=False)
+                            event.record(stream)
+                            pending.append((token_indices, expert_output, event, expert_device))
+
+                for token_indices, expert_output, event, expert_device in pending:
+                    event.synchronize()
+                    scaled = expert_output.to(self.device, dtype=torch.float32)
+                    output.index_add_(0, token_indices, scaled)
+                self.last_output = output
         
-        # Synchronize all GPUs
-        for gpu_id in range(self.num_gpus):
-            torch.cuda.synchronize(torch.device(f"cuda:{gpu_id}"))
+        torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Cleanup: Clear CUDA cache."""
         if torch.cuda.is_available():
             for gpu_id in range(self.num_gpus):
                 torch.cuda.empty_cache()
+        self.compute_streams = None
+        self.last_output = None
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
@@ -136,6 +156,8 @@ class OptimizedExpertParallelismBenchmark(Benchmark):
             return "Router not initialized"
         if self.input_data is None:
             return "Input data not initialized"
+        if self.last_output is None:
+            return "No expert output computed"
         return None
 
 
@@ -154,4 +176,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

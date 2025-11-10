@@ -41,8 +41,8 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.data = None
-        self.N = 1 << 20  # 1M elements
-        self.iterations = 50
+        self.N = 1 << 18  # Match baseline problem size.
+        self.iterations = 200
         self._extension = None
     
     def setup(self) -> None:
@@ -54,6 +54,12 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
             torch.backends.cudnn.deterministic = False
         self._extension = load_cuda_graphs_extension()
         
+        torch.manual_seed(42)
+        self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
+        # Warm up graph replay so capture/instantiation happens before measurement.
+        self._extension.graph_replay(self.data, 1)
+        torch.cuda.synchronize()
         torch.manual_seed(42)
         self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
@@ -69,8 +75,9 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_cuda_graphs_replay", enable=enable_nvtx):
+        with nvtx_range("cuda_graphs", enable=enable_nvtx):
             self._extension.graph_replay(self.data, self.iterations)
+            torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
@@ -86,6 +93,7 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
+            measurement_timeout_seconds=120,
         )
     
     def validate_result(self) -> Optional[str]:

@@ -41,7 +41,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.N = 8_000_000
         self._extension = None
     
     def setup(self) -> None:
@@ -50,6 +50,13 @@ class OptimizedBankConflictsBenchmark(Benchmark):
         # Load CUDA extension (will compile on first call)
         self._extension = load_bank_conflicts_extension()
         
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
+        # Warm up optimized padded kernel before timing.
+        self._extension.bank_conflicts_padded(self.output, self.input)
+        torch.cuda.synchronize()
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
@@ -65,7 +72,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_bank_conflicts_padded", enable=enable_nvtx):
+        with nvtx_range("bank_conflicts", enable=enable_nvtx):
             # Call CUDA extension kernel with padding
             self._extension.bank_conflicts_padded(self.output, self.input)
             # Synchronize to catch any CUDA errors immediately

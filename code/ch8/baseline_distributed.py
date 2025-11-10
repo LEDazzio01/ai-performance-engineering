@@ -1,129 +1,98 @@
-"""baseline_distributed.py - Baseline without distributed operations in occupancy/warp divergence context.
-
-Demonstrates operations without distributed processing.
-Distributed: This baseline does not use distributed processing.
-Single-node operations without multi-node coordination.
-Implements Benchmark protocol for harness integration.
-"""
+"""Baseline distributed example with sequential host-to-device transfers."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import List, Optional
+
+import torch
+import torch.nn as nn
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
-
-
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch8")
-    return torch.device("cuda")
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 class BaselineDistributedBenchmark(Benchmark):
-    """Baseline: Single-node operations (no distributed processing).
-    
-    Distributed: This baseline does not use distributed processing.
-    Single-node operations without multi-node coordination.
-    """
-    
-    def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model without distributed processing."""
-        torch.manual_seed(42)
-        # Baseline: Single-node operations (no distributed)
-        # Distributed processing coordinates across multiple nodes
-        # This baseline does not use distributed processing
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        self.input = torch.randn(32, 1024, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Single-node operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
+    """Simulates distributed training with sequential copy+compute per virtual rank."""
 
+    virtual_ranks = 4
+    batch_per_rank = 2048
+    feature_dim = 1024
+    nvtx_label = "baseline_distributed"
+
+    def __init__(self) -> None:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA required for Chapter 8 distributed example")
+        self.device = torch.device("cuda")
+        self.model: Optional[nn.Module] = None
+        self.host_inputs: List[torch.Tensor] = []
+        self.device_buffers: List[torch.Tensor] = []
+
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        self.model = nn.Sequential(
+            nn.Linear(self.feature_dim, 2048),
+            nn.GELU(),
+            nn.Linear(2048, self.feature_dim),
+        ).to(self.device).eval()
+
+        self.host_inputs = [
+            torch.randn(self.batch_per_rank, self.feature_dim, dtype=torch.float32).pin_memory()
+            for _ in range(self.virtual_ranks)
+        ]
+        self.device_buffers = [
+            torch.empty_like(self.host_inputs[0], device=self.device)
+            for _ in range(self.virtual_ranks)
+        ]
+
+    def benchmark_fn(self) -> None:
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
-        with nvtx_range("baseline_distributed", enable=enable_nvtx):
+        with nvtx_range(self.nvtx_label, enable=enable_nvtx):
+            torch.cuda.synchronize()
             with torch.no_grad():
-                # Baseline: Single-node operations
-                # No distributed coordination across nodes
-                # Distributed processing would coordinate multi-node operations
-                output = self.model(self.input)
-                
-                # Baseline: No distributed processing
-                # Single-node operations (not distributed)
-                _ = output.sum()
+                for rank in range(self.virtual_ranks):
+                    self.device_buffers[rank].copy_(self.host_inputs[rank], non_blocking=False)
+                    _ = self.model(self.device_buffers[rank])
+            torch.cuda.synchronize()
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
+        self.host_inputs = []
+        self.device_buffers = []
         self.model = None
-        self.input = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=20, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineDistributedBenchmark()
 
 
 def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=20, warmup=5),
     )
     benchmark = BaselineDistributedBenchmark()
     result = harness.benchmark(benchmark)
-    
     print("=" * 70)
-    print(f"Baseline: Distributed")
+    print("Baseline Distributed")
     print("=" * 70)
     print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
@@ -132,4 +101,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

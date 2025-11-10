@@ -14,7 +14,8 @@ endif
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(NVCC_LINEINFO) --threads=0 $(PTXAS_WARN) $(MAXRREGCOUNT_FLAG)
 SUFFIX = $(TARGET_SUFFIX)
 
-CUDA_SOURCES = $(wildcard *.cu)
+EXTENSION_SOURCES = $(wildcard *_kernels.cu)
+CUDA_SOURCES = $(filter-out %_kernels.cu %_tcgen05.cu,$(wildcard *.cu))
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 

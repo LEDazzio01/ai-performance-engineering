@@ -1,110 +1,101 @@
-"""baseline_tensor_parallelism.py - Baseline without tensor parallelism.
-
-Demonstrates model execution without tensor parallelism.
-Tensor parallelism: This baseline processes entire tensors on a single GPU.
-Implements Benchmark protocol for harness integration.
-"""
+"""Tensor parallel baseline that executes shards sequentially."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import List, Optional
+
+import torch
+
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from ch18.workload_config import WORKLOAD, is_smoke_test
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
-
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch18")
     return torch.device("cuda")
 
 
 class BaselineTensorParallelismBenchmark(Benchmark):
-    """Baseline: Model execution without tensor parallelism (single GPU)."""
-    
+    """Processes each TP shard sequentially without any gather fusion."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input_data = None
-        self.batch_size = 8
-    
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.hidden_dim = self.workload.attention_hidden_dim
+        self.batch_size = self.workload.attention_batch_size
+        self.sequence_length = self.workload.seq_len(self.smoke_test)
+        self.shards = self.workload.tensor_parallel_shards
+        self.shard_dim = self.hidden_dim // self.shards
+
+        self.inputs: Optional[torch.Tensor] = None
+        self.weight_shards: List[torch.Tensor] = []
+
     def setup(self) -> None:
-        """Setup: Initialize model on single GPU."""
         torch.manual_seed(42)
-        # Baseline: Model on single GPU without tensor parallelism
-        # Tensor parallelism splits tensors across multiple GPUs
-        # This baseline processes entire tensors on one GPU
-        self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-        ).to(self.device).eval()
-        
-        self.input_data = torch.randn(self.batch_size, 256, device=self.device)
+        self.inputs = torch.randn(
+            self.batch_size,
+            self.sequence_length,
+            self.hidden_dim,
+            dtype=torch.float16,
+            device=self.device,
+        )
+        self.weight_shards = [
+            torch.randn(
+                self.hidden_dim,
+                self.shard_dim,
+                dtype=torch.float16,
+                device=self.device,
+            )
+            for _ in range(self.shards)
+        ]
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Model execution without tensor parallelism."""
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        # Baseline: Process entire model on single GPU
-        # No tensor parallelism - all operations on one device
+        assert self.inputs is not None
+
         with nvtx_range("baseline_tensor_parallelism", enable=enable_nvtx):
-            with torch.no_grad():
-                output = self.model(self.input_data)
-        torch.cuda.synchronize()
-    
+            partial_outputs = []
+            for weight in self.weight_shards:
+                partial = torch.matmul(self.inputs, weight)
+                partial_outputs.append(partial)
+                torch.cuda.synchronize()
+            output = torch.cat(partial_outputs, dim=-1)
+            _ = output.norm()
+
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.model = None
-        self.input_data = None
+        self.inputs = None
+        self.weight_shards = []
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
-        )
-    
+        return BenchmarkConfig(iterations=4, warmup=1, enable_memory_tracking=False)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
+        if self.inputs is None or not self.weight_shards:
+            return "Inputs not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for benchmark discovery."""
     return BaselineTensorParallelismBenchmark()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    benchmark = get_benchmark()
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config()
-    )
-    result = harness.benchmark(benchmark)
-    print(result)
 
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=4, warmup=1))
+    result = harness.benchmark(BaselineTensorParallelismBenchmark())
+    print(f"Baseline tensor parallel mean: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

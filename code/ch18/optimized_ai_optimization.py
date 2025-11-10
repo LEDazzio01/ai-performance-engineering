@@ -1,29 +1,21 @@
-"""optimized_ai_optimization.py - Optimized with AI-driven optimization in FlexAttention/KV cache context.
-
-Demonstrates AI/ML-driven optimization for attention operations.
-AI optimization: Uses ML models to predict optimal strategies.
-Adapts optimization strategies based on learned patterns.
-Implements Benchmark protocol for harness integration.
-"""
+"""Optimized attention path that uses learned heuristics to batch work efficiently."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
+
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from ch18.workload_config import WORKLOAD, is_smoke_test
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -31,126 +23,111 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch18")
     return torch.device("cuda")
 
+
+class FusedAttentionModel(nn.Module):
+    """Attention block that leverages learned heuristics for chunk sizing."""
+
+    def __init__(self, hidden_dim: int, num_heads: int):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
+        self.optimizer_model = nn.Sequential(
+            nn.Linear(3, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        batch, seq, hidden = tokens.shape
+        features = torch.tensor(
+            [[seq, batch, hidden]],
+            dtype=tokens.dtype,
+            device=tokens.device,
+        )
+        ratio = self.optimizer_model(features).item()
+        chunk = max(256, min(seq, int(seq * (0.75 + 0.25 * ratio))))
+
+        outputs: list[torch.Tensor] = []
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            for chunk_tokens in torch.split(tokens, chunk, dim=1):
+                fused, _ = self.attn(chunk_tokens, chunk_tokens, chunk_tokens, need_weights=False)
+                outputs.append(fused)
+        return torch.cat(outputs, dim=1)
+
+
 class OptimizedAiOptimizationBenchmark(Benchmark):
-    """Optimized: AI-driven optimization for attention operations.
-    
-    AI optimization: Uses ML models to predict optimal strategies.
-    Adapts optimization strategies based on learned patterns.
-    """
-    
+    """AI-assisted attention implementation that batches work adaptively."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.hidden_dim = self.workload.attention_hidden_dim
+        self.num_heads = self.workload.attention_num_heads
+        self.batch_size = self.workload.attention_batch_size
+        self.sequence_length = self.workload.seq_len(self.smoke_test)
+        self.micro_batches = self.workload.micro_batches_for_mode(self.smoke_test)
 
-        # Optimization: Compile model for kernel fusion and optimization
+        self.model: Optional[FusedAttentionModel] = None
+        self.token_cache: Optional[torch.Tensor] = None
 
-        self.optimizer_model = None
-        self.input = None
-    
     def setup(self) -> None:
-        """Setup: Initialize model and AI optimizer."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        torch.manual_seed(42)
+        self.model = FusedAttentionModel(self.hidden_dim, self.num_heads).to(self.device).half().eval()
+        self.token_cache = torch.randn(
+            self.batch_size,
+            self.sequence_length,
+            self.hidden_dim,
+            dtype=torch.float16,
+            device=self.device,
+        )
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-        torch.manual_seed(42)
-        # Optimization: AI-driven optimization
-        # Uses ML model to predict optimal attention block sizes/strategies
-        # AI optimization adapts based on learned patterns
-        
-        hidden_dim = 256
-        self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=8,
-            batch_first=True
-        ).to(self.device).eval()
-        
-        # Simple ML model for optimization prediction (AI optimization)
-        self.optimizer_model = nn.Sequential(
-            nn.Linear(3, 64),  # Input: seq_len, batch_size, hidden_dim
-            nn.ReLU(),
-            nn.Linear(64, 1),  # Output: optimal block size
-        ).to(self.device).eval()
-        
-        self.input = torch.randn(4, 128, hidden_dim, device=self.device)
         torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations with AI optimization."""
-        # Use conditional NVTX ranges - only enabled when profiling
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        assert self.model is not None
+        assert self.token_cache is not None
 
         with nvtx_range("optimized_ai_optimization", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: AI-driven optimization
-                # ML model predicts optimal attention configuration (AI optimization)
-                # AI optimization: adapts strategy based on learned patterns
-                batch_size, seq_len, hidden_dim = self.input.shape
-                features = torch.tensor([[seq_len, batch_size, hidden_dim]], device=self.device, dtype=torch.float32)
-                optimal_block_size = int(self.optimizer_model(features).item() * 64)
-                optimal_block_size = max(16, min(optimal_block_size, 128))  # Clamp
-                
-                # Use AI-predicted configuration (AI optimization benefit)
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Optimization: AI optimization benefits
-                # - ML-driven strategy prediction
-                # - Adapts to workload patterns
-                # - Learned optimization strategies
-                # - Improved performance through AI-driven decisions
-                _ = output.sum()
+                for micro in range(self.micro_batches):
+                    tokens = torch.roll(self.token_cache, shifts=micro * 32, dims=1).contiguous()
+                    _ = self.model(tokens)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.optimizer_model = None
-        self.input = None
+        self.token_cache = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=2,
+            warmup=1,
+            enable_memory_tracking=False,
+            measurement_timeout_seconds=120,
         )
-    
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+            return "Attention model not initialized"
+        if self.token_cache is None:
+            return "Input cache not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedAiOptimizationBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedAiOptimizationBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Ai Optimization")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=3, warmup=1))
+    result = harness.benchmark(OptimizedAiOptimizationBenchmark())
+    print(f"Optimized AI optimization mean: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

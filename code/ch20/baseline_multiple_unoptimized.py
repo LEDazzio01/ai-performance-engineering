@@ -53,7 +53,7 @@ class BaselineMultipleUnoptimizedBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.x = None
-        self.batch_size = 8
+        self.batch_size = 32
         self.hidden_dim = 4096
     
     def setup(self) -> None:
@@ -72,7 +72,7 @@ class BaselineMultipleUnoptimizedBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_multiple_unoptimized", enable=enable_nvtx):
+        with nvtx_range("multiple_techniques", enable=enable_nvtx):
             with torch.no_grad():
                 _ = self.model(self.x)
 

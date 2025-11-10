@@ -17,7 +17,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.distributed as dist
 
-
+from ch4.gpu_requirements import skip_if_insufficient_gpus
 try:
     from distributed_helper import setup_single_gpu_env
 except ImportError:
@@ -58,6 +58,7 @@ class BaselineReinitCommBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Configure distributed environment."""
+        skip_if_insufficient_gpus()
         setup_single_gpu_env()
         self.rank = int(os.environ.get("RANK", "0"))
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -76,7 +77,7 @@ class BaselineReinitCommBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_reinit_comm", enable=enable_nvtx):
+        with nvtx_range("reinit_comm", enable=enable_nvtx):
             # Anti-pattern: reinitialize NCCL every iteration
             if dist.is_initialized():
                 dist.destroy_process_group()

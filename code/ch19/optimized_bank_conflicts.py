@@ -45,6 +45,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
         self.input = None
         self.output = None
         self.N = 1_048_576  # 1024 x 1024
+        self.passes = 64
     
     def setup(self) -> None:
         """Setup: Initialize tensors with padding."""
@@ -62,8 +63,9 @@ class OptimizedBankConflictsBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_bank_conflicts_padded", enable=enable_nvtx):
-            bank_conflict_transpose(self.input, self.output, padded=True)
+        with nvtx_range("bank_conflicts", enable=enable_nvtx):
+            for _ in range(self.passes):
+                bank_conflict_transpose(self.input, self.output, padded=True)
             torch.cuda.synchronize()
     
     def teardown(self) -> None:

@@ -27,6 +27,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch9.gpu_requirements import skip_if_insufficient_gpus
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -55,6 +56,7 @@ class OptimizedDistributedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and distributed processing."""
+        skip_if_insufficient_gpus()
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
@@ -198,4 +200,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

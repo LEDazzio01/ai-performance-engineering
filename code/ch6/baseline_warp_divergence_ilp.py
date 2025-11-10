@@ -19,6 +19,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -35,7 +36,12 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.routing_logits = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.N = self.workload.warp_elements_for_mode(self.smoke_test)
+        self.branch_iterations = self.workload.warp_branch_iterations
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -43,8 +49,9 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
         # Baseline: ILP operations with warp divergence
         # Warp divergence occurs when threads in a warp take different paths
         # This limits instruction-level parallelism
-        self.input = torch.randint(0, 2, (self.N,), device=self.device, dtype=torch.float32)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.routing_logits = torch.randn(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -63,13 +70,31 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
             # Warp divergence causes serialization of divergent paths
             # This reduces instruction-level parallelism
             # Threads in same warp take different execution paths
-            mask = self.input > 0.5
-            # Divergent branches reduce ILP as paths are serialized
-            result1 = self.input * 2.0
-            result2 = self.input * 0.5
-            self.output = torch.where(mask, result1, result2)
-            # Warp divergence limits ILP by serializing divergent execution paths
+            mask_source = self.routing_logits
+            result = self.input.clone()
+            for iteration in range(self.branch_iterations):
+                activations = torch.sigmoid(mask_source)
+                mask = activations > 0.5
 
+                positive = result[mask]
+                negative = result[~mask]
+
+                positive = torch.tanh(positive * 1.11 + 0.25)
+                positive = positive * 1.003 + 0.0005 * positive * positive
+
+                negative = torch.sin(negative * 0.77 - 0.35)
+                negative = negative * 0.997 - 0.0004 * negative * negative
+
+                result[mask] = positive
+                result[~mask] = negative
+
+                mask_source = 0.92 * mask_source + 0.08 * torch.roll(result, shifts=iteration + 1, dims=0)
+                torch.cuda.synchronize()
+
+            self.output = result
+            self.routing_logits = mask_source
+            self._checksum = float(result.sum().item())
+    
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -80,8 +105,8 @@ class BaselineWarpDivergenceILPBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=self.workload.ilp_iterations,
+            warmup=self.workload.ilp_warmup,
         )
     
     def validate_result(self) -> Optional[str]:

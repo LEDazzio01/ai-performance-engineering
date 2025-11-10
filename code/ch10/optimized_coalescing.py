@@ -48,6 +48,12 @@ class OptimizedCoalescingBenchmark(Benchmark):
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
+        coalesced_copy(self.input, self.output)
+        torch.cuda.synchronize()
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Coalesced memory access pattern."""

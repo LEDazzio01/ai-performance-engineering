@@ -1,16 +1,10 @@
-"""optimized_autotuning.py - Optimized with autotuning in infrastructure/OS tuning context.
-
-Demonstrates autotuning for performance optimization.
-Autotuning: Uses autotuning to automatically find optimal kernel configurations.
-torch.compile with max-autotune mode enables autotuning.
-Implements Benchmark protocol for harness integration.
-"""
+"""Optimized convolution that leans on autotuning + torch.compile."""
 
 from __future__ import annotations
 
-from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -19,116 +13,87 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.compile_utils import enable_tf32
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 autotuning example")
     return torch.device("cuda")
 
+
 class OptimizedAutotuningBenchmark(Benchmark):
-    """Optimized: Autotuning for performance optimization.
-    
-    Autotuning: Uses autotuning to automatically find optimal kernel configurations.
-    torch.compile with max-autotune mode enables autotuning.
-    """
-    
+    """Enables cudnn autotuning + uses torch.compile(max-autotune)."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
+
     def setup(self) -> None:
-        """Setup: Initialize model with autotuning."""
-        
-        # Optimization: Autotuning
-        # For system-level autotuning (kernel parameters, system config),
-        # we focus on OS/hardware configuration, not PyTorch-level optimizations.
-        
-        torch.manual_seed(42)
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        self.input = torch.randn(32, 1024, device=self.device)
-        
-        # Warmup: Run a few iterations to stabilize performance
-        with torch.no_grad():
-            for _ in range(10):
-                _ = self.model(self.input)
+        torch.manual_seed(123)
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        enable_tf32()
+
+        module = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False),
+            nn.SiLU(),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False),
+            nn.SiLU(),
+        ).to(self.device).half().eval()
+
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is not None:
+            try:
+                module = compile_fn(module, mode="max-autotune")
+            except Exception:
+                pass
+        self.model = module
+        self.inputs = torch.randn(32, 64, 96, 96, device=self.device, dtype=torch.float16)
+
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            with torch.no_grad():
+                for _ in range(5):
+                    _ = self.model(self.inputs)
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Operations with autotuning."""
-        # Use conditional NVTX ranges - only enabled when profiling
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
+
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
-        
+        assert self.model is not None and self.inputs is not None
         with nvtx_range("optimized_autotuning", enable=enable_nvtx):
-            with torch.no_grad():
-            # Optimization: Autotuning
-                # Autotuning automatically finds optimal configurations
-                output = self.model(self.input)
-                
-                # Optimization: Autotuning benefits
-                # - Automatic kernel configuration optimization
-                # - Optimal performance through autotuning
-                # - Improved efficiency
-                _ = output.sum()
-    
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                with torch.no_grad():
+                    _ = self.model(self.inputs)
+
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=20, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.model is None or self.inputs is None:
+            return "Model/input not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedAutotuningBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedAutotuningBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Autotuning")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=5, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized autotuning latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -41,6 +41,20 @@ def require_min_gpus(min_gpus: int, script_name: str = None) -> None:
         sys.exit(1)
 
 
+def skip_if_insufficient_gpus(min_gpus: int = 2) -> None:
+    """
+    Raise a standardized SKIPPED RuntimeError when the system lacks enough GPUs.
+    
+    This lets the benchmark harness record hardware limitations instead of
+    counting the benchmark as a failure in smoke-test mode.
+    """
+    available_gpus = torch.cuda.device_count()
+    if available_gpus < min_gpus:
+        raise RuntimeError(
+            f"SKIPPED: Distributed benchmark requires multiple GPUs (found {available_gpus} GPU)"
+        )
+
+
 def warn_optimal_gpu_count(optimal_gpus: int, script_name: str = None) -> None:
     """
     Warn if system doesn't have optimal GPU count but can still run.
@@ -56,4 +70,3 @@ def warn_optimal_gpu_count(optimal_gpus: int, script_name: str = None) -> None:
         print(f"\nWARNING: WARNING: {script}", file=sys.stderr)
         print(f"    This script is optimized for {optimal_gpus} GPUs but only {available_gpus} available.", file=sys.stderr)
         print(f"    Performance may be suboptimal.\n", file=sys.stderr)
-

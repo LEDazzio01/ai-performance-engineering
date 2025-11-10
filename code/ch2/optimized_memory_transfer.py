@@ -57,7 +57,7 @@ class OptimizedMemoryTransferBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_memory_transfer_unified", enable=enable_nvtx):
+        with nvtx_range("memory_transfer", enable=enable_nvtx):
     # Unified memory - GPU can access CPU memory directly via NVLink-C2C
     # No explicit copy needed - faster than PCIe transfers
             result = self.data * 2.0  # Simulates GPU computation on unified memory

@@ -100,7 +100,7 @@ class BaselineInferenceMonolithicBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("baseline_inference_monolithic", enable=enable_nvtx):
+        with nvtx_range("inference_monolithic", enable=enable_nvtx):
             with torch.no_grad():
                 # Measure TTFT: Time from request start to first token generation
                 request_start = time.perf_counter()

@@ -42,18 +42,27 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.cpu_data = None
-        self.gpu_data = None
-        self.N = 10_000_000
+        self.cpu_batches: Optional[list[torch.Tensor]] = None
+        self.gpu_batches: Optional[list[torch.Tensor]] = None
+        self.transfer_stream = None
+        self.total_elements = 20_000_000
+        self.num_transfers = 4
+        self.chunk_size = self.total_elements // self.num_transfers
     
     def setup(self) -> None:
         """Setup: Initialize CPU tensor with pinned memory."""
         torch.manual_seed(42)
         
         # Optimized: Pinned memory - page-locked CPU memory
-        # pin_memory=True enables faster CPU-GPU transfers via DMA
-        self.cpu_data = torch.randn(self.N, dtype=torch.float32, pin_memory=True)
-        self.gpu_data = None
+        self.cpu_batches = [
+            torch.randn(self.chunk_size, dtype=torch.float32, pin_memory=True)
+            for _ in range(self.num_transfers)
+        ]
+        self.gpu_batches = [
+            torch.empty(self.chunk_size, device=self.device, dtype=torch.float32)
+            for _ in range(self.num_transfers)
+        ]
+        self.transfer_stream = torch.cuda.Stream()
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -64,16 +73,20 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_pinned_memory_pinned", enable=enable_nvtx):
-            # Optimized: Transfer pinned memory to GPU
-            # This is faster because it uses DMA (Direct Memory Access)
-            # Non-blocking transfer can overlap with computation
-            self.gpu_data = self.cpu_data.to(self.device, non_blocking=True)
+            # Optimized: Transfer pinned memory on a dedicated stream using
+            # non-blocking copies, allowing the default stream to execute work.
+            current_stream = torch.cuda.current_stream()
+            with torch.cuda.stream(self.transfer_stream):
+                for cpu_batch, gpu_batch in zip(self.cpu_batches, self.gpu_batches):
+                    gpu_batch.copy_(cpu_batch, non_blocking=True)
+            current_stream.wait_stream(self.transfer_stream)
             torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.cpu_data = None
-        self.gpu_data = None
+        self.cpu_batches = None
+        self.gpu_batches = None
+        self.transfer_stream = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -87,14 +100,13 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.gpu_data is None:
-            return "GPU tensor not initialized"
-        if self.cpu_data is None:
-            return "CPU tensor not initialized"
-        if self.gpu_data.shape[0] != self.N:
-            return f"GPU tensor shape mismatch: expected {self.N}, got {self.gpu_data.shape[0]}"
-        if not torch.isfinite(self.gpu_data).all():
-            return "GPU tensor contains non-finite values"
+        if not self.gpu_batches or not self.cpu_batches:
+            return "Batches not initialized"
+        for tensor in self.gpu_batches:
+            if tensor.shape[0] != self.chunk_size:
+                return "GPU tensor shape mismatch"
+            if not torch.isfinite(tensor).all():
+                return "GPU tensor contains non-finite values"
         return None
 
 
@@ -111,4 +123,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Pinned Memory (Pinned): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

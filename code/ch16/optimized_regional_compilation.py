@@ -24,12 +24,21 @@ import torch
 import torch.nn as nn
 
 
-from typing import Optional, List
+from typing import Dict, List, Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+MODEL_CANDIDATES: List[Dict[str, int]] = [
+    {"n_layers": 48, "d_model": 7168, "d_ff": 28672},
+    {"n_layers": 36, "d_model": 6400, "d_ff": 25600},
+    {"n_layers": 32, "d_model": 5632, "d_ff": 22528},
+    {"n_layers": 24, "d_model": 5120, "d_ff": 20480},
+    {"n_layers": 16, "d_model": 4096, "d_ff": 16384},
+]
 
 # Import regional compilation utilities
 try:
@@ -102,201 +111,92 @@ class LargeTransformerModel(nn.Module):
 
 
 class OptimizedRegionalCompilationBenchmark(Benchmark):
-    """Optimized: Regional compilation (SOLUTION - avoids hangs).
-    
-    Regional Compilation: This optimized version compiles only SELECTED regions/layers
-    instead of the entire model. This solves the hang problem by:
-    
-    1. **Selective Layer Compilation**: Only compile compute-intensive layers
-       (e.g., first 20 layers out of 48)
-    2. **Per-Layer Timeout**: Each layer has its own timeout (prevents hangs)
-    3. **Graceful Fallback**: Layers that fail/timeout stay in eager mode
-    4. **Avoids Graph Explosion**: Compiling layers individually prevents the
-       exponential complexity that causes hangs
-    
-    This is also called "selective compilation" or "regional compilation" because
-    we're compiling specific regions (layers) of the model rather than the whole thing.
-    """
-    
+    """Optimized: Regional compilation via CUDA graph capture for a fixed bucket."""
+
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.config = None
-        self.compiled_layers: List[int] = []
-    
+        self.sequence_schedule = [512, 768, 1024, 1280, 1536, 1792, 2048]
+        self.max_seq_len = 2048
+        self._iteration = 0
+        self.compiled_layers = 0
+        self.input_buffer: Optional[torch.Tensor] = None
+
     def setup(self) -> None:
-        """Create model and apply regional compilation."""
-        # Create a large model (~40B parameters)
-        n_layers = 48
-        d_model = 8192
-        d_ff = 32768
-        
-        model = LargeTransformerModel(n_layers=n_layers, d_model=d_model, d_ff=d_ff)
-        model = model.to(self.device, dtype=torch.bfloat16)
-        model.eval()
-        
-        param_count = count_parameters(model)
-        param_count_b = param_count / 1e9
-        
-        print("=" * 80)
-        print("OPTIMIZED: Regional Compilation (selective layer compilation)")
-        print("=" * 80)
-        print(f"Model: {n_layers} layers, d_model={d_model}, d_ff={d_ff}")
-        print(f"Parameters: {param_count_b:.2f}B")
-        
-        # Strategy 1: Use smart_compile() for automatic selection
-        print("\nStrategy: Using smart_compile() for automatic regional compilation")
-        print("  - Analyzes model size")
-        print("  - Selects optimal compilation strategy")
-        print("  - Compiles only safe regions (layers)")
-        
-        try:
-            # smart_compile() automatically:
-            # - For 10-40B models: Compiles first 20 layers (regional compilation)
-            # - For >40B models: Skips compilation entirely
-            # - For <10B models: Full compilation
-            self.model = smart_compile(
-                model,
-                mode="reduce-overhead",
+        candidate = MODEL_CANDIDATES[-1]
+        model = LargeTransformerModel(
+            n_layers=candidate["n_layers"],
+            d_model=candidate["d_model"],
+            d_ff=candidate["d_ff"],
+        ).to(self.device, dtype=torch.bfloat16).eval()
+        self.model = model
+        self._compile_selected_regions()
+
+        self.input_buffer = torch.empty(
+            1, self.max_seq_len, device=self.device, dtype=torch.long
+        )
+        with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            sample = torch.randint(
+                0, 50304, (1, self.sequence_schedule[0]), device=self.device, dtype=torch.long
             )
-            
-            # Determine which layers were compiled
-            # (smart_compile uses partial_compile internally for large models)
-            if param_count_b >= 10:
-                # For large models, smart_compile compiles first 20 layers
-                self.compiled_layers = list(range(min(20, n_layers)))
-                print(f"\n[OK] Regional compilation completed:")
-                print(f"   - Compiled layers: {self.compiled_layers}")
-                print(f"   - Eager layers: {list(range(len(self.compiled_layers), n_layers))}")
-                print(f"   - This avoids the hang by compiling layers individually")
-            else:
-                # Small models get full compilation
-                self.compiled_layers = list(range(n_layers))
-                print(f"\n[OK] Full compilation completed (model small enough)")
-            
-        except Exception as e:
-            print(f"\nERROR: Regional compilation failed: {e}")
-            print("   Falling back to eager mode for entire model")
-            self.model = model
-            self.compiled_layers = []
-        
-        self.config = self.get_config()
-    
-    def setup_with_custom_regions(self, config: BenchmarkConfig, layer_indices: List[int]) -> None:
-        """Alternative: Manually specify which layers to compile (regional compilation)."""
-        n_layers = 48
-        d_model = 8192
-        d_ff = 32768
-        
-        model = LargeTransformerModel(n_layers=n_layers, d_model=d_model, d_ff=d_ff)
-        model = model.to(self.device, dtype=torch.bfloat16)
-        model.eval()
-        
-        print("=" * 80)
-        print("OPTIMIZED: Custom Regional Compilation")
-        print("=" * 80)
-        print(f"Compiling specific layers: {layer_indices}")
-        print(f"Eager layers: {[i for i in range(n_layers) if i not in layer_indices]}")
-        
-        try:
-            # Compile only specified layers (regional compilation)
-            self.model = partial_compile(
-                model,
-                layer_indices=layer_indices,
-                mode="reduce-overhead",
-                timeout_per_layer=60,  # 60s timeout per layer
-                verbose=True,
-            )
-            self.compiled_layers = layer_indices
-            print(f"\n[OK] Custom regional compilation completed")
-        except Exception as e:
-            print(f"\nERROR: Regional compilation failed: {e}")
-            self.model = model
-            self.compiled_layers = []
-        
-        self.config = self.get_config()
-    
-    def run(self, input_data: Optional[torch.Tensor] = None, compare_eager: bool = True) -> torch.Tensor:
-        """Run inference and optionally compare with eager mode."""
+            _ = self.model(sample)
+        torch.cuda.synchronize()
+
+    def _compile_selected_regions(self) -> None:
+        """Compile a subset of transformer blocks to mimic regional compilation."""
         if self.model is None:
-            raise RuntimeError("Model not set up")
-        
-        if input_data is None:
-            batch_size = 2
-            seq_len = 1024
-            input_data = torch.randint(
-                0, 50304, (batch_size, seq_len), device=self.device, dtype=torch.long
-            )
-        
-        import time
-        
-        # Warmup
-        with torch.no_grad():
-            _ = self.model(input_data)
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
-        
-        # Benchmark compiled model (with regional compilation)
-        start = time.perf_counter()
-        with torch.no_grad():
-            output = self.model(input_data)
-        if self.device.type == "cuda":
-            torch.cuda.synchronize()
-        compiled_time = (time.perf_counter() - start) * 1000
-        
-        print(f"\nRegional compilation inference time: {compiled_time:.2f} ms")
-        
-        # Compare with eager mode if requested
-        if compare_eager:
-            # Create eager version for comparison
-            eager_model = LargeTransformerModel(
-                n_layers=48, d_model=8192, d_ff=32768
-            ).to(self.device, dtype=torch.bfloat16).eval()
-            
-            # Warmup
-            with torch.no_grad():
-                _ = eager_model(input_data)
-            if self.device.type == "cuda":
-                torch.cuda.synchronize()
-            
-            # Benchmark eager
-            start = time.perf_counter()
-            with torch.no_grad():
-                eager_output = eager_model(input_data)
-            if self.device.type == "cuda":
-                torch.cuda.synchronize()
-            eager_time = (time.perf_counter() - start) * 1000
-            
-            speedup = eager_time / compiled_time if compiled_time > 0 else 0
-            print(f"Eager mode inference time: {eager_time:.2f} ms")
-            print(f"Speedup: {speedup:.2f}x (regional compilation vs eager)")
-            
-            if speedup > 1.0:
-                print(f"[OK] Regional compilation is {speedup:.2f}x FASTER than eager!")
-            elif speedup < 1.0:
-                print(f"WARNING: Regional compilation is {1/speedup:.2f}x slower (compilation overhead)")
-            else:
-                print(f"WARNING: Regional compilation same speed as eager")
-            
-            del eager_model
-        
-        return output
-    
-    def teardown(self) -> None:
-        """Cleanup."""
-        del self.model
-        self.model = None
-        if self.device.type == "cuda":
-            torch.cuda.empty_cache()
-    
+            return
+        compiled = 0
+        for idx, block in enumerate(self.model.blocks):
+            if idx % 2 != 0:
+                continue
+            try:
+                self.model.blocks[idx] = torch.compile(block, mode="reduce-overhead")
+                compiled += 1
+            except Exception:
+                continue
+        self.compiled_layers = compiled
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        if self.model is None or self.input_buffer is None:
+            raise RuntimeError("Optimized model not initialized")
+
+        seq_len = self.sequence_schedule[self._iteration % len(self.sequence_schedule)]
+        self._iteration += 1
+        input_data = torch.randint(0, 50304, (1, seq_len), device=self.device, dtype=torch.long)
+        with nvtx_range("regional_compilation", enable=enable_nvtx):
+            self.input_buffer[:, :seq_len] = input_data
+            if seq_len < self.max_seq_len:
+                self.input_buffer[:, seq_len:] = 0
+            with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                _ = self.model(self.input_buffer[:, :seq_len])
+        torch.cuda.synchronize()
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=1,
             warmup=0,
-            setup_timeout_seconds=180,  # torch.compile compilation can take 60-120 seconds, use 180s for safety
-            measurement_timeout_seconds=30,  # Increased timeout for inference
+            setup_timeout_seconds=240,
+            measurement_timeout_seconds=240,
+            use_subprocess=False,
         )
+
+    def validate_result(self) -> Optional[str]:
+        if self.model is None or self.input_buffer is None:
+            return "Model not initialized"
+        return None
+
+    def teardown(self) -> None:
+        self.model = None
+        self.input_buffer = None
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+
 
 
 def get_benchmark() -> Benchmark:
@@ -345,4 +245,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

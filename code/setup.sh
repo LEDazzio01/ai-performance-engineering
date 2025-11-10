@@ -682,6 +682,17 @@ else
         dask==2025.9.1 xarray==2025.6.1
 fi
 
+# Sync CUTLASS headers for tcgen05 kernels
+echo ""
+echo "Syncing CUTLASS (tcgen05) headers..."
+CUTLASS_REF_VALUE="${CUTLASS_REF:-v4.2.1}"
+CUTLASS_REPO_URL="${CUTLASS_REPO:-https://github.com/NVIDIA/cutlass.git}"
+if [ -x "${PROJECT_ROOT}/scripts/install_cutlass.sh" ]; then
+    CUTLASS_REPO="${CUTLASS_REPO_URL}" "${PROJECT_ROOT}/scripts/install_cutlass.sh" "${CUTLASS_REF_VALUE}"
+else
+    echo "WARNING: scripts/install_cutlass.sh not found; skipping CUTLASS installation"
+fi
+
 # Ensure monitoring/runtime dependencies are available even if requirements were cached
 echo ""
 echo "Ensuring monitoring/runtime packages (Prometheus, LMCache, Transformer Engine)..."
@@ -695,11 +706,37 @@ export CPATH="${CUDNN_INCLUDE_DIR}:${CPATH:-}"
 export LIBRARY_PATH="${CUDNN_LIBRARY_DIR}:${LIBRARY_PATH:-}"
 
 # Remove conflicting binary wheels before installing the source build.
-python3 -m pip uninstall -y transformer_engine transformer-engine transformer_engine_cu12 transformer-engine-cu12 transformer-engine-cu13 >/dev/null 2>&1 || true
+python3 -m pip uninstall -y transformer_engine transformer-engine transformer_engine_cu12 transformer-engine-cu12 transformer-engine-cu13 transformer_engine_torch >/dev/null 2>&1 || true
 
 TE_WHEEL_BASE="transformer_engine-2.8.0+40c69e7-cp311-cp311-linux_aarch64.whl"
-LOCAL_TE_WHEEL="$PROJECT_ROOT/vendor/wheels/${TE_WHEEL_BASE}"
-LOCAL_TE_PARTS_PREFIX="$PROJECT_ROOT/vendor/wheels/${TE_WHEEL_BASE}.part"
+TE_CU12_WHEEL_BASE="transformer_engine_cu12-2.8.0+40c69e7-cp311-cp311-linux_aarch64.whl"
+# The transformer_engine_torch wheel stays under Git's 50MB limit, so we cache the raw .whl (no split parts).
+TE_TORCH_WHEEL_BASE="transformer_engine_torch-2.8.0+40c69e7-cp311-cp311-linux_aarch64.whl"
+
+install_wheel_from_cache() {
+    local wheel_name="$1"
+    local full_path="$PROJECT_ROOT/vendor/wheels/${wheel_name}"
+    local parts_prefix="${full_path}.part"
+
+    if [ -f "$full_path" ]; then
+        python3 -m pip install --no-input --upgrade --ignore-installed --no-deps "$full_path"
+        return $?
+    fi
+
+    if compgen -G "${parts_prefix}*" >/dev/null; then
+        local tmp_dir
+        tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/te-wheel.XXXXXX")
+        local combined="${tmp_dir}/${wheel_name}"
+        mapfile -t PARTS < <(ls "${parts_prefix}"* | sort -V)
+        if cat "${PARTS[@]}" > "${combined}" && \
+           python3 -m pip install --no-input --upgrade --ignore-installed --no-deps "${combined}"; then
+            rm -rf "${tmp_dir}"
+            return 0
+        fi
+        rm -rf "${tmp_dir}"
+    fi
+    return 1
+}
 
 install_te_from_source() {
     python3 -m pip install --no-input --upgrade --ignore-installed pybind11
@@ -716,37 +753,30 @@ install_te_from_source() {
     fi
 }
 
-if [ -f "$LOCAL_TE_WHEEL" ]; then
-    echo "Installing Transformer Engine from cached wheel: $LOCAL_TE_WHEEL"
-    if python3 -m pip install --no-input --upgrade --ignore-installed "$LOCAL_TE_WHEEL"; then
-        echo "Transformer Engine installed from cached wheel (CUDA 13 build)"
-    else
-        echo "Cached Transformer Engine wheel failed to install; attempting source build..."
-        install_te_from_source
-    fi
-elif ls "${LOCAL_TE_PARTS_PREFIX}"* >/dev/null 2>&1; then
-    echo "Reassembling Transformer Engine wheel from split parts..."
-    TEMP_TE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/te-wheel.XXXXXX")
-    TEMP_TE_WHEEL_PATH="${TEMP_TE_DIR}/${TE_WHEEL_BASE}"
-    # Sort part files to ensure correct ordering (part00, part01, part02, ...)
-    PARTS=($(ls "${LOCAL_TE_PARTS_PREFIX}"* | sort -V))
-    if cat "${PARTS[@]}" > "${TEMP_TE_WHEEL_PATH}"; then
-        if python3 -m pip install --no-input --upgrade --ignore-installed "${TEMP_TE_WHEEL_PATH}"; then
-            echo "Transformer Engine installed from reconstructed wheel (CUDA 13 build)"
-        else
-            echo "Reconstructed Transformer Engine wheel failed to install; attempting source build..."
-            install_te_from_source
-        fi
-    else
-        echo "Failed to reassemble Transformer Engine wheel; attempting source build..."
-        install_te_from_source
-    fi
-    rm -f "${TEMP_TE_WHEEL_PATH}"
-    rm -rf "${TEMP_TE_DIR}"
+if install_wheel_from_cache "$TE_WHEEL_BASE" \
+   && install_wheel_from_cache "$TE_CU12_WHEEL_BASE" \
+   && install_wheel_from_cache "$TE_TORCH_WHEEL_BASE"; then
+    echo "Transformer Engine (core/cu12/torch) installed from cached wheels"
 else
-    echo "Cached Transformer Engine wheel not found; building from source..."
+    echo "Cached Transformer Engine wheels unavailable; attempting source build..."
     install_te_from_source
 fi
+
+python3 <<'PY'
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.find_spec("transformer_engine")
+if not spec:
+    raise SystemExit(0)
+pkg_root = Path(spec.origin).parent
+wheel_dir = pkg_root / "wheel_lib"
+if not wheel_dir.exists():
+    raise SystemExit(0)
+for so_path in pkg_root.glob("*.so"):
+    if (wheel_dir / so_path.name).exists():
+        so_path.unlink()
+PY
 
 # Remove conflicting system packages that interfere with PyTorch
 echo ""

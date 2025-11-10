@@ -41,14 +41,20 @@ class BaselineCudaGraphsBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.data = None
-        self.N = 1 << 20  # 1M elements
-        self.iterations = 50
+        self.N = 1 << 18  # Smaller problem amplifies launch overhead.
+        self.iterations = 200
         self._extension = None
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
         self._extension = load_cuda_graphs_extension()
         
+        torch.manual_seed(42)
+        self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
+        # Warm up kernel launches so compilation/init costs are excluded.
+        self._extension.separate_kernel_launches(self.data, 1)
+        torch.cuda.synchronize()
         torch.manual_seed(42)
         self.data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
@@ -64,8 +70,9 @@ class BaselineCudaGraphsBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_cuda_graphs_separate", enable=enable_nvtx):
+        with nvtx_range("cuda_graphs", enable=enable_nvtx):
             self._extension.separate_kernel_launches(self.data, self.iterations)
+            torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
@@ -81,6 +88,7 @@ class BaselineCudaGraphsBenchmark(Benchmark):
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take time
+            measurement_timeout_seconds=120,
         )
     
     def validate_result(self) -> Optional[str]:

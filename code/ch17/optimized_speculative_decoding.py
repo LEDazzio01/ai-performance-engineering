@@ -32,65 +32,55 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 class OptimizedSpeculativeDecodingBenchmark(Benchmark):
-    """Optimized: Speculative decoding for parallel token generation.
-    
-    Speculative decoding: Uses draft model to predict multiple tokens in parallel.
-    Accepts/rejects tokens based on target model verification for speedup.
-    """
+    """Optimized: Speculative decoding with draft/target coordination."""
     
     def __init__(self):
         self.device = resolve_device()
-        self.target_model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.draft_model = None
         self.embedding = None
+        self.target_decoder = None
+        self.draft_decoder = None
+        self.output_head = None
         self.input_ids = None
-        self.max_length = 20
-        self.speculative_length = 4  # Number of tokens to predict speculatively
-        self.hidden_dim = 256
-        self.vocab_size = 1000
-        self.batch_size = 4
-        self.seq_len = 10
-        self.memory = None
+        self.target_hidden = None
+        self.draft_hidden = None
+        self.max_length = 64
+        self.speculative_length = 4
+        self.hidden_dim = 512
+        self.vocab_size = 16000
+        self.batch_size = 8
+        self.seq_len = 64
+        self.target_layers = 1
+        self.draft_layers = 1
     
     def setup(self) -> None:
-        """Setup: Initialize target and draft models."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        """Setup: Initialize target/draft models and seed hidden states."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Speculative decoding
-        # Draft model predicts multiple tokens in parallel
-        # Target model verifies predictions for correctness
-        
-        # Target model (slower, more accurate)
-        self.target_model = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=self.hidden_dim, nhead=8, batch_first=True),
-            num_layers=4  # Larger model
-        ).to(self.device)
-        if self.device.type == "cuda":
-            self.target_model = self.target_model.half()
-        self.target_model.eval()
-        
-        # Draft model (faster, less accurate) for speculative decoding
-        self.draft_model = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=self.hidden_dim, nhead=8, batch_first=True),
-            num_layers=2  # Smaller model
-        ).to(self.device)
-        if self.device.type == "cuda":
-            self.draft_model = self.draft_model.half()
-        self.draft_model.eval()
-        
-        self.embedding = nn.Embedding(self.vocab_size, self.hidden_dim).to(self.device)
-        if self.device.type == "cuda":
-            self.embedding = self.embedding.half()
-        
-        target_dtype = next(self.target_model.parameters()).dtype
-        
-        # Input
+        dtype = torch.bfloat16 if self.device.type == "cuda" else torch.float32
+        self.embedding = nn.Embedding(self.vocab_size, self.hidden_dim, device=self.device, dtype=dtype)
+        self.target_decoder = nn.GRU(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=self.target_layers,
+            batch_first=True,
+        ).to(self.device, dtype=dtype).eval()
+        self.draft_decoder = nn.GRU(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=self.draft_layers,
+            batch_first=True,
+        ).to(self.device, dtype=dtype).eval()
+        self.output_head = nn.Linear(self.hidden_dim, self.vocab_size, device=self.device, dtype=dtype)
+
+        try:
+            self.target_decoder = torch.compile(self.target_decoder, mode="reduce-overhead")
+            self.draft_decoder = torch.compile(self.draft_decoder, mode="reduce-overhead")
+            self.output_head = torch.compile(self.output_head, mode="reduce-overhead")
+        except Exception:
+            pass
+
         self.input_ids = torch.randint(
             0,
             self.vocab_size,
@@ -98,13 +88,24 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
             device=self.device,
             dtype=torch.long,
         )
-        self.memory = torch.randn(
+        prompt_embeds = self.embedding(self.input_ids)
+        self.target_hidden = torch.zeros(
+            self.target_layers,
             self.batch_size,
-            self.seq_len,
             self.hidden_dim,
             device=self.device,
-            dtype=target_dtype,
+            dtype=dtype,
         )
+        self.draft_hidden = torch.zeros(
+            self.draft_layers,
+            self.batch_size,
+            self.hidden_dim,
+            device=self.device,
+            dtype=dtype,
+        )
+        with torch.no_grad():
+            _, self.target_hidden = self.target_decoder(prompt_embeds, self.target_hidden)
+            _, self.draft_hidden = self.draft_decoder(prompt_embeds, self.draft_hidden)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -119,46 +120,65 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
 
         with nvtx_range("optimized_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Speculative decoding
-                # Draft model predicts multiple tokens in parallel
-                # Target model verifies predictions
-                
-                current_ids = self.input_ids.clone()
-                
-                target_dtype = next(self.target_model.parameters()).dtype
-                
-                while current_ids.size(1) < self.input_ids.size(1) + self.max_length:
-                    # Draft model: Predict multiple tokens speculatively
-                    draft_embeds = self.embedding(current_ids).to(target_dtype)
-                    draft_output = self.draft_model(draft_embeds, self.memory)
-                    draft_tokens = draft_output[:, -self.speculative_length:, :].argmax(dim=-1)
-                    
-                    # Target model: Verify draft predictions (speculative decoding verification)
-                    for j in range(draft_tokens.size(1)):
-                        candidate = torch.cat([current_ids, draft_tokens[:, j:j+1]], dim=1)
-                        candidate_embeds = self.embedding(candidate).to(target_dtype)
-                        target_output = self.target_model(candidate_embeds, self.memory)
-                        accepted_token = target_output[:, -1, :].argmax(dim=-1, keepdim=True)
-                        
-                        current_ids = torch.cat([current_ids, accepted_token], dim=1)
-                        if current_ids.size(1) >= self.input_ids.size(1) + self.max_length:
+                generated = self.input_ids.clone()
+                target_hidden = self.target_hidden.clone()
+                draft_hidden = self.draft_hidden.clone()
+                target_len = generated.size(1) + self.max_length
+
+                while generated.size(1) < target_len:
+                    proposals = []
+                    proposal_states = []
+                    running_hidden = draft_hidden
+                    prev_token = generated[:, -1:]
+                    for _ in range(self.speculative_length):
+                        draft_embed = self.embedding(prev_token)
+                        draft_out, running_hidden = self.draft_decoder(draft_embed, running_hidden)
+                        logits = self.output_head(draft_out[:, -1, :])
+                        next_token = logits.argmax(dim=-1, keepdim=True)
+                        proposals.append(next_token)
+                        proposal_states.append(running_hidden.clone())
+                        prev_token = next_token
+
+                    proposal_tensor = torch.cat(proposals, dim=1)
+                    proposal_embeds = self.embedding(proposal_tensor)
+                    target_seq, seq_hidden = self.target_decoder(proposal_embeds, target_hidden)
+                    target_logits = self.output_head(target_seq)
+
+                    accepted_tokens = 0
+                    for idx in range(proposal_tensor.size(1)):
+                        proposal = proposal_tensor[:, idx : idx + 1]
+                        target_choice = target_logits[:, idx, :].argmax(dim=-1, keepdim=True)
+                        if torch.all(target_choice == proposal):
+                            generated = torch.cat([generated, proposal], dim=1)
+                            draft_hidden = proposal_states[idx]
+                            target_hidden = target_seq[:, idx, :].unsqueeze(0)
+                            accepted_tokens += 1
+                        else:
+                            generated = torch.cat([generated, target_choice], dim=1)
+                            prev_state = proposal_states[idx - 1] if idx > 0 else draft_hidden
+                            correction_embed = self.embedding(target_choice)
+                            _, draft_hidden = self.draft_decoder(correction_embed, prev_state)
+                            target_hidden = target_seq[:, idx, :].unsqueeze(0)
                             break
-                    
-                    # Optimization: Speculative decoding benefits
-                    # - Draft model proposes multiple candidates per iteration
-                    # - Target model still verifies correctness to maintain quality
-                    # Loop continues until desired length is reached
-                    if current_ids.size(1) >= self.input_ids.size(1) + self.max_length:
-                        break
+                        if generated.size(1) >= target_len:
+                            break
+
+                    if accepted_tokens == proposal_tensor.size(1):
+                        target_hidden = seq_hidden
+                        if generated.size(1) >= target_len:
+                            break
+        torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.target_model = None
-        self.draft_model = None
+        self.target_decoder = None
+        self.draft_decoder = None
         self.embedding = None
+        self.output_head = None
         self.input_ids = None
-        self.memory = None
+        self.target_hidden = None
+        self.draft_hidden = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -170,7 +190,7 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.target_model is None or self.draft_model is None:
+        if self.target_decoder is None or self.draft_decoder is None or self.output_head is None:
             return "Models not initialized"
         if self.input_ids is None:
             return "Input IDs not initialized"

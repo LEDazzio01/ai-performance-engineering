@@ -25,6 +25,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch10.workload_config import WORKLOAD, is_smoke_test
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -41,9 +42,13 @@ class OptimizedBatchBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-        self.input = None
+        self.model: nn.Sequential | None = None
+        self.input: torch.Tensor | None = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.total_batch_size = self.workload.optimized_batch_for_mode(self.smoke_test)
+        self.hidden_dim = self.workload.hidden_dim
+        self.ffn_dim = self.workload.ffn_dim
     
     def setup(self) -> None:
         """Setup: Initialize model with optimized batch size."""
@@ -60,14 +65,13 @@ class OptimizedBatchBenchmark(Benchmark):
         # Large batches fully utilize tensor cores
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.hidden_dim, self.ffn_dim),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(self.ffn_dim, self.hidden_dim),
         ).to(self.device).eval()
         
         # Large batch size (optimized)
-        batch_size = 128
-        self.input = torch.randn(batch_size, 1024, device=self.device)
+        self.input = torch.randn(self.total_batch_size, self.hidden_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -80,11 +84,13 @@ class OptimizedBatchBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_batch", enable=enable_nvtx):
+        with nvtx_range("batch", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Large batch size
                 # Large batches fully utilize GPU resources
                 # Batch size optimization maximizes tensor core utilization
+                if self.model is None or self.input is None:
+                    raise RuntimeError("Benchmark not configured")
                 output = self.model(self.input)
                 
                 # Optimization: Large batch size benefits
@@ -93,6 +99,7 @@ class OptimizedBatchBenchmark(Benchmark):
                 # - Improved throughput
                 # - Efficient batch processing
                 _ = output.sum()
+                torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:

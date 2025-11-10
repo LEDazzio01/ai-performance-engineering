@@ -17,6 +17,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.cuda.amp as amp
 
 from typing import Optional
 
@@ -25,6 +26,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch10.workload_config import WORKLOAD, is_smoke_test
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -42,12 +44,15 @@ class OptimizedRooflineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
         self.input = None
         self.roofline_data = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.batch = self.workload.roofline_batch_for_mode(self.smoke_test)
+        self.micro_batches = self.workload.roofline_micro_batches_for_mode(self.smoke_test)
+        self.hidden_dim = self.workload.roofline_hidden_dim_for_mode(self.smoke_test)
+        self.ffn_dim = self.workload.roofline_ffn_dim_for_mode(self.smoke_test)
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model with roofline analysis."""
@@ -64,12 +69,18 @@ class OptimizedRooflineBenchmark(Benchmark):
         # Guides optimization strategy
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.hidden_dim, self.ffn_dim),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
+            nn.Linear(self.ffn_dim, self.hidden_dim),
+        ).to(self.device).half().eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        total_rows = self.batch * self.micro_batches
+        self.input = torch.randn(
+            total_rows,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
         
         # Roofline data for analysis
         self.roofline_data = {
@@ -98,7 +109,8 @@ class OptimizedRooflineBenchmark(Benchmark):
                 end_event = torch.cuda.Event(enable_timing=True)
                 
                 start_event.record()
-                output = self.model(self.input)
+                with amp.autocast(dtype=torch.float16):
+                    output = self.model(self.input)
                 end_event.record()
                 torch.cuda.synchronize()
                 
@@ -136,7 +148,7 @@ class OptimizedRooflineBenchmark(Benchmark):
                 # - Guides optimization strategy
                 # - Measures arithmetic intensity
                 # - Performance-based optimization decisions
-                _ = output.sum()
+                self._checksum = float(output.float().sum().item())
 
     
     def teardown(self) -> None:

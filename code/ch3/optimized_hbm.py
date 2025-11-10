@@ -1,15 +1,10 @@
-"""optimized_hbm.py - Optimized HBM memory access in infrastructure/OS tuning context.
-
-Demonstrates HBM memory optimization for high bandwidth utilization.
-HBM: Optimizes memory access patterns for HBM high bandwidth.
-Maximizes HBM memory bandwidth utilization.
-Implements Benchmark protocol for harness integration.
-"""
+"""HBM optimization: fused large-batch matmul that keeps data contiguous."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -18,123 +13,76 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.compile_utils import enable_tf32
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
 
 
 class OptimizedHbmBenchmark(Benchmark):
-    """Optimized: HBM memory optimization for high bandwidth utilization.
-    
-        HBM: Optimizes memory access patterns for HBM high bandwidth.
-        Maximizes HBM memory bandwidth utilization.
-        """
-    
+    """Processes the full tensor at once with torch.compile + FP16."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model with HBM optimization."""
-        
-        torch.manual_seed(42)
-        # Optimization: HBM memory optimization
-        # HBM (High Bandwidth Memory) provides high memory bandwidth
-        # Optimizes access patterns to maximize HBM bandwidth
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        # HBM-optimized memory allocation
-        # Large contiguous tensors maximize HBM bandwidth utilization
-        self.input = torch.randn(256, 1024, device=self.device)  # Larger batch for HBM
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: HBM-optimized operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(22)
+        enable_tf32()
+        module = nn.Sequential(
+            nn.Linear(1024, 2048, bias=False),
+            nn.GELU(),
+            nn.Linear(2048, 1024, bias=False),
+        ).to(self.device).half()
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is not None:
+            try:
+                module = compile_fn(module, mode="reduce-overhead")
+            except Exception:
+                pass
+        self.model = module.eval()
+        self.inputs = torch.randn(4096, 1024, device=self.device, dtype=torch.float16).contiguous()
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
+        assert self.model is not None and self.inputs is not None
         with nvtx_range("optimized_hbm", enable=enable_nvtx):
-            with torch.no_grad():
-                # Optimization: HBM memory optimization
-                # Large contiguous memory access maximizes HBM bandwidth
-                # HBM: high bandwidth memory access patterns
-                output = self.model(self.input)
-                
-                # Additional HBM optimization: contiguous operations
-                # HBM benefits: high bandwidth memory throughput
-                output2 = output.contiguous()  # Ensure contiguous layout for HBM
-                
-                # Optimization: HBM optimization benefits
-                # - High bandwidth memory access
-                # - Contiguous memory patterns
-                # - Maximized HBM bandwidth utilization
-                # - Better performance through HBM optimization
-                _ = output2.sum()
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = self.model(self.inputs)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-        iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=25, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedHbmBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedHbmBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: HBM")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=5, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized HBM latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

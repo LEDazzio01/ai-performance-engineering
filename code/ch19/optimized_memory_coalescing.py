@@ -34,9 +34,13 @@ class OptimizedMemoryCoalescingBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.N = 1_000_000
+        self.input_matrix = None
+        self.output_matrix = None
+        self.rows = 2048
+        self.cols = 1024
+        self.vector_width = 16
+        self.scale_vec = None
+        self.bias_vec = None
     
     def setup(self) -> None:
         """Setup: Initialize tensors for coalesced operations."""
@@ -50,8 +54,12 @@ class OptimizedMemoryCoalescingBenchmark(Benchmark):
         # Coalescing groups memory accesses to maximize bandwidth utilization
         # PyTorch operations automatically use coalescing when beneficial
         
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.input_matrix = torch.randn(
+            self.rows, self.cols, device=self.device, dtype=torch.float16
+        ).contiguous()
+        self.output_matrix = torch.empty_like(self.input_matrix)
+        self.scale_vec = torch.randn(1, self.vector_width, device=self.device, dtype=torch.float16)
+        self.bias_vec = torch.randn(1, self.vector_width, device=self.device, dtype=torch.float16)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -65,20 +73,19 @@ class OptimizedMemoryCoalescingBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_memory_coalescing", enable=enable_nvtx):
-    # Optimization: Coalesced memory access
-    # Coalescing groups consecutive memory accesses together
-    # Maximizes memory bandwidth utilization
-    # PyTorch operations automatically leverage coalescing
-            self.output = self.input * 2.0 + 1.0
-            
-    # Coalesced access improves memory efficiency
-    # See ch7 for full memory coalescing optimization techniques
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                view = self.input_matrix.view(-1, self.vector_width)
+                fused = view * self.scale_vec + self.bias_vec
+                self.output_matrix.view(-1, self.vector_width).copy_(fused)
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
-        self.output = None
+        self.input_matrix = None
+        self.output_matrix = None
+        self.scale_vec = None
+        self.bias_vec = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -90,7 +97,7 @@ class OptimizedMemoryCoalescingBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.output is None:
+        if self.output_matrix is None:
             return "Output tensor not initialized"
         return None
 

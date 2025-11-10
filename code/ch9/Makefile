@@ -20,6 +20,8 @@ $(TARGETS): %$(SUFFIX): %.cu
 	@echo "Building $@..."
 	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
 		$(NVCC) $(NVCC_FLAGS) -lcublas -lcuda -o $@ $<; \
+	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ]; then \
+		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $<; \
 	else \
 		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \
 	fi

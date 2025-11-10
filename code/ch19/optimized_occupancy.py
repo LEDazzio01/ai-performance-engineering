@@ -47,7 +47,7 @@ class OptimizedOccupancyBenchmark(Benchmark):
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("optimized_occ_high", enable=enable_nvtx):
+        with nvtx_range("occupancy", enable=enable_nvtx):
             run_high_occupancy(self.input, self.output, self.work_iters)
             torch.cuda.synchronize()
     

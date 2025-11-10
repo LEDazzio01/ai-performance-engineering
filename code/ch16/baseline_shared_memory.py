@@ -16,16 +16,13 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
-import torch.nn as nn
-
-from common.python.compile_utils import compile_model
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.cuda_extensions import load_bank_conflicts_extension
 
 
 def resolve_device() -> torch.device:
@@ -37,80 +34,58 @@ def resolve_device() -> torch.device:
 
 class BaselineSharedMemoryBenchmark(Benchmark):
     """Baseline: No shared memory - direct global memory access.
-    
+
     Shared memory: This baseline does not use shared memory optimization.
     All data access goes through global memory, causing poor cache utilization.
     """
-    
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
         self.input = None
-    
+        self.output = None
+        self.N = 1 << 20
+        self._extension = None
+
     def setup(self) -> None:
-        """Setup: Initialize model and data in global memory."""
+        """Setup: Initialize data in global memory."""
         torch.manual_seed(42)
-        # Baseline: No shared memory optimization
-        # Shared memory allows fast data reuse within thread blocks
-        # This baseline uses global memory for all data access
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        # Data in global memory (no shared memory optimization)
-        self.input = torch.randn(64, 1024, device=self.device)
+        self._extension = load_bank_conflicts_extension()
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty_like(self.input)
+        self._extension.bank_conflicts(self.output, self.input)
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without shared memory."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self._extension is None or self.input is None or self.output is None:
+            raise RuntimeError("Shared-memory baseline not initialized")
 
         with nvtx_range("baseline_shared_memory", enable=enable_nvtx):
-            with torch.no_grad():
-                # Baseline: No shared memory - all data access via global memory
-                # Shared memory would cache frequently accessed data
-                # This baseline accesses global memory repeatedly (inefficient)
-                
-                # Multiple operations accessing same data from global memory
-                output1 = self.model(self.input)
-                output2 = self.model(self.input)  # Re-access from global memory
-                output3 = self.model(self.input)  # Re-access from global memory
-                
-                # Baseline: No shared memory benefit
-                # Global memory access is slower than shared memory
-                # Poor cache utilization for repeated data access
-                _ = output1 + output2 + output3
+            self._extension.bank_conflicts(self.output, self.input)
 
-    
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.model = None
         self.input = None
+        self.output = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
-            warmup=2,
+            iterations=20,
+            warmup=4,
+            setup_timeout_seconds=120,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.input is None or self.output is None:
+            return "Input/output not initialized"
         return None
 
 def get_benchmark() -> Benchmark:

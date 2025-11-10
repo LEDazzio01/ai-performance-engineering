@@ -30,48 +30,44 @@ class VectorizationBenchmark(Benchmark):
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
+        self.data = None
         self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.weights = None
+        self.bias = None
+        self.vector_width = 32
+        self.num_rows = 32_768
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: Initialize tensors."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        total = self.num_rows * self.vector_width
+        self.data = torch.randn(total, device=self.device, dtype=torch.float32).view(self.num_rows, self.vector_width)
+        self.output = torch.empty_like(self.data)
+        self.weights = torch.randn(self.vector_width, device=self.device, dtype=torch.float32)
+        self.bias = torch.randn(self.vector_width, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
+        """Benchmark: Scalar-style lane updates with explicit synchronization."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
-        with nvtx_range("baseline_vectorization", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch197 for full distributed training implementations
+        with nvtx_range("vectorization_memory", enable=enable_nvtx):
+            for lane in range(self.vector_width):
+                column = self.data[:, lane]
+                transformed = column * self.weights[lane] + self.bias[lane]
+                self.output[:, lane] = transformed
+                torch.cuda.synchronize()
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
+        self.data = None
         self.output = None
+        self.weights = None
+        self.bias = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

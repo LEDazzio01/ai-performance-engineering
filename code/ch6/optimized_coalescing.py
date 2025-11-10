@@ -41,7 +41,9 @@ class OptimizedCoalescingBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 10_000_000
+        self.rows = 4096
+        self.cols = 2048
+        self.N = self.rows * self.cols
         self._extension = None
     
     def setup(self) -> None:
@@ -50,6 +52,13 @@ class OptimizedCoalescingBenchmark(Benchmark):
         # Load CUDA extension (will compile on first call)
         self._extension = load_coalescing_extension()
         
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
+        # Warm up extension once so compilation happens before timing.
+        self._extension.coalesced_copy(self.output, self.input, self.rows, self.cols)
+        torch.cuda.synchronize()
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
@@ -67,7 +76,7 @@ class OptimizedCoalescingBenchmark(Benchmark):
 
         with nvtx_range("optimized_coalescing_coalesced", enable=enable_nvtx):
             # Call CUDA extension kernel
-            self._extension.coalesced_copy(self.output, self.input)
+            self._extension.coalesced_copy(self.output, self.input, self.rows, self.cols)
             # Synchronize to catch any CUDA errors immediately
             torch.cuda.synchronize()
 
@@ -96,8 +105,11 @@ class OptimizedCoalescingBenchmark(Benchmark):
             return "Input tensor not initialized"
         if self.output.shape[0] != self.N:
             return f"Output shape mismatch: expected {self.N}, got {self.output.shape[0]}"
-        if not torch.isfinite(self.output).all():
-            return "Output contains non-finite values"
+        output_matrix = self.output.view(self.cols, self.rows)
+        reference = self.input.view(self.rows, self.cols).transpose(0, 1).contiguous()
+        max_err = (output_matrix - reference).abs().max().item()
+        if max_err > 1e-4:
+            return f"Transpose mismatch: max error {max_err}"
         return None
 
 def get_benchmark() -> Benchmark:

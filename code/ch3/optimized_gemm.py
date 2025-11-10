@@ -1,144 +1,103 @@
-"""optimized_gemm.py - Optimized GEMM in infrastructure/OS tuning context.
-
-Demonstrates optimized GEMM using torch.compile.
-GEMM: General Matrix Multiply operation with optimization.
-Uses torch.compile to optimize GEMM operations.
-Implements Benchmark protocol for harness integration.
-"""
+"""Optimized GEMM that runs a fused tensor-core matmul in one launch."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn.functional as F
 
-# Import arch_config to apply Triton patch for sm_12x support
-# The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
-try:
-    import arch_config  # noqa: F401
-except ImportError:
-    pass  # Continue if arch_config not available
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.compile_utils import enable_tf32
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch3")
     return torch.device("cuda")
 
-def gemm_function(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-    """GEMM function for compilation."""
-    return torch.matmul(A, B)
 
 class OptimizedGemmBenchmark(Benchmark):
-    """Optimized: GEMM with torch.compile optimization.
-    
-    GEMM: General Matrix Multiply operation with optimization.
-    Uses torch.compile to optimize GEMM operations.
-    """
-    
+    """Single large matmul captured inside torch.compile."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.A = None
-        self.B = None
-        self.compiled_gemm = None
-        # Smaller matrices (2048x2048) have compilation overhead that dominates
-        self.m = 4096
-        self.n = 4096
-        self.k = 4096
-    
+        self.m = 2048
+        self.n = 2048
+        self.k = 2048
+        self.left: Optional[torch.Tensor] = None
+        self.right: Optional[torch.Tensor] = None
+        self.epilogue: Optional[torch.Tensor] = None
+        self.fn = None
+
     def setup(self) -> None:
-        """Setup: Initialize matrices and compile GEMM."""
-        
-        torch.manual_seed(42)
-                                
-        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
-        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
-        
-        # GEMM operations benefit from compilation optimization
-        # Use "reduce-overhead" mode for small workloads to minimize compilation overhead
-        # "max-autotune" has too much overhead for small matrices (2048x2048)
-        # For system-level tuning, we use direct GEMM without compilation
-        # System tuning focuses on OS/hardware configuration, not PyTorch compilation
-        def gemm_function(a, b):
-            return torch.matmul(a, b)
-        self.compiled_gemm = gemm_function
-        
-        # Warmup: Run a few iterations to stabilize performance
-        with torch.no_grad():
-            for _ in range(15):
-                _ = self.compiled_gemm(self.A, self.B)
-        torch.cuda.synchronize()  # Ensure all warmup completes before benchmark
-    
+        torch.manual_seed(1)
+        enable_tf32()
+        self.left = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
+        self.right = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
+        self.epilogue = torch.randn(self.m, self.n, device=self.device, dtype=torch.float16)
+
+        def fused(a: torch.Tensor, b: torch.Tensor, residual: torch.Tensor) -> torch.Tensor:
+            prod = torch.matmul(a, b)
+            return F.gelu(prod + residual)
+
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is not None:
+            try:
+                self.fn = compile_fn(fused, mode="reduce-overhead")
+            except Exception:
+                self.fn = fused
+        else:
+            self.fn = fused
+
+        with torch.cuda.amp.autocast(dtype=torch.float16):
+            for _ in range(3):
+                _ = self.fn(self.left, self.right, self.epilogue)
+        torch.cuda.synchronize()
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Optimized GEMM."""
-        # Use conditional NVTX ranges - only enabled when profiling
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
+
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
-        
+        assert self.left is not None and self.right is not None and self.epilogue is not None
+        op = self.fn
         with nvtx_range("optimized_gemm", enable=enable_nvtx):
-            pass
-    # GEMM: C = A @ B (optimized)
-        _ = self.compiled_gemm(self.A, self.B)
-            
-    # Optimization: GEMM benefits
-    # - Optimized matrix multiplication (GEMM)
-    # - Better performance through compilation
-    # - Hardware-aware optimization
-    
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                _ = op(self.left, self.right, self.epilogue)
+
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.A = None
-        self.B = None
-        self.compiled_gemm = None
+        self.left = None
+        self.right = None
+        self.epilogue = None
+        self.fn = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=20, warmup=4)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.A is None or self.B is None:
-            return "Matrices not initialized"
+        if self.fn is None:
+            return "Fused function not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedGemmBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedGemmBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: GEMM")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=5, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized GEMM latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

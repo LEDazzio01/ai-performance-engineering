@@ -1,94 +1,94 @@
-// threshold_predicated.cu -- predicated version of thresholding.
+// Optimized predicated threshold binary.
 
 #include <cuda_runtime.h>
-#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <random>
+#include <vector>
 
-// Same workload size as baseline for fair comparison
-constexpr int N = 1 << 26;  // 64M elements (same as baseline)
+#include "threshold_common.cuh"
+#include "threshold_async_kernel.cuh"
 
-__global__ void threshold_predicated(const float* __restrict__ X,
-                                     float* __restrict__ Y,
-                                     float threshold,
-                                     int N) {
-  // Optimized: Vectorized loads for better memory throughput
-  const int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
-  const int stride = blockDim.x * gridDim.x * 4;
-  
-  // Process 4 elements at a time (vectorized)
-  for (int i = idx; i < N - 3; i += stride) {
-    // Load 4 floats at once
-    float4 vec = *reinterpret_cast<const float4*>(&X[i]);
-    
-    // Branch-free predicated execution
-    vec.x = (vec.x > threshold) ? vec.x : 0.0f;
-    vec.y = (vec.y > threshold) ? vec.y : 0.0f;
-    vec.z = (vec.z > threshold) ? vec.z : 0.0f;
-    vec.w = (vec.w > threshold) ? vec.w : 0.0f;
-    
-    // Store 4 floats at once
-    *reinterpret_cast<float4*>(&Y[i]) = vec;
-  }
-  
-  // Handle remaining elements
-  for (int i = idx + ((N / 4) * 4); i < N; i += stride) {
-    const float x = X[i];
-    Y[i] = (x > threshold) ? x : 0.0f;
-  }
-}
+using namespace ch8;
 
 int main() {
-  const float threshold = 0.5f;
-  const size_t bytes = N * sizeof(float);
-  
-  float *h_x, *h_y;
-  cudaMallocHost(&h_x, bytes);
-  cudaMallocHost(&h_y, bytes);
-  for (int i = 0; i < N; ++i) {
-    h_x[i] = static_cast<float>(rand()) / RAND_MAX;
-  }
+    const int count = 1 << 26;
+    const float threshold = 0.5f;
+    const size_t bytes = static_cast<size_t>(count) * sizeof(float);
 
-  float *d_x, *d_y;
-  cudaMalloc(&d_x, bytes);
-  cudaMalloc(&d_y, bytes);
-  cudaMemcpy(d_x, h_x, bytes, cudaMemcpyHostToDevice);
+    std::vector<float> h_input(count);
+    std::mt19937 gen(42);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (int i = 0; i < count; ++i) {
+        h_input[i] = dist(gen);
+    }
 
-  dim3 block(256);
-  dim3 grid((N + block.x - 1) / block.x);
-  
-  // Warmup
-  for (int i = 0; i < 5; ++i) {
-    threshold_predicated<<<grid, block>>>(d_x, d_y, threshold, N);
-  }
-  cudaDeviceSynchronize();
+    float* d_input = nullptr;
+    float* d_output = nullptr;
+    cudaMalloc(&d_input, bytes);
+    cudaMalloc(&d_output, bytes);
+    cudaMemcpy(d_input, h_input.data(), bytes, cudaMemcpyHostToDevice);
 
-  // Benchmark - multiple iterations for stable measurement
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  
-  const int iterations = 100;
-  cudaEventRecord(start);
-  for (int i = 0; i < iterations; ++i) {
-    threshold_predicated<<<grid, block>>>(d_x, d_y, threshold, N);
-  }
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-  
-  float time;
-  cudaEventElapsedTime(&time, start, stop);
-  float avg_time = time / iterations;
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
 
-  cudaMemcpy(h_y, d_y, bytes, cudaMemcpyDeviceToHost);
-  
-  printf("=== Optimized: Predicated Threshold (No Divergence) ===\n");
-  printf("Array size: %d elements (%.1f MB)\n", N, bytes / 1e6);
-  printf("Average kernel time: %.3f ms\n", avg_time);
-  printf("Optimization: Branch-free predicated execution\n");
-  printf("Benefit: Higher warp efficiency, no divergence\n");
+    bool async_available = true;
 
-  cudaFree(d_x);
-  cudaFree(d_y);
-  cudaFreeHost(h_x);
-  cudaFreeHost(h_y);
-  return 0;
+    auto run_threshold = [&](const char* phase) {
+        if (async_available) {
+            cudaError_t launch_err = cudaSuccess;
+            const auto status = launch_threshold_predicated_async(
+                d_input,
+                d_output,
+                threshold,
+                count,
+                0,
+                &launch_err);
+            if (status == ThresholdAsyncLaunchResult::kSuccess) {
+                return;
+            }
+            if (status == ThresholdAsyncLaunchResult::kFailed) {
+                std::cerr << "Async threshold launch failed during " << phase
+                          << ": " << cudaGetErrorString(launch_err) << "\n";
+                std::exit(EXIT_FAILURE);
+            }
+            static bool warned_async_unavailable = false;
+            if (!warned_async_unavailable) {
+                std::cerr << "Async threshold kernel unavailable ("
+                          << cudaGetErrorString(launch_err)
+                          << "); falling back to predicated path.\n";
+                warned_async_unavailable = true;
+            }
+            async_available = false;
+        }
+        launch_threshold_predicated(d_input, d_output, threshold, count, 0);
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        run_threshold("warmup");
+    }
+    cudaDeviceSynchronize();
+
+    const int iterations = 50;
+    cudaEventRecord(start);
+    for (int i = 0; i < iterations; ++i) {
+        run_threshold("benchmark");
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float total_ms = 0.0f;
+    cudaEventElapsedTime(&total_ms, start, stop);
+    const float avg_ms = total_ms / iterations;
+
+    std::cout << "=== Optimized Threshold (predicated) ===\n";
+    std::cout << "Elements: " << count << " (" << bytes / 1e6 << " MB)\n";
+    std::cout << "Average kernel time: " << avg_ms << " ms\n";
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaFree(d_input);
+    cudaFree(d_output);
+    return 0;
 }

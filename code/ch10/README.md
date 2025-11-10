@@ -51,6 +51,25 @@ After completing this chapter, you can:
 
 ## Examples
 
+### tcgen05 preview build
+
+When SM100/B100 hardware (or a future SM12x toolchain with tcgen05 enabled) is
+available, you can run the new benchmarks in this chapter:
+
+```bash
+python ch10/baseline_matmul_tcgen05.py      # PyTorch tensor-core baseline
+python ch10/optimized_matmul_tcgen05.py     # Custom tcgen05 CUDA kernel
+```
+
+`baseline_matmul_tcgen05.py` records the fastest matmul we get “for free” via
+PyTorch/cuBLAS, while `optimized_matmul_tcgen05.py` calls the inline CUDA kernel
+implemented in `ch10/matmul_tcgen05.cu`. That kernel stages tiles via TMA,
+accumulates in TMEM, and issues `tcgen05.mma` instructions—mirroring the
+producer/consumer pipelines described in this chapter. Both scripts call
+`ensure_tcgen05_supported(...)`, so GB10 immediately reports `SKIPPED: tcgen05
+kernels require SM100+` instead of hanging. Once the hardware is ready, run both
+scripts to capture a proof-of-benefit chart alongside the other examples below.
+
 ###  NVIDIA GPU Tensor Core Basics
 
 **Purpose**: Demonstrate NVIDIA GPU 5th-gen Tensor Core usage with `[file]`.
@@ -289,10 +308,17 @@ the redundant global loads in half. Both binaries integrate with the harness via
 `baseline_cluster_group.py` / `optimized_cluster_group.py`, so `python3 compare.py`
 now measures an actual speedup when cluster hardware is available.
 
-> **Hardware note:** `optimized_cluster_group.cu` requires distributed shared memory (DSM). On stacks where DSM is currently disabled
+> **Hardware note:** `optimized_cluster_group.cu` requires distributed shared memory (DSMEM). On stacks where DSMEM is currently disabled
 > (e.g., GB10 with the shipping CUDA 13 driver), the binary probes the feature and exits with a `SKIPPED: Distributed shared memory unavailable…`
-> message so the harness can continue to the next example. Use `make cluster_group_no_dsm` to build `cluster_group_no_dsm_sm<arch>`, a
-> global-memory fallback that demonstrates the same workflow without DSM while you wait for driver support.
+> message so the harness can continue to the next example. Use `make optimized_cluster_group_dram_partial_cluster_sync_no_dsmem` to build
+> `optimized_cluster_group_dram_partial_cluster_sync_no_dsmem_sm<arch>`, which keeps the same two-block cluster pipeline but materializes partial
+> results in DRAM between synchronization points. The benchmark harness now runs both binaries so you can compare the DSMEM-enabled path
+> to the DRAM-based cluster implementation on any GPU.
+>
+> **Driver compatibility:** CUDA 13.0 + driver 580.95 on GB10 sometimes drops cluster partners outside compute-sanitizer, triggering
+> `Thread block clusters unstable…` / `CUDA_EXCEPTION_17` from the binary. The Python wrappers detect this and mark the benchmark as
+> `SKIPPED` so `compare.py` can continue. Upgrade to CUDA 13.1 (or newer driver) or run the sample under compute-sanitizer to collect
+> reliable measurements.
 
 ---
 

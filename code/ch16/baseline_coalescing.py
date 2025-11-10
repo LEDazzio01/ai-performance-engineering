@@ -16,9 +16,6 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
-import torch.nn as nn
-
-from common.python.compile_utils import compile_model
 
 from typing import Optional
 
@@ -26,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.cuda_extensions import load_coalescing_extension
 
 
 def resolve_device() -> torch.device:
@@ -36,67 +34,57 @@ def resolve_device() -> torch.device:
 
 
 class BaselineCoalescingBenchmark(Benchmark):
-    """Baseline: Uncoalesced memory access.
-    
+    """Baseline: Uncoalesced memory access via CUDA extension kernels.
+
     Coalescing: This baseline does not optimize memory access for coalescing.
     Accesses memory with stride, preventing coalescing and reducing bandwidth.
     """
-    
+
     def __init__(self):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 10_000_000
+        self.N = 16_000_000
         self.stride = 32  # Large stride prevents coalescing
-    
+        self._extension = None
+
     def setup(self) -> None:
-        """Setup: Initialize tensors."""
+        """Setup: Initialize tensors and load CUDA extension."""
         torch.manual_seed(42)
-        # Baseline: Uncoalesced memory access
-        # Coalescing combines memory accesses into single transactions
-        # This baseline uses stride access, preventing coalescing
-        
+        self._extension = load_coalescing_extension()
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty((self.N + self.stride - 1) // self.stride, 
-                                 device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        # Warm up once to keep compilation time out of the measurement loop.
+        self._extension.uncoalesced_copy(self.output, self.input, self.stride)
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
         """Benchmark: Uncoalesced memory access."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self._extension is None or self.input is None or self.output is None:
+            raise RuntimeError("Extension/tensors not initialized")
 
         with nvtx_range("baseline_coalescing_uncoalesced", enable=enable_nvtx):
-            # Baseline: Uncoalesced access - threads access with stride
-            # This prevents memory coalescing into single 128-byte transactions
-            # Poor memory bandwidth utilization
-            
-            idx = torch.arange(0, self.N, self.stride, device=self.device)
-            self.output = self.input[idx] * 2.0
-            
-            # Baseline: No coalescing optimization
-            # Each access is separate transaction (inefficient)
+            self._extension.uncoalesced_copy(self.output, self.input, self.stride)
 
-    
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.input = None
         self.output = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
-            warmup=2,
+            iterations=20,
+            warmup=4,
+            setup_timeout_seconds=180,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.input is None or self.output is None:

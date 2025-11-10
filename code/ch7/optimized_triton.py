@@ -1,36 +1,31 @@
-"""optimized_triton.py - Optimized kernel using Triton in memory access/GEMM context.
-
-Demonstrates Triton for high-performance custom kernel development.
-Triton: Uses Triton DSL to write optimized CUDA kernels.
-Provides high-level abstractions for efficient kernel development.
-Implements Benchmark protocol for harness integration.
-"""
+"""Optimized Triton benchmark for Chapter 7 memory experiments."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
+from torch import Tensor
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
+from common.python import triton_compat  # noqa: F401
 
 try:
     import triton
     import triton.language as tl
+
     TRITON_AVAILABLE = True
 except ImportError:
     TRITON_AVAILABLE = False
 
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -38,153 +33,146 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch7")
     return torch.device("cuda")
 
+
 if TRITON_AVAILABLE:
+
     @triton.jit
-    def triton_add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-        """Triton kernel for element-wise addition."""
+    def residual_relu_kernel(
+        dst_ptr,
+        src_ptr,
+        residual_ptr,
+        n_elements,
+        BLOCK_SIZE: tl.constexpr,
+    ):
         pid = tl.program_id(axis=0)
-        block_start = pid * BLOCK_SIZE
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
         mask = offsets < n_elements
-        x = tl.load(x_ptr + offsets, mask=mask)
-        y = tl.load(y_ptr + offsets, mask=mask)
-        output = x + y
-        tl.store(output_ptr + offsets, output, mask=mask)
-    
-    def triton_add(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Triton-optimized addition."""
-        output = torch.empty_like(x)
-        n_elements = output.numel()
-        grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-        triton_add_kernel[grid](x, y, output, n_elements, BLOCK_SIZE=1024)
-        return output
+        values = tl.load(src_ptr + offsets, mask=mask, other=0.0)
+        residual = tl.load(residual_ptr + offsets, mask=mask, other=0.0)
+        combined = tl.maximum(values + residual, 0.0)
+        tl.store(dst_ptr + offsets, combined, mask=mask)
+
+    def fused_residual_relu(dst: Tensor, src: Tensor, residual: Tensor) -> Tensor:
+        """Launch Triton fused residual add + ReLU kernel."""
+        assert dst.is_cuda and src.is_cuda and residual.is_cuda
+        assert dst.numel() == src.numel() == residual.numel()
+        n_elements = dst.numel()
+        grid = lambda meta: (triton.cdiv(n_elements, meta["BLOCK_SIZE"]),)  # noqa: E731
+        residual_relu_kernel[grid](  # type: ignore[misc]
+            dst,
+            src,
+            residual,
+            n_elements,
+            BLOCK_SIZE=4096,
+            num_warps=4,
+            num_stages=2,
+        )
+        return dst
+
 
 class OptimizedTritonBenchmark(Benchmark):
-    """Optimized: Triton for high-performance custom kernels.
-    
-    Triton: Uses Triton DSL to write optimized CUDA kernels.
-    Provides high-level abstractions for efficient kernel development.
-    """
-    
-    def __init__(self):
+    """Optimized path that fuses residual add + activation using Triton."""
+
+    def __init__(self) -> None:
         self.device = resolve_device()
-        self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.input = None
+        self.model: Optional[nn.Module] = None
+        self.large_batch: Optional[Tensor] = None
+        self.residual: Optional[Tensor] = None
+        self.output: Optional[Tensor] = None
         self.use_triton = TRITON_AVAILABLE
-    
-    def setup(self) -> None:
-        """Setup: Initialize model with Triton optimization."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-        torch.manual_seed(42)
-        # Optimization: Triton for custom kernel development
-        # Triton provides high-level DSL for writing optimized CUDA kernels
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        self.input = torch.randn(32, 1024, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations with Triton optimization."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self._checksum = 0.0
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+
+        self.model = nn.Sequential(
+            nn.Linear(1024, 2048, bias=True),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(2048, 1024, bias=False),
+        ).to(self.device).eval()
+
+        total_samples = 64 * 8  # Match baseline's cumulative micro-batches.
+        self.large_batch = torch.randn(total_samples, 1024, device=self.device)
+        self.residual = torch.randn_like(self.large_batch)
+        self.output = torch.empty_like(self.large_batch)
+
+        if self.use_triton:
+            fused_residual_relu(self.output, self.large_batch, self.residual)
+
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_triton", enable=enable_nvtx):
-            with torch.no_grad():
-                # Optimization: Triton for custom kernel development
-                # Uses Triton DSL to write optimized CUDA kernels
-                # Triton: high-level abstractions for efficient kernel development
-                
-                if self.use_triton:
-                    # Use Triton-optimized kernel (if available)
-                    # Triton provides optimized kernel implementation
-                    output = self.model(self.input)
-                    # Simulate Triton optimization: optimized element-wise ops
-                    try:
-                        output2 = triton_add(output, output)
-                    except Exception as exc:
-                        if "sm_121a" in str(exc):
-                            print(
-                                "Triton kernel fallback: ptxas lacks sm_121a support; "
-                                "using PyTorch add instead"
-                            )
-                            self.use_triton = False
-                            output2 = output + output
-                        else:
-                            raise
-                    _ = output2.sum()
-                else:
-                    # Fallback: standard operations (Triton concept demonstrated)
-                    # Triton would provide optimized kernels if available
-                    output = self.model(self.input)
-                    _ = output.sum()
-                
-                # Optimization: Triton benefits
-                # - High-level DSL for kernel development
-                # - Optimized CUDA kernel generation
-                # - Better performance through Triton optimizations
-                # - Efficient kernel development workflow
+        assert self.model is not None
+        assert self.large_batch is not None
+        assert self.residual is not None
+        assert self.output is not None
 
-    
+        with nvtx_range("triton_optimized", enable=enable_nvtx):
+            with torch.no_grad():
+                activations = self.model(self.large_batch)
+                if self.use_triton and TRITON_AVAILABLE:
+                    fused_residual_relu(self.output, activations, self.residual)
+                else:
+                    torch.add(
+                        activations,
+                        self.residual,
+                        alpha=1.0,
+                        out=self.output,
+                    )
+                    torch.relu_(self.output)
+                self._checksum = float(self.output.sum().item())
+
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.large_batch = None
+        self.residual = None
+        self.output = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=50,
             warmup=5,
         )
-    
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.large_batch is None or self.residual is None or self.output is None:
+            return "Buffers not initialized"
         return None
+
 
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""
     return OptimizedTritonBenchmark()
 
+
 def main() -> None:
     """Standalone execution (for testing)."""
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
-    mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=50, warmup=5),
     )
     benchmark = OptimizedTritonBenchmark()
     result = harness.benchmark(benchmark)
-    
+
     print("=" * 70)
-    print(f"Optimized: Triton")
+    print("Optimized: Triton fused residual")
     print("=" * 70)
     print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
     print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
+
 
 if __name__ == "__main__":
     main()

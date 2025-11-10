@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -45,10 +46,15 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
         self.device = resolve_device()
         self.prefill_model = None
         self.decode_model = None
-        self.prefill_input = None
-        self.decode_input = None
+        self.prefill_inputs = None
+        self.decode_inputs = None
         self._prefill_stream = None
         self._decode_stream = None
+        self.workload = WORKLOAD
+        self.batch_size = self.workload.batch_size
+        self.tokens_per_step = self.workload.tokens_per_step
+        self.decode_steps = max(1, self.workload.decode_steps // 2)
+        self.prefill_chunks = max(2, self.workload.prefill_chunks // 2)
     
     def setup(self) -> None:
         """Setup: Initialize separate models for prefill and decode."""
@@ -92,11 +98,14 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
         self.prefill_model = prefill_model
         self.decode_model = decode_model
         
-        # Scale inputs appropriately - concurrent execution benefits require sufficient work
-        # But not so large that it dominates the benchmark time
-        self.prefill_input = torch.randn(8, 4096, 256, device=self.device, dtype=dtype)  # Large context
-        self.decode_input = torch.randn(8, 1, 256, device=self.device, dtype=dtype)  # Single token
-        
+        samples_per_batch = self.batch_size * self.tokens_per_step
+        torch.manual_seed(42)
+        self.prefill_inputs = torch.randn(
+            self.prefill_chunks, samples_per_batch, 256, device=self.device, dtype=dtype
+        )
+        self.decode_inputs = torch.randn(
+            self.decode_steps, samples_per_batch, 256, device=self.device, dtype=dtype
+        )
         # Create streams once in setup to reduce overhead in benchmark loop
         self._prefill_stream = torch.cuda.Stream()
         self._decode_stream = torch.cuda.Stream()
@@ -124,24 +133,16 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
                 # Total time ≈ max(prefill_time, decode_time) instead of sum
                 # Streams created in setup to reduce overhead
                 
-                # Process concurrently - prefill is much larger, decode runs in parallel
-                # The concurrent execution is the key optimization
+                prefill_results = []
                 with torch.cuda.stream(self._prefill_stream):
-                    prefill_output = self.prefill_model(self.prefill_input)
-                
-                with torch.cuda.stream(self._decode_stream):
-                    decode_output = self.decode_model(self.decode_input)
-                
-                # Single synchronization point for both operations
-                # This is faster than sequential execution where total_time = prefill_time + decode_time
+                    for prefill_batch in self.prefill_inputs:
+                        prefill_results.append(self.prefill_model(prefill_batch).sum())
+                decode_results = []
+                for decode_batch in self.decode_inputs:
+                    with torch.cuda.stream(self._decode_stream):
+                        decode_results.append(self.decode_model(decode_batch).sum())
                 torch.cuda.synchronize()
-                
-                # Optimization: Disaggregated inference benefits
-                # - Concurrent execution eliminates interference
-                # - Better GPU utilization (both phases run simultaneously)
-                # - Lower latency (decode doesn't wait for prefill)
-                # - Single synchronization point reduces overhead
-                _ = prefill_output.sum() + decode_output.sum()
+                _ = sum(prefill_results) + sum(decode_results)
 
     
     def teardown(self) -> None:
@@ -155,15 +156,15 @@ class OptimizedDisaggregatedBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=20,
+            iterations=5,
+            warmup=1,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.prefill_model is None or self.decode_model is None:
             return "Models not initialized"
-        if self.prefill_input is None or self.decode_input is None:
+        if self.prefill_inputs is None or self.decode_inputs is None:
             return "Inputs not initialized"
         return None
 

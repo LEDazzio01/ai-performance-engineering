@@ -89,54 +89,32 @@ class OptimizedKVCacheManagementBenchmark(Benchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: KV cache management with reuse."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        if self.inputs is None or self.kv_cache is None or self.model is None:
+            raise RuntimeError("KV cache benchmark not initialized")
 
         with nvtx_range("optimized_kv_cache_management", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: KV cache management
-                # Reuse cached keys/values instead of recomputing
-                # Efficient KV cache management reduces computation
-                
                 for step, query in enumerate(self.inputs):
-                    # Compute new K, V for current token
-                    # MultiheadAttention returns (output, attention_weights) or just output
-                    attn_output = self.model(query, query, query, need_weights=False)
-                    
-                    # Extract K, V from the model's projection for caching
                     qkv = torch.nn.functional.linear(query, self.model.in_proj_weight, self.model.in_proj_bias)
                     batch_size, seq_len = query.shape[:2]
                     num_heads = self.model.num_heads
                     head_dim = self.model.embed_dim // num_heads
                     qkv = qkv.reshape(batch_size, seq_len, 3, num_heads, head_dim)
-                    q, k, v = qkv.chunk(3, dim=2)  # Each: (batch, seq, 1, num_heads, head_dim)
-                    q, k, v = q.squeeze(2), k.squeeze(2), v.squeeze(2)  # (batch, seq, num_heads, head_dim)
-                    
-                    # Store in cache (KV cache management: cache reuse)
-                    # k, v are (batch, seq, num_heads, head_dim), need (batch, seq, num_heads, head_dim)
-                    self.kv_cache['k'][:, step:step+1, :, :] = k  # (batch, 1, num_heads, head_dim)
-                    self.kv_cache['v'][:, step:step+1, :, :] = v  # (batch, 1, num_heads, head_dim)
-                    
-                    # Use cached K, V (KV cache management: reuse)
-                    k_all = self.kv_cache['k'][:, :step+1, :, :]  # (batch, seq_len, num_heads, head_dim)
-                    v_all = self.kv_cache['v'][:, :step+1, :, :]  # (batch, seq_len, num_heads, head_dim)
-                    
-                    # Reshape for attention with cached values
-                    k_all = k_all.permute(0, 2, 1, 3).contiguous()  # (batch, num_heads, seq_len, head_dim)
-                    v_all = v_all.permute(0, 2, 1, 3).contiguous()  # (batch, num_heads, seq_len, head_dim)
-                    q = q.permute(0, 2, 1, 3).contiguous()  # (batch, num_heads, seq_len, head_dim)
-                    
-                    # Attention with cached K/V (KV cache management benefits)
-                    # Optimization: Reuses cached values instead of recomputing
-                    scores = torch.matmul(q, k_all.transpose(-2, -1)) / (head_dim ** 0.5)
-                    attn_weights = torch.softmax(scores, dim=-1)
-                    attn_output_cached = torch.matmul(attn_weights, v_all)
-                    _ = attn_output_cached.sum()  # Use output
+                    q, k, v = qkv.unbind(dim=2)
+                    self.kv_cache["k"][:, step : step + 1, :, :] = k[:, :1]
+                    self.kv_cache["v"][:, step : step + 1, :, :] = v[:, :1]
+
+                    k_all = self.kv_cache["k"][:, : step + 1, :, :].permute(0, 2, 1, 3).contiguous()
+                    v_all = self.kv_cache["v"][:, : step + 1, :, :].permute(0, 2, 1, 3).contiguous()
+                    q_heads = q.permute(0, 2, 1, 3).contiguous()
+                    _ = torch.nn.functional.scaled_dot_product_attention(
+                        q_heads, k_all, v_all, is_causal=False
+                    )
 
     
     def teardown(self) -> None:

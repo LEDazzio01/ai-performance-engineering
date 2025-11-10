@@ -18,8 +18,9 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from typing import Optional, List
 
+from ch15.baseline_data_parallelism import _build_mlp
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
     Benchmark,
@@ -34,91 +35,124 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
+def _infer_device_index(device: torch.device) -> int:
+    """Return the concrete CUDA device index."""
+    if device.index is not None:
+        return device.index
+    return torch.cuda.current_device()
+
+
 class OptimizedDataParallelismBenchmark(Benchmark):
-    """Optimized: Data parallelism for inference (model replication across GPUs)."""
-    
+    """Optimized: Virtual data parallelism with batched execution and multi-stream replay.
+
+    When only one physical GPU is available we still want to demonstrate the
+    effect of data parallelism by keeping the device busy with large batches
+    of independent requests. We emulate multiple data-parallel replicas
+    ("virtual shards") that process chunks on dedicated CUDA streams and use
+    torch.compile to fuse the per-request work.
+    """
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.requests = None
-        self.num_requests = 10
-        self.use_data_parallel = False
-    
+        self.hidden_dim = 256
+        self.num_requests = 128
+        self.virtual_shards = 1
+        self.micro_batch_size = 16
+        self.window_size = None
+        self.model: Optional[nn.Module] = None
+        self.requests: Optional[torch.Tensor] = None
+        self.streams: List[torch.cuda.Stream] = []
+        self.compiled = False
+
     def setup(self) -> None:
-        """Setup: Initialize model with data parallelism."""
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        """Setup: Initialize model, compile it, and pre-batch requests."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             enable_tf32()
-        
+
         torch.manual_seed(42)
-        # Optimization: Data parallelism for inference
-        # In inference, data parallelism replicates the entire model on multiple GPUs
-        # Each GPU processes different requests independently
-        # Unlike training, inference data parallelism doesn't require gradient synchronization
-        self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 10),
-        ).to(self.device).eval()
-        
-        # Check if multiple GPUs available for data parallelism
-        num_gpus = torch.cuda.device_count()
-        if num_gpus > 1:
-            # Use DataParallel for inference data parallelism
-            # DataParallel replicates model across GPUs and splits batch
-            try:
-                self.model = nn.DataParallel(self.model)
-                self.use_data_parallel = True
-            except Exception:
-                self.use_data_parallel = False
-        
-        # Generate multiple inference requests
-        self.requests = [torch.randn(1, 256, device=self.device) for _ in range(self.num_requests)]
+        self.requests = torch.randn(
+            self.num_requests,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+
+        model = _build_mlp(self.hidden_dim).to(self.device, dtype=torch.bfloat16).eval()
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            self.compiled = True
+        except Exception:
+            self.compiled = False
+        self.model = model
+
+        device_index = _infer_device_index(self.device)
+        sm_count = torch.cuda.get_device_properties(device_index).multi_processor_count
+        # Derive a small virtual data-parallel world size that fits on a single GPU.
+        self.virtual_shards = max(1, min(4, sm_count // 8))
+        self.micro_batch_size = max(8, self.num_requests // (self.virtual_shards * 4))
+        self.window_size = self.virtual_shards * self.micro_batch_size
+        self.streams = [torch.cuda.Stream(priority=-1) for _ in range(self.virtual_shards)]
         torch.cuda.synchronize()
-    
+
+    def _execute_virtual_data_parallel(self, micro_batch: torch.Tensor) -> None:
+        """Shard a micro-batch across the virtual replicas and launch on streams."""
+        if self.model is None:
+            raise RuntimeError("Model not compiled")
+        shard_inputs = torch.chunk(micro_batch, self.virtual_shards, dim=0)
+        current_stream = torch.cuda.current_stream()
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+            for stream, shard in zip(self.streams, shard_inputs):
+                if shard.numel() == 0:
+                    continue
+                with torch.cuda.stream(stream):
+                    _ = self.model(shard)
+            for stream in self.streams:
+                current_stream.wait_stream(stream)
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Data parallel inference."""
+        """Benchmark: Batched inference with virtual data parallel replicas."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self.model is None or self.requests is None:
+            raise RuntimeError("Model/requests not initialized")
+
         with nvtx_range("optimized_data_parallelism", enable=enable_nvtx):
-            # Optimization: Data parallelism for inference
-            # Model is replicated across GPUs, each GPU processes different requests
-            # Data parallelism improves throughput by processing requests in parallel
-            # In inference, requests are independent, so no gradient synchronization needed
-            with torch.no_grad():
-                if self.use_data_parallel:
-                    # DataParallel automatically distributes requests across GPUs
-                    batch = torch.cat(self.requests, dim=0)
-                    _ = self.model(batch)
-                else:
-                    # Fallback: process requests sequentially (simulating parallel processing)
-                    for request in self.requests:
-                        _ = self.model(request)
-    
+            # Process the queue in windows so every virtual shard stays busy.
+            for start_idx in range(0, self.requests.shape[0], self.window_size):
+                window = self.requests[start_idx : start_idx + self.window_size]
+                if window.numel() == 0:
+                    continue
+                for micro in window.split(self.micro_batch_size, dim=0):
+                    if micro.numel() == 0:
+                        continue
+                    self._execute_virtual_data_parallel(micro)
+        torch.cuda.synchronize()
+
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
         self.requests = None
+        self.streams = []
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=12,
+            warmup=2,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
+        if self.requests is None:
+            return "Requests not initialized"
         return None
 
 
@@ -137,4 +171,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

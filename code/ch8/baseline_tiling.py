@@ -1,10 +1,4 @@
-"""baseline_tiling.py - Baseline without tiling in occupancy/warp divergence context.
-
-Demonstrates operations without tiling optimization.
-Tiling: This baseline does not use tiling.
-Accesses data without tiling, causing poor cache utilization.
-Implements Benchmark protocol for harness integration.
-"""
+"""Naive matmul baseline that skips tiling/shared-memory reuse."""
 
 from __future__ import annotations
 
@@ -15,116 +9,40 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from ch8.tiling_benchmark_base import TilingBenchmarkBase
 
 
-def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch8")
-    return torch.device("cuda")
+class BaselineTilingBenchmark(TilingBenchmarkBase):
+    """Baseline implementation: every multiply reads directly from HBM."""
+
+    nvtx_label = "baseline_tiling"
+
+    def _invoke_kernel(self) -> None:
+        assert self.extension is not None
+        assert self.matrix_a is not None
+        assert self.matrix_b is not None
+        assert self.output is not None
+        self.extension.matmul_naive(self.matrix_a, self.matrix_b, self.output)
 
 
-class BaselineTilingBenchmark(Benchmark):
-    """Baseline: Operations without tiling.
-    
-    Tiling: This baseline does not use tiling.
-    Accesses data without tiling, causing poor cache utilization.
-    """
-    
-    def __init__(self):
-        self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model without tiling."""
-        torch.manual_seed(42)
-        # Baseline: No tiling - direct access
-        # Tiling divides data into tiles for better cache utilization
-        # This baseline does not use tiling
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        # Large input without tiling (poor cache utilization)
-        self.input = torch.randn(512, 1024, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations without tiling."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
-
-        config = self.get_config()
-
-        enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
-        with nvtx_range("baseline_tiling", enable=enable_nvtx):
-            with torch.no_grad():
-                # Baseline: No tiling
-                # Processes entire input at once (poor cache utilization)
-                # Tiling would divide data into smaller tiles
-                output = self.model(self.input)
-                
-                # Baseline: No tiling benefits
-                # Poor cache utilization (inefficient)
-                _ = output.sum()
-
-    
-    def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.model = None
-        self.input = None
-        torch.cuda.empty_cache()
-    
-    def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
-    def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
-        return None
-
-
-def get_benchmark() -> Benchmark:
+def get_benchmark() -> TilingBenchmarkBase:
     """Factory function for harness discovery."""
     return BaselineTilingBenchmark()
 
 
 def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+    """Allow `python baseline_tiling.py` for quick manual profiling."""
+    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=20, warmup=5),
     )
     benchmark = BaselineTilingBenchmark()
     result = harness.benchmark(benchmark)
-    
+
     print("=" * 70)
-    print(f"Baseline: Tiling")
+    print("Baseline: Tiling (naive global loads)")
     print("=" * 70)
     print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
@@ -133,4 +51,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

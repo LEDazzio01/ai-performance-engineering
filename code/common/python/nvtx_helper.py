@@ -12,6 +12,44 @@ import io
 
 import torch
 
+_QUALIFIER_SUFFIXES = {
+    "sequential",
+    "overlapped",
+    "coalesced",
+    "uncoalesced",
+    "pinned",
+    "batch",
+    "bf16",
+    "fp16",
+    "fp32",
+    "fp8",
+    "mixed",
+    "naive",
+    "default",
+    "baseline",
+    "optimized",
+    "dense",
+    "sparse",
+    "graph",
+    "pytorch",
+    "cuda",
+    "triton",
+    "variant",
+    "standard",
+    "eager",
+}
+
+
+def canonicalize_nvtx_name(name: str) -> str:
+    tokens = [tok for tok in name.lower().split("_") if tok]
+    while tokens and tokens[0] in ("baseline", "optimized"):
+        tokens.pop(0)
+    while tokens and tokens[-1] in _QUALIFIER_SUFFIXES:
+        tokens.pop()
+    if not tokens:
+        return name.lower()
+    return "_".join(tokens)
+
 
 class FilteredStderr(io.TextIOBase):
     """Thread-safe filter for stderr that removes NVTX threading errors."""
@@ -66,9 +104,10 @@ def nvtx_range(name: str, enable: Optional[bool] = None) -> Generator[None, None
         # Default to False for minimal overhead
         enable = False
     
+    canonical_name = canonicalize_nvtx_name(name)
     if enable and torch.cuda.is_available():
         with _suppress_nvtx_threading_error():
-            torch.cuda.nvtx.range_push(name)
+            torch.cuda.nvtx.range_push(canonical_name)
             try:
                 yield
             finally:

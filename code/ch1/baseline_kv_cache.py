@@ -33,6 +33,12 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
+HIDDEN_DIM = 512
+NUM_HEADS = 8
+TOKENS_PER_STEP = 2
+DECODE_STEPS = 512  # results in 1024 cached tokens
+
+
 class BaselineKVCacheAttention(nn.Module):
     """Baseline attention without efficient KV cache management."""
     
@@ -89,12 +95,30 @@ class KvCacheBenchmark(Benchmark):
         self.model = None
         self.inputs = None
         self.kv_cache = None
+        self.hidden_dim = HIDDEN_DIM
+        self.num_heads = NUM_HEADS
+        self.tokens_per_step = TOKENS_PER_STEP
+        self.decode_steps = DECODE_STEPS
+        self.batch_size = 1
 
     def setup(self) -> None:
         """Setup: Initialize model and data."""
-        self.model = BaselineKVCacheAttention(hidden_dim=256, num_heads=8).to(self.device).eval()
-        # Create sequence of inputs (simulating autoregressive generation)
-        self.inputs = [torch.randn(1, 1, 256, device=self.device) for _ in range(300)]  # Match optimized scale
+        torch.manual_seed(42)
+        self.model = BaselineKVCacheAttention(
+            hidden_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+        ).to(self.device).eval()
+
+        # Pre-generate all tokens so each benchmark iteration replays identical work
+        samples = torch.randn(
+            self.decode_steps,
+            self.batch_size,
+            self.tokens_per_step,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self.inputs = [samples[idx].contiguous() for idx in range(self.decode_steps)]
         self.kv_cache = None
         torch.cuda.synchronize()
 
@@ -113,7 +137,7 @@ class KvCacheBenchmark(Benchmark):
             self.kv_cache = None
             for x in self.inputs:
                 output, self.kv_cache = self.model(x, self.kv_cache)
-                # Sync to ensure accurate timing
+                # Sync to ensure accurate timing of each autoregressive step
                 torch.cuda.synchronize()
 
 
@@ -125,12 +149,21 @@ class KvCacheBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
+            iterations=15,
+            warmup=3,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
+        if self.kv_cache is None:
+            return "KV cache not produced"
+        k_cache, v_cache = self.kv_cache
+        expected_tokens = self.decode_steps * self.tokens_per_step
+        if k_cache.shape[2] != expected_tokens or v_cache.shape[2] != expected_tokens:
+            return (
+                f"Unexpected cache shape: "
+                f"K={k_cache.shape}, V={v_cache.shape}, expected tokens={expected_tokens}"
+            )
         return None
 
 

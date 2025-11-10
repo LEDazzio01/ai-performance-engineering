@@ -23,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch5.gpu_requirements import skip_if_insufficient_gpus
 
 
 def resolve_device() -> torch.device:
@@ -46,6 +47,7 @@ class BaselineDistributedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data."""
+        skip_if_insufficient_gpus()
         torch.manual_seed(42)
         # Baseline: Single-node operations (no distributed)
         # Distributed processing coordinates across multiple nodes

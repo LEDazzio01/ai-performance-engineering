@@ -77,7 +77,7 @@ class OptimizedBankConflictsBenchmark(Benchmark):
             # Contiguous access pattern avoids bank conflicts
             # Bank conflicts: eliminated through optimized access pattern
             # All threads access consecutive memory (no bank conflicts)
-            self.output = self.data * 2.0  # Contiguous access (no bank conflicts)
+            torch.mul(self.data, 2.0, out=self.output)  # Contiguous access (no bank conflicts)
             
             # Optimization: Bank conflicts avoided
             # - Contiguous memory access pattern
@@ -132,4 +132,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

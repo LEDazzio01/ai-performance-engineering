@@ -1,135 +1,104 @@
-"""baseline_distributed.py - Baseline without distributed operations in FlexAttention/KV cache context.
-
-Demonstrates operations without distributed processing.
-Distributed: This baseline does not use distributed processing.
-Single-node operations without multi-node coordination.
-Implements Benchmark protocol for harness integration.
-"""
+"""Single-node execution without any distributed fusion."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
+
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from ch18.workload_config import WORKLOAD, is_smoke_test
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
-
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch18")
     return torch.device("cuda")
 
 
 class BaselineDistributedBenchmark(Benchmark):
-    """Baseline: Single-node operations (no distributed processing).
-    
-    Distributed: This baseline does not use distributed processing.
-    Single-node operations without multi-node coordination.
-    """
-    
+    """Baseline that executes each data-parallel shard sequentially on one device."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model without distributed processing."""
-        torch.manual_seed(42)
-        # Baseline: Single-node operations (no distributed)
-        # Distributed processing coordinates across multiple nodes
-        # This baseline does not use distributed processing
-        
-        hidden_dim = 256
-        self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=8,
-            batch_first=True
-        ).to(self.device).eval()
-        
-        self.input = torch.randn(4, 128, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Single-node operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        self.hidden_dim = self.workload.attention_hidden_dim
+        self.global_batch = self.workload.distributed_global_batch
+        self.ranks = self.workload.distributed_ranks
+        self.per_rank = self.global_batch // self.ranks
+
+        self.model: Optional[nn.Sequential] = None
+        self.inputs: Optional[torch.Tensor] = None
+
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        self.model = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+        ).to(self.device).half().eval()
+        self.inputs = torch.randn(
+            self.global_batch,
+            self.hidden_dim,
+            dtype=torch.float16,
+            device=self.device,
+        )
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        assert self.model is not None
+        assert self.inputs is not None
 
         with nvtx_range("baseline_distributed", enable=enable_nvtx):
-            with torch.no_grad():
-                # Baseline: Single-node operations
-                # No distributed coordination across nodes
-                # Distributed processing would coordinate multi-node operations
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Baseline: No distributed processing
-                # Single-node operations (not distributed)
-                _ = output.sum()
+            for rank in range(self.ranks):
+                start = rank * self.per_rank
+                end = start + self.per_rank
+                shard = self.inputs[start:end]
+                _ = self.model(shard)
+                torch.cuda.synchronize()
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=5,
+            warmup=1,
+            enable_memory_tracking=False,
+            measurement_timeout_seconds=90,
         )
-    
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.inputs is None:
+            return "Input tensor missing"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineDistributedBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = BaselineDistributedBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Distributed")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=5, warmup=1))
+    result = harness.benchmark(BaselineDistributedBenchmark())
+    print(f"Baseline distributed mean: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

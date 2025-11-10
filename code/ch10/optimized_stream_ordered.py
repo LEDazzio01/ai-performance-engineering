@@ -59,7 +59,7 @@ class OptimizedStreamOrderedBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_stream_ordered_async", enable=enable_nvtx):
+        with nvtx_range("stream_ordered", enable=enable_nvtx):
             # REAL cudaMallocAsync workload with per-stream allocation
             run_stream_ordered_allocator(self.N, iterations=3)
     

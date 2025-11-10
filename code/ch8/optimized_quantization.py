@@ -20,6 +20,8 @@ import torch.nn as nn
 
 from typing import Optional
 
+from torch.cuda.amp import autocast
+
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -41,7 +43,11 @@ class OptimizedQuantizationBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.batch_size = 512
+        self.hidden_dim = 4096
+        self.micro_batches = 4
+        self.repeats = 2
     
     def setup(self) -> None:
         """Setup: Initialize quantized model."""
@@ -59,16 +65,19 @@ class OptimizedQuantizationBenchmark(Benchmark):
         # This is the proper way to do quantization on CUDA, not CPU-only qint8
         from common.python.quantization_utils import quantize_model_to_fp8, get_quantization_dtype
         
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+        fp32_model = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
         )
         
-        # Quantize model to FP8 for CUDA-native quantization
-        self.model = quantize_model_to_fp8(self.model, self.device, precision='fp8')
+        self.model = quantize_model_to_fp8(fp32_model, self.device, precision='fp8')
+        self.model = torch.compile(self.model, mode="reduce-overhead")
         input_dtype = get_quantization_dtype('fp8')
-        self.input = torch.randn(32, 1024, device=self.device, dtype=input_dtype)
+        self.inputs = [
+            torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=input_dtype)
+            for _ in range(self.micro_batches)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -83,24 +92,17 @@ class OptimizedQuantizationBenchmark(Benchmark):
 
         with nvtx_range("optimized_quantization", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: FP8 Quantization on CUDA
-                # Uses FP8 quantized model (native CUDA support on GB10/H100+)
-                # FP8 provides 2x memory reduction vs FP16, 4x vs FP32
-                # Better memory bandwidth utilization and faster computation
-                output = self.model(self.input)
-                
-                # Optimization: FP8 Quantization benefits
-                # - Reduced memory usage (FP8: 2x vs FP16, 4x vs FP32)
-                # - Improved performance (faster FP8 computation on Tensor Cores)
-                # - Better memory bandwidth utilization (less data to transfer)
-                # - Native CUDA support (not CPU-only like qint8)
-                _ = output.sum()
+                for _ in range(self.repeats):
+                    with autocast(dtype=torch.float16):
+                        for micro_input in self.inputs:
+                            output = self.model(micro_input)
+                            _ = output.sum()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -114,8 +116,8 @@ class OptimizedQuantizationBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if not self.inputs:
+            return "Inputs not initialized"
         return None
 
 def get_benchmark() -> Benchmark:
@@ -142,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

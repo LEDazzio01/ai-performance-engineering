@@ -19,6 +19,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -35,8 +36,13 @@ class BaselineDistributedILPBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
-    
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.N = self.workload.distributed_elements_for_mode(self.smoke_test)
+        self.micro_chunks = self.workload.distributed_chunks_for_mode(self.smoke_test)
+        self._scale = 1.1
+        self._bias = 0.5
+   
     def setup(self) -> None:
         """Setup: Initialize single-GPU tensors."""
         torch.manual_seed(42)
@@ -59,14 +65,18 @@ class BaselineDistributedILPBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_distributed_ilp", enable=enable_nvtx):
-            # Baseline: Single-GPU ILP
-            # Distributed computing enables ILP across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed ILP enables larger workloads through multi-GPU parallelism
-            self.output = self.input * 2.0 + 1.0
-            # Single-GPU: Limited by single device's ILP capacity
-            # See ch17 for full distributed training implementations
-
+            chunk_size = max(1, self.N // self.micro_chunks)
+            cpu_device = torch.device("cpu")
+            for chunk_start in range(0, self.N, chunk_size):
+                chunk_end = min(self.N, chunk_start + chunk_size)
+                chunk = self.input[chunk_start:chunk_end]
+                # Baseline: round-trip through host memory before compute.
+                host_chunk = chunk.to(cpu_device, non_blocking=False)
+                host_result = torch.addcmul(host_chunk, host_chunk, host_chunk, value=self._bias)
+                host_result.mul_(self._scale)
+                self.output[chunk_start:chunk_end].copy_(host_result.to(self.device))
+                torch.cuda.synchronize()
+    
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -77,8 +87,8 @@ class BaselineDistributedILPBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=self.workload.ilp_iterations,
+            warmup=self.workload.ilp_warmup,
         )
     
     def validate_result(self) -> Optional[str]:

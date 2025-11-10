@@ -75,7 +75,7 @@ cluster_dual_kernel(const float* __restrict__ input,
 }
 
 __global__ void __cluster_dims__(2, 1, 1)
-dsm_probe_kernel(float* out) {
+dsmem_probe_kernel(float* out) {
     cg::cluster_group cluster = cg::this_cluster();
     cg::thread_block block = cg::this_thread_block();
     extern __shared__ float buffer[];
@@ -100,7 +100,7 @@ struct ProbeResult {
     cudaError_t error;
 };
 
-ProbeResult probe_dsm_support() {
+ProbeResult probe_dsmem_support() {
     float* d_out = nullptr;
     cudaError_t alloc_err = cudaMalloc(&d_out, sizeof(float));
     if (alloc_err != cudaSuccess) {
@@ -113,7 +113,7 @@ ProbeResult probe_dsm_support() {
     cfg.dynamicSmemBytes = 32 * sizeof(float);
 
     cudaKernel_t kernel;
-    cudaError_t err = cudaGetKernel(&kernel, dsm_probe_kernel);
+    cudaError_t err = cudaGetKernel(&kernel, dsmem_probe_kernel);
     if (err != cudaSuccess) {
         cudaFree(d_out);
         return {false, "cudaGetKernel", err};
@@ -159,7 +159,7 @@ int main() {
         return 3;
     }
 
-    ProbeResult probe = probe_dsm_support();
+    ProbeResult probe = probe_dsmem_support();
     if (!probe.ok) {
         fprintf(stderr,
                 "SKIPPED: Distributed shared memory unavailable on %s (SM %d.%d). Stage=%s error=%s\n",
@@ -169,7 +169,7 @@ int main() {
                 probe.stage,
                 cudaGetErrorString(probe.error));
         fprintf(stderr,
-                "Use cluster_group_no_dsm_sm%03d for a no-DSMEM demonstration on this system.\n",
+                "Use optimized_cluster_group_dram_partial_cluster_sync_no_dsmem_sm%03d for a DSMEM-free demonstration on this system.\n",
                 prop.major * 10 + prop.minor);
         return 3;
     }
@@ -242,7 +242,9 @@ int main() {
 
     float elapsed_ms = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
-    printf("Cluster launch (DSM optimized): %.2f ms\n", elapsed_ms / kIterations);
+    const float avg_ms = elapsed_ms / static_cast<float>(kIterations);
+    printf("Cluster launch (DSMEM optimized): %.3f ms\n", avg_ms);
+    printf("TIME_MS: %.6f\n", avg_ms);
 
     // Single run for verification
     CUDA_CHECK(cudaMemset(d_sum, 0, result_bytes));

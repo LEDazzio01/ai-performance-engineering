@@ -28,6 +28,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -44,7 +45,9 @@ class BaselineDataParallelismBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.requests = None
-        self.num_requests = 10
+        self.workload = WORKLOAD
+        self.num_requests = self.workload.total_requests
+        self.hidden_dim = 256
     
     def setup(self) -> None:
         """Setup: Initialize model and requests."""
@@ -60,9 +63,10 @@ class BaselineDataParallelismBenchmark(Benchmark):
             nn.Linear(256, 10),
         ).to(self.device).eval()
         
-        # Generate multiple inference requests
-        self.requests = [torch.randn(1, 256, device=self.device) for _ in range(self.num_requests)]
-        torch.cuda.synchronize()
+        # Generate multiple inference requests that will be replayed each iteration
+        self.requests = torch.randn(self.num_requests, self.hidden_dim, device=self.device)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Sequential inference without data parallelism."""
@@ -76,8 +80,10 @@ class BaselineDataParallelismBenchmark(Benchmark):
             # No data parallelism - requests processed one at a time
             # Data parallelism would replicate model across GPUs for parallel processing
             with torch.no_grad():
-                for request in self.requests:
-                    _ = self.model(request)
+                for idx in range(self.num_requests):
+                    _ = self.model(self.requests[idx : idx + 1])
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -88,8 +94,8 @@ class BaselineDataParallelismBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=10,
+            warmup=2,
         )
     
     def validate_result(self) -> Optional[str]:
@@ -114,4 +120,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

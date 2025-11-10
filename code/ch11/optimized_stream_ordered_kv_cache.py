@@ -80,7 +80,7 @@ class OptimizedStreamOrderedKvCacheBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("stream_ordered_kv_cache_concurrent", enable=enable_nvtx):
+        with nvtx_range("stream_ordered_kv_cache", enable=enable_nvtx):
             # Launch kernels on different streams - they can overlap
             with torch.cuda.stream(self.stream1):
                 self.data1 = self.data1 * 2.0
@@ -146,5 +146,4 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Streams: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-
 

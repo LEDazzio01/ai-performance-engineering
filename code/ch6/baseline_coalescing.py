@@ -44,8 +44,9 @@ class BaselineCoalescingBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 10_000_000
-        self.stride = 32  # Large stride prevents coalescing
+        self.rows = 4096
+        self.cols = 2048
+        self.N = self.rows * self.cols
         self._extension = None
     
     def setup(self) -> None:
@@ -55,9 +56,17 @@ class BaselineCoalescingBenchmark(Benchmark):
         
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        # Output size matches stride pattern
-        output_size = (self.N + self.stride - 1) // self.stride
-        self.output = torch.empty(output_size, device=self.device, dtype=torch.float32)
+        # Output matches full transpose result
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
+        # Warm up extension so compilation and first-use costs are outside measurement.
+        temp_output = torch.empty_like(self.output)
+        self._extension.uncoalesced_copy(temp_output, self.input, self.rows, self.cols)
+        torch.cuda.synchronize()
+        # Recreate tensors so benchmark iterations start from identical data.
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -72,18 +81,11 @@ class BaselineCoalescingBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_coalescing_uncoalesced", enable=enable_nvtx):
-            # Call CUDA extension kernel with stride
-            # The kernel accesses input[access_idx] where access_idx = idx * stride
-            # Output must be same size as input (N) because kernel writes to output[access_idx]
-            output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-            
-            # Call kernel with stride parameter
-            self._extension.uncoalesced_copy(output, self.input, self.stride)
+            # Naive transpose reads/writes with uncoalesced access
+            self._extension.uncoalesced_copy(self.output, self.input, self.rows, self.cols)
             # Synchronize to catch any CUDA errors immediately
             torch.cuda.synchronize()
             
-            self.output = output
-
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -107,11 +109,13 @@ class BaselineCoalescingBenchmark(Benchmark):
             return "Output tensor not initialized"
         if self.input is None:
             return "Input tensor not initialized"
-        # Output should be same size as input (kernel writes to output[access_idx] where access_idx can be up to N-1)
         if self.output.shape[0] != self.N:
             return f"Output shape mismatch: expected {self.N}, got {self.output.shape[0]}"
-        if not torch.isfinite(self.output).all():
-            return "Output contains non-finite values"
+        output_matrix = self.output.view(self.cols, self.rows)
+        reference = self.input.view(self.rows, self.cols).transpose(0, 1).contiguous()
+        max_err = (output_matrix - reference).abs().max().item()
+        if max_err > 1e-4:
+            return f"Transpose mismatch: max error {max_err}"
         return None
 
 

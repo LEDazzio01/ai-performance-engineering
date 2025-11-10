@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch10.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -42,19 +43,21 @@ class BaselineWarpDivergenceBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.N = self.workload.warp_elements_for_mode(self.smoke_test)
+        self.branch_iterations = self.workload.warp_branch_iterations_for_mode()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.routing_logits = None
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
-        # Baseline: Operations with warp divergence
-        # Warp divergence occurs when threads in a warp take different paths
-        # This baseline causes divergence through conditional execution
-        
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.routing_logits = torch.randn(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -69,15 +72,28 @@ class BaselineWarpDivergenceBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_warp_divergence", enable=enable_nvtx):
-            # Baseline: Warp divergence - threads take different paths
-            # Conditional execution causes threads in warp to diverge
-            # Warp divergence: inefficient execution due to divergent paths
-            mask = self.input > 0.0
-            self.output = torch.where(mask, self.input * 2.0, self.input * 0.5)
-            
-            # Baseline: Warp divergence issues
-            # Conditional execution causes divergence
-            # Inefficient execution due to divergent paths
+            result = self.input.clone()
+            mask_source = self.routing_logits
+            for iteration in range(self.branch_iterations):
+                activations = torch.sigmoid(mask_source)
+                mask = activations > 0.5
+                positive = result[mask]
+                negative = result[~mask]
+
+                positive = torch.tanh(positive * 1.13 + 0.20)
+                positive = positive * 1.002 + 0.0006 * positive * positive
+
+                negative = torch.sin(negative * 0.79 - 0.33)
+                negative = negative * 0.998 - 0.00035 * negative * negative
+
+                result[mask] = positive
+                result[~mask] = negative
+                mask_source = 0.9 * mask_source + 0.1 * torch.roll(result, shifts=iteration + 1, dims=0)
+                torch.cuda.synchronize()
+
+            self.output = result
+            self.routing_logits = mask_source
+            self._checksum = float(result.sum().item())
 
     
     def teardown(self) -> None:

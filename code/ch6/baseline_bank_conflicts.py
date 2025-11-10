@@ -44,14 +44,22 @@ class BaselineBankConflictsBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.N = 8_000_000
         self._extension = None
+        self.repeats = 8
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
         # Load CUDA extension (will compile on first call)
         self._extension = load_bank_conflicts_extension()
         
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
+        # Warm up extension so compile/setup cost isn't timed.
+        self._extension.bank_conflicts(self.output, self.input)
+        torch.cuda.synchronize()
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
@@ -68,9 +76,9 @@ class BaselineBankConflictsBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_bank_conflicts", enable=enable_nvtx):
-            # Call CUDA extension kernel
-            self._extension.bank_conflicts(self.output, self.input)
+        with nvtx_range("bank_conflicts", enable=enable_nvtx):
+            for _ in range(self.repeats):
+                self._extension.bank_conflicts(self.output, self.input)
             # Synchronize to catch any CUDA errors immediately
             torch.cuda.synchronize()
 

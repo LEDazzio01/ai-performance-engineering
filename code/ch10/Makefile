@@ -11,7 +11,9 @@ COMMON_HEADERS = ../common/headers/arch_detection.cuh ../common/headers/tma_help
 
 # Explicit list of CUDA examples
 BASE_TARGETS = baseline_cluster_group optimized_cluster_group \
-               cluster_group_no_dsm \
+               baseline_cluster_group_no_dsmem optimized_cluster_group_no_dsmem \
+               optimized_cluster_group_single_cta \
+               optimized_cluster_group_dram_partial_cluster_sync_no_dsmem \
                baseline_cooperative_persistent optimized_cooperative_persistent \
                baseline_double_buffered_pipeline optimized_double_buffered_pipeline \
                warp_specialized_cluster_pipeline
@@ -33,10 +35,19 @@ all: $(TARGETS)
 baseline_cluster_group$(SUFFIX): baseline_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
 
+baseline_cluster_group_no_dsmem$(SUFFIX): baseline_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
 optimized_cluster_group$(SUFFIX): optimized_cluster_group.cu cluster_group_common.cuh $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
 
-cluster_group_no_dsm$(SUFFIX): cluster_group_no_dsm.cu cluster_group_common.cuh $(COMMON_HEADERS)
+optimized_cluster_group_no_dsmem$(SUFFIX): optimized_cluster_group_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
+optimized_cluster_group_single_cta$(SUFFIX): optimized_cluster_group_single_cta.cu cluster_group_common.cuh $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
+optimized_cluster_group_dram_partial_cluster_sync_no_dsmem$(SUFFIX): optimized_cluster_group_dram_partial_cluster_sync_no_dsmem.cu cluster_group_common.cuh $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
 
 baseline_cooperative_persistent$(SUFFIX): baseline_cooperative_persistent.cu $(COMMON_HEADERS)

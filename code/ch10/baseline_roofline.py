@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch10.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -43,7 +44,14 @@ class BaselineRooflineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs_host = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.batch = self.workload.roofline_batch_for_mode(self.smoke_test)
+        self.micro_batches = self.workload.roofline_micro_batches_for_mode(self.smoke_test)
+        self.hidden_dim = self.workload.roofline_hidden_dim_for_mode(self.smoke_test)
+        self.ffn_dim = self.workload.roofline_ffn_dim_for_mode(self.smoke_test)
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without roofline analysis."""
@@ -53,12 +61,17 @@ class BaselineRooflineBenchmark(Benchmark):
         # This baseline does not perform roofline analysis
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.hidden_dim, self.ffn_dim),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
+            nn.Linear(self.ffn_dim, self.hidden_dim),
+        ).to(self.device).float().eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        self.inputs_host = torch.randn(
+            self.micro_batches,
+            self.batch,
+            self.hidden_dim,
+            pin_memory=True,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -77,17 +90,20 @@ class BaselineRooflineBenchmark(Benchmark):
                 # Baseline: No roofline analysis
                 # Does not measure arithmetic intensity or identify bottlenecks
                 # No optimization based on compute/memory characteristics
-                output = self.model(self.input)
-                
-                # Baseline: No roofline analysis
-                # Operations not optimized based on bottleneck identification
-                _ = output.sum()
+                total = 0.0
+                for idx in range(self.micro_batches):
+                    host_chunk = self.inputs_host[idx]
+                    device_chunk = host_chunk.to(self.device, non_blocking=False)
+                    output = self.model(device_chunk)
+                    total += float(output.sum().item())
+                    torch.cuda.synchronize()
+                self._checksum = total
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs_host = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -101,8 +117,8 @@ class BaselineRooflineBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.inputs_host is None:
+            return "Inputs not initialized"
         return None
 
 def get_benchmark() -> Benchmark:

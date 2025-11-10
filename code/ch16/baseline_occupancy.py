@@ -75,7 +75,7 @@ class BaselineOccupancyBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_occupancy_low", enable=enable_nvtx):
+        with nvtx_range("occupancy", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Many small forward passes - low occupancy
                 # Each pass processes small amount of work

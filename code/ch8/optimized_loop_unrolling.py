@@ -1,4 +1,4 @@
-"""Python harness wrapper for optimized_loop_unrolling.cu."""
+"""Loop-unrolling variant with ILP and vectorized loads."""
 
 from __future__ import annotations
 
@@ -9,36 +9,40 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-from common.python.cuda_binary_benchmark import CudaBinaryBenchmark
+from ch8.loop_unrolling_benchmark_base import LoopUnrollingBenchmarkBase
 
 
-class OptimizedLoopUnrollingBenchmark(CudaBinaryBenchmark):
-    """Wraps the unrolled loop kernel."""
+class OptimizedLoopUnrollingBenchmark(LoopUnrollingBenchmarkBase):
+    nvtx_label = "optimized_loop_unrolling"
 
-    def __init__(self) -> None:
-        chapter_dir = Path(__file__).parent
-        super().__init__(
-            chapter_dir=chapter_dir,
-            binary_name="optimized_loop_unrolling",
-            friendly_name="Optimized Loop Unrolling",
-            iterations=5,
-            warmup=1,
-            timeout_seconds=90,
-        )
+    def _invoke_kernel(self) -> None:
+        assert self.extension is not None
+        assert self.inputs is not None
+        assert self.weights is not None
+        assert self.output is not None
+        self.extension.loop_unrolling_optimized(self.inputs, self.weights, self.output)
 
 
-def get_benchmark() -> OptimizedLoopUnrollingBenchmark:
-    """Factory for discover_benchmarks()."""
+def get_benchmark() -> LoopUnrollingBenchmarkBase:
     return OptimizedLoopUnrollingBenchmark()
 
 
-if __name__ == "__main__":
-    benchmark = get_benchmark()
+def main() -> None:
+    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config(),
+        config=BenchmarkConfig(iterations=30, warmup=5),
     )
+    benchmark = OptimizedLoopUnrollingBenchmark()
     result = harness.benchmark(benchmark)
-    print(f"\nOptimized Loop Unrolling: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print("=" * 70)
+    print("Optimized Loop Unrolling (ILP + vectorized loads)")
+    print("=" * 70)
+    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
+    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
+
+if __name__ == "__main__":
+    main()

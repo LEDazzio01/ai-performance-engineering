@@ -23,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -39,9 +40,14 @@ class OptimizedNvlinkBenchmark(Benchmark):
         self.device = resolve_device()
         self.data_gpu0 = None
         self.data_gpu1 = None
-        self.host_data = None
-        self.N = 10_000_000
+        self.host_buffers = None
+        self.N = 16_000_000
         self.is_multi_gpu = False
+        self.num_chunks = max(16, WORKLOAD.prefill_chunks * 2)
+        self.chunk_size = self.N // self.num_chunks
+        self.stream_main = None
+        self.copy_stream = None
+        self.result = None
 
     def setup(self) -> None:
         """Setup: Initialize tensors and enable NVLink peer access."""
@@ -61,9 +67,8 @@ class OptimizedNvlinkBenchmark(Benchmark):
         
         if self.is_multi_gpu:
             # Multi-GPU: use NVLink for direct GPU-to-GPU transfer
-            self.data_gpu0 = torch.randn(self.N, device=torch.device("cuda:0"), dtype=torch.float32)
-            self.data_gpu1 = torch.randn(self.N, device=torch.device("cuda:1"), dtype=torch.float32)
-            
+            self.data_gpu0 = torch.randn(self.chunk_size, device=torch.device("cuda:0"), dtype=torch.float32)
+            self.data_gpu1 = torch.empty(self.chunk_size, device=torch.device("cuda:1"), dtype=torch.float32)
             # Enable peer access for NVLink (if available)
             # This enables direct GPU-to-GPU communication via NVLink
             if torch.cuda.can_device_access_peer(0, 1):
@@ -77,11 +82,13 @@ class OptimizedNvlinkBenchmark(Benchmark):
                 except Exception:
                     pass
         else:
-            # Single GPU: use optimized pinned memory (simulates NVLink benefit)
-            # In multi-GPU setup, NVLink would provide high-speed transfer
-            # Pinned memory enables faster CPU-GPU transfers
-            self.host_data = torch.randn(self.N, dtype=torch.float32, pin_memory=True)
-            self.data_gpu0 = torch.empty(self.N, device=self.device, dtype=torch.float32)
+            self.data_gpu0 = torch.empty(self.chunk_size, device=self.device, dtype=torch.float32)
+        self.host_buffers = [
+            torch.randn(self.chunk_size, dtype=torch.float32, pin_memory=True)
+            for _ in range(self.num_chunks)
+        ]
+        self.stream_main = torch.cuda.Stream(device=0)
+        self.copy_stream = torch.cuda.Stream(device=0)
         
         torch.cuda.synchronize()
 
@@ -93,53 +100,51 @@ class OptimizedNvlinkBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
         
         with nvtx_range("optimized_nvlink", enable=enable_nvtx):
+            checksum = 0.0
             if self.is_multi_gpu:
-                # Optimization: NVLink GPU-to-GPU transfer
-                # NVLink provides much higher bandwidth than PCIe
-                # Direct GPU-to-GPU communication via NVLink (no CPU round-trip)
-                with torch.cuda.device(1):
-                    self.data_gpu1.copy_(self.data_gpu0, non_blocking=True)
-                
-                # Process on GPU1
-                with torch.cuda.device(1):
-                    self.data_gpu1 = self.data_gpu1 * 2.0
-                
-                # Transfer back via NVLink (direct GPU-to-GPU)
-                with torch.cuda.device(0):
-                    self.data_gpu0.copy_(self.data_gpu1, non_blocking=True)
-                
-                torch.cuda.synchronize()
-                
-                # Optimization: NVLink benefits
-                # - High bandwidth GPU-to-GPU transfers (avoid PCIe bottleneck)
-                # - Low latency communication (direct interconnect)
-                # - Better multi-GPU performance (no CPU overhead)
+                stream0 = torch.cuda.Stream(device=0)
+                stream1 = torch.cuda.Stream(device=1)
+                for host in self.host_buffers:
+                    with torch.cuda.stream(stream0):
+                        self.data_gpu0.copy_(host.to(self.device, non_blocking=True), non_blocking=True)
+                    with torch.cuda.stream(stream1):
+                        self.data_gpu1.copy_(self.data_gpu0.to(torch.device("cuda:1"), non_blocking=True), non_blocking=True)
+                        self.data_gpu1.mul_(1.0001)
+                        checksum += self.data_gpu1.sum().item()
+                torch.cuda.device(0)
+                stream0.synchronize()
+                torch.cuda.device(1)
+                stream1.synchronize()
             else:
-                # Single GPU: Optimize transfer pattern (simulate NVLink efficiency)
-                # Use pinned memory for faster CPU-GPU transfers
-                # Pinned memory enables faster transfers (closer to NVLink speeds)
-                # In multi-GPU, NVLink would provide even better bandwidth
-                # Direct copy with pinned memory is faster than baseline's .to() method
-                self.data_gpu0.copy_(self.host_data, non_blocking=True)
+                for host in self.host_buffers:
+                    with torch.cuda.stream(self.copy_stream):
+                        self.data_gpu0.copy_(host, non_blocking=True)
+                    with torch.cuda.stream(self.stream_main):
+                        self.stream_main.wait_stream(self.copy_stream)
+                        self.data_gpu0.mul_(1.0002)
+                        checksum += self.data_gpu0.sum().item()
                 torch.cuda.synchronize()
+            self.result = checksum
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.data_gpu0 = None
         self.data_gpu1 = None
-        self.host_data = None
+        self.host_buffers = None
+        self.stream_main = None
+        self.copy_stream = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=20,
+            warmup=3,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.data_gpu0 is None:
+        if self.result is None:
             return "Data not initialized"
         return None
 

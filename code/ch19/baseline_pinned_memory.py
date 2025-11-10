@@ -39,6 +39,7 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
         self.device = resolve_device()
         self.cpu_data = None
         self.gpu_data = None
+        self.device_buffer = None
         self.N = 10_000_000
     
     def setup(self) -> None:
@@ -48,6 +49,7 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
         # Baseline: Unpinned memory - standard CPU allocation
         # This requires CPU staging buffer for H2D transfers
         self.cpu_data = torch.randn(self.N, dtype=torch.float32)
+        self.device_buffer = torch.empty(self.N, device=self.device, dtype=torch.float32)
         self.gpu_data = None
         torch.cuda.synchronize()
     
@@ -58,16 +60,20 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("baseline_pinned_memory_unpinned", enable=enable_nvtx):
+        with nvtx_range("pinned_memory", enable=enable_nvtx):
             # Baseline: Transfer unpinned memory to GPU
             # This is slower because it requires CPU staging buffer
-            self.gpu_data = self.cpu_data.to(self.device)
+            staging = self.cpu_data.clone()
+            self.gpu_data = staging.to(self.device, non_blocking=False)
+            self.device_buffer.copy_(self.gpu_data)
+            self.device_buffer.mul_(1.0001).add_(0.0001)
             torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.cpu_data = None
         self.gpu_data = None
+        self.device_buffer = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -105,4 +111,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Pinned Memory (Unpinned): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

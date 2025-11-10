@@ -20,6 +20,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.workload_config import WORKLOAD, is_smoke_test
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -34,7 +35,15 @@ class OptimizedDistributedILPBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.N = self.workload.distributed_elements_for_mode(self.smoke_test)
+        self.micro_chunks = self.workload.distributed_chunks_for_mode(self.smoke_test)
+        self.streams = [
+            torch.cuda.Stream() for _ in range(self.workload.distributed_streams)
+        ]
+        self._scale = 1.1
+        self._bias = 0.5
     
     def setup(self) -> None:
         """Setup: Initialize for distributed ILP."""
@@ -59,16 +68,22 @@ class OptimizedDistributedILPBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_distributed_ilp", enable=enable_nvtx):
-    # Optimization: Distributed ILP concepts
-    # Distributed computing enables ILP across multiple GPUs
-    # Each GPU processes independent operations in parallel
-    # Synchronization enables coordinated multi-GPU ILP
-    # For ch6, we demonstrate optimized ILP patterns
-    # In multi-GPU setup, operations would be distributed across devices
-            self.output = self.input * 2.0 + 1.0
-    # Distributed ILP enables scaling ILP across multiple GPUs
-    # See ch17 for full distributed training implementations
+            chunk_size = max(1, (self.N + len(self.streams) - 1) // len(self.streams))
+            ranges = []
+            for start in range(0, self.N, chunk_size):
+                ranges.append((start, min(self.N, start + chunk_size)))
 
+            for chunk_idx, (chunk_start, chunk_end) in enumerate(ranges):
+                stream = self.streams[chunk_idx % len(self.streams)]
+                with torch.cuda.stream(stream):
+                    chunk = self.input[chunk_start:chunk_end]
+                    fused = torch.addcmul(chunk, chunk, chunk, value=self._bias)
+                    fused = fused * self._scale + torch.tanh(chunk) * 0.1
+                    self.output[chunk_start:chunk_end].copy_(fused)
+
+            torch.cuda.synchronize()
+            self.output = self.output.contiguous()
+    
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -79,8 +94,8 @@ class OptimizedDistributedILPBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=self.workload.ilp_iterations,
+            warmup=self.workload.ilp_warmup,
         )
     
     def validate_result(self) -> Optional[str]:

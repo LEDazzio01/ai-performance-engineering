@@ -43,35 +43,45 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         self.A = None
         self.B = None
         self.C = None
-        self.gemm_fn = None
-        self.M, self.N, self.K = 512, 512, 512
+        self.static_a = None
+        self.static_b = None
+        self.static_out = None
+        self.graph = None
+        self.capture_stream = None
+        self.M, self.N, self.K = 1024, 1024, 1024
     
     def setup(self) -> None:
-        """Setup: Initialize matrices and compile CUTLASS-optimized GEMM."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
+        """Setup: Initialize matrices and capture a persistent CUTLASS-backed GEMM."""
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-        # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
+            torch.backends.cuda.matmul.allow_tf32 = True
+
         torch.manual_seed(42)
-        # Optimization: Memory management with CUTLASS
-        # CUTLASS provides optimized GEMM kernels with efficient memory access
-        # Optimizes memory bandwidth utilization and reduces memory overhead
-        self.A = torch.randn(self.M, self.K, device=self.device, dtype=torch.float32)
-        self.B = torch.randn(self.K, self.N, device=self.device, dtype=torch.float32)
-        self.C = torch.empty(self.M, self.N, device=self.device, dtype=torch.float32)
-        
-        # Compile GEMM function with CUTLASS backend
-        def gemm_fn(a, b):
-            return torch.matmul(a, b)
-        
-        # Note: For FP4/FP6/FP8 chapter, we focus on precision optimizations,
-        # not compilation. CUTLASS memory optimizations are demonstrated through
-        # efficient memory access patterns.
-        self.gemm_fn = gemm_fn
-        
+
+        self.A = torch.randn(self.M, self.K, device=self.device, dtype=torch.float16)
+        self.B = torch.randn(self.K, self.N, device=self.device, dtype=torch.float16)
+        self.C = torch.empty(self.M, self.N, device=self.device, dtype=torch.float16)
+
+        if hasattr(torch.cuda, "CUDAGraph") and hasattr(torch.cuda, "graph"):
+            try:
+                self.graph = torch.cuda.CUDAGraph()
+                self.static_a = self.A.clone()
+                self.static_b = self.B.clone()
+                self.static_out = torch.empty_like(self.C)
+                self.capture_stream = torch.cuda.Stream()
+                torch.cuda.synchronize()
+                with torch.cuda.graph(self.graph, stream=self.capture_stream):
+                    self.static_out.copy_(torch.matmul(self.static_a, self.static_b))
+            except RuntimeError:
+                self.graph = None
+                self.static_a = None
+                self.static_b = None
+                self.static_out = None
+                self.capture_stream = None
+        else:
+            self.graph = None
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -85,13 +95,16 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_cutlass_memory", enable=enable_nvtx):
-    # Optimization: CUTLASS-optimized memory management
-    # CUTLASS kernels optimize memory access patterns
-    # Reduces memory bandwidth usage and improves cache efficiency
-    # Better memory utilization compared to standard operations
-            self.C = self.gemm_fn(self.A, self.B)
-    # CUTLASS optimizes memory access for better efficiency
-    # See ch1 for full CUTLASS implementations
+            if self.graph is not None:
+                # Refresh dynamic inputs and replay captured CUTLASS GEMM
+                self.static_a.copy_(self.A)
+                self.static_b.copy_(self.B)
+                self.graph.replay()
+                self.C.copy_(self.static_out)
+            else:
+                with torch.cuda.amp.autocast(dtype=torch.float16):
+                    self.C = torch.matmul(self.A, self.B)
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
@@ -99,6 +112,11 @@ class OptimizedCutlassMemoryBenchmark(Benchmark):
         self.A = None
         self.B = None
         self.C = None
+        self.static_a = None
+        self.static_b = None
+        self.static_out = None
+        self.graph = None
+        self.capture_stream = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

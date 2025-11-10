@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
+from ch10.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -39,7 +40,13 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs_host = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.micro_batches = self.workload.pipeline_micro_batches_for_mode(self.smoke_test)
+        self.chunk_tokens = self.workload.pipeline_chunk_tokens_for_mode(self.smoke_test)
+        self.hidden_dim = self.workload.pipeline_hidden_dim_for_mode(self.smoke_test)
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without warp specialization."""
@@ -47,11 +54,18 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
         
         # Baseline: Sequential model - no warp specialization
         self.model = nn.Sequential(
-            nn.Linear(2048, 2048),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
         ).to(self.device).eval()
         
         # Match optimized workload size
-        self.input = torch.randn(512, 2048, device=self.device)
+        self.inputs_host = torch.randn(
+            self.micro_batches,
+            self.chunk_tokens,
+            self.hidden_dim,
+            pin_memory=True,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -65,13 +79,19 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
             with torch.no_grad():
                 # Baseline: Sequential processing
                 # All warps do the same work - no specialization
-                output = self.model(self.input)
-                _ = output.sum()
+                total = 0.0
+                for idx in range(self.micro_batches):
+                    host_chunk = self.inputs_host[idx]
+                    device_chunk = host_chunk.to(self.device, non_blocking=False)
+                    output = self.model(device_chunk)
+                    total += float(output.sum().item())
+                    torch.cuda.synchronize()
+                self._checksum = total
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs_host = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -85,8 +105,8 @@ class BaselineWarpSpecializationPipelineBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.inputs_host is None:
+            return "Inputs not initialized"
         return None
 
 

@@ -1,126 +1,78 @@
-"""baseline_nccl.py - Baseline without NCCL in storage I/O context.
-
-Demonstrates storage operations without NCCL for multi-GPU communication.
-NCCL: This baseline does not use NCCL for collective communication.
-Uses CPU-based or inefficient communication patterns.
-Implements Benchmark protocol for harness integration.
-"""
+"""Chapter 5 NCCL baseline: CPU aggregation for gradients."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn as nn
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch5")
     return torch.device("cuda")
 
 
 class BaselineNcclBenchmark(Benchmark):
-    """Baseline: No NCCL - CPU-based or inefficient communication.
-    
-    NCCL: This baseline does not use NCCL for collective communication.
-    Uses CPU-based or inefficient communication patterns.
-    """
-    
+    """Copies gradient shards to CPU to mimic NCCL absence."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.data = None
-        self.N = 10_000_000
-    
-    def setup(self) -> None:
-        """Setup: Initialize data without NCCL."""
-        torch.manual_seed(42)
-        # Baseline: No NCCL - CPU-based communication
-        # NCCL provides optimized GPU-to-GPU collective communication
-        # This baseline does not use NCCL
-        
-        self.data = torch.randn(self.N, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations without NCCL."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.model = nn.Sequential(
+            nn.Linear(1024, 2048),
+            nn.ReLU(),
+            nn.Linear(2048, 1024),
+        ).to(self.device)
+        self.input: Optional[torch.Tensor] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(4)
+        self.input = torch.randn(256, 1024, device=self.device)
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
+        assert self.input is not None
         with nvtx_range("baseline_nccl", enable=enable_nvtx):
-            # Baseline: No NCCL - CPU-based communication
-            # Simulates inefficient communication without NCCL
-            result = self.data.sum()
-            
-            # Simulate CPU-based communication (no NCCL)
-            cpu_result = result.cpu()
-            cpu_result = cpu_result * 2.0  # Simulate CPU operation
-            final_result = cpu_result.to(self.device)
-            
-            # Baseline: No NCCL benefits
-            # CPU-based communication (inefficient)
-            _ = final_result
+            out = self.model(self.input)
+            shards = torch.chunk(out, 4, dim=0)
+            reduced = sum(shard.cpu() for shard in shards)
+            _ = reduced.to(self.device)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.data = None
+        self.input = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=30, warmup=4)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.data is None:
-            return "Data not initialized"
+        if self.input is None:
+            return "Input not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineNcclBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=5, warmup=1),
     )
-    benchmark = BaselineNcclBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Nccl")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()
+    result = harness.benchmark(get_benchmark())
+    print(f"\nBaseline NCCL latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

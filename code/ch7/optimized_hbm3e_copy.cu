@@ -11,30 +11,27 @@ __global__ void hbm3e_optimized_copy_kernel(float4* dst, const float4* src, size
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = gridDim.x * blockDim.x;
     
-    // Process 256 bytes per iteration (16 float4s)
-    // This matches HBM3e burst size
-    constexpr int BURST_SIZE = 16;  // 16 * 16 bytes = 256 bytes
-    
-    for (size_t base = tid * BURST_SIZE; base < n; base += stride * BURST_SIZE) {
-        // Unroll loop for 256-byte burst
+    constexpr int VECTORS_PER_LOOP = 8;
+    for (size_t base = tid * VECTORS_PER_LOOP; base < n; base += stride * VECTORS_PER_LOOP) {
         #pragma unroll
-        for (int i = 0; i < BURST_SIZE; i++) {
+        for (int i = 0; i < VECTORS_PER_LOOP; ++i) {
             size_t idx = base + i;
-            if (idx < n) {
-                // Use cache streaming modifier for HBM3e
-                // .cs (cache-streaming) bypasses L2 for write-only patterns
-                #if __CUDA_ARCH__ >= 1000  // Blackwell
-                // PTX inline assembly for cache streaming
-                asm volatile("ld.global.cs.v4.f32 {%0,%1,%2,%3}, [%4];" 
-                    : "=f"(reinterpret_cast<float*>(&dst[idx])[0]),
-                      "=f"(reinterpret_cast<float*>(&dst[idx])[1]),
-                      "=f"(reinterpret_cast<float*>(&dst[idx])[2]),
-                      "=f"(reinterpret_cast<float*>(&dst[idx])[3])
-                    : "l"(&src[idx]));
-                #else
-                dst[idx] = src[idx];
-                #endif
+            if (idx >= n) {
+                break;
             }
+            float4 value = src[idx];
+#if __CUDA_ARCH__ >= 900
+            asm volatile(
+                "st.global.cs.v4.f32 [%0], {%1, %2, %3, %4};\n"
+                :
+                : "l"(dst + idx),
+                  "f"(value.x),
+                  "f"(value.y),
+                  "f"(value.z),
+                  "f"(value.w));
+#else
+            dst[idx] = value;
+#endif
         }
     }
 }
@@ -81,4 +78,3 @@ int main() {
     
     return 0;
 }
-

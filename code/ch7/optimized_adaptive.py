@@ -55,7 +55,7 @@ class OptimizedAdaptiveBenchmark(Benchmark):
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         
         # Adaptive optimization: benchmark real tile sizes on the GPU
-        candidate_tiles = [128, 256, 512, 1024]
+        candidate_tiles = [64, 128, 256, 512, 1024]
         self.tile_size = self._autotune_tile_size(candidate_tiles)
         torch.cuda.synchronize()
 
@@ -63,16 +63,19 @@ class OptimizedAdaptiveBenchmark(Benchmark):
         """Measure each tile size using CUDA events and pick the fastest."""
         timings = {}
         for tile in candidates:
-            # Warmup
             run_kernel(self.input, self.output, tile)
             torch.cuda.synchronize()
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
-            start.record()
-            run_kernel(self.input, self.output, tile)
-            end.record()
-            torch.cuda.synchronize()
-            timings[tile] = start.elapsed_time(end)
+            total_ms = 0.0
+            trials = 3
+            for _ in range(trials):
+                start.record()
+                run_kernel(self.input, self.output, tile)
+                end.record()
+                torch.cuda.synchronize()
+                total_ms += start.elapsed_time(end)
+            timings[tile] = total_ms / trials
         best_tile = min(timings, key=timings.get)
         return best_tile
     
@@ -83,7 +86,7 @@ class OptimizedAdaptiveBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_adaptive_dynamic", enable=enable_nvtx):
+        with nvtx_range("adaptive", enable=enable_nvtx):
             run_kernel(self.input, self.output, self.tile_size)
             torch.cuda.synchronize()
     

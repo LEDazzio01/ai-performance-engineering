@@ -34,6 +34,12 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
+HIDDEN_DIM = 512
+NUM_HEADS = 8
+TOKENS_PER_STEP = 2
+DECODE_STEPS = 512  # matches baseline for fair comparison
+
+
 class OptimizedKVCacheAttention(nn.Module):
     """Optimized attention with efficient KV cache management."""
     
@@ -100,7 +106,12 @@ class OptimizedKvCacheBenchmark(Benchmark):
         self.inputs = None
         self.k_cache = None
         self.v_cache = None
-        self.max_seq_len = 300  # Large sequence length amortizes cache overhead (not too large)
+        self.hidden_dim = HIDDEN_DIM
+        self.num_heads = NUM_HEADS
+        self.tokens_per_step = TOKENS_PER_STEP
+        self.decode_steps = DECODE_STEPS
+        self.batch_size = 1
+        self.max_seq_len = self.decode_steps * self.tokens_per_step
 
     def setup(self) -> None:
         """Setup: Initialize model and pre-allocated cache."""
@@ -111,7 +122,10 @@ class OptimizedKvCacheBenchmark(Benchmark):
             # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         
-        self.model = OptimizedKVCacheAttention(hidden_dim=256, num_heads=8).to(self.device)
+        self.model = OptimizedKVCacheAttention(
+            hidden_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+        ).to(self.device)
         
         # Optimization: Use FP16 for faster computation
         if self.device.type == "cuda":
@@ -128,7 +142,16 @@ class OptimizedKvCacheBenchmark(Benchmark):
         
         # Create sequence of inputs (simulating autoregressive generation)
         dtype = torch.float16 if self.device.type == "cuda" else torch.float32
-        self.inputs = [torch.randn(1, 1, 256, device=self.device, dtype=dtype) for _ in range(self.max_seq_len)]
+        torch.manual_seed(42)
+        samples = torch.randn(
+            self.decode_steps,
+            self.batch_size,
+            self.tokens_per_step,
+            self.hidden_dim,
+            device=self.device,
+            dtype=dtype,
+        )
+        self.inputs = [samples[idx].contiguous() for idx in range(self.decode_steps)]
         
         # Pre-allocate KV cache (optimization: avoid reallocation)
         batch_size = 1
@@ -167,8 +190,11 @@ class OptimizedKvCacheBenchmark(Benchmark):
             # Pre-allocated cache eliminates memory reallocation overhead
             # In-place updates avoid torch.cat overhead from baseline
             # Process all inputs efficiently
-            for pos, x in enumerate(self.inputs):
-                output, self.k_cache, self.v_cache = self.model(x, self.k_cache, self.v_cache, cache_pos=pos)
+            for step, x in enumerate(self.inputs):
+                cache_pos = step * self.tokens_per_step
+                output, self.k_cache, self.v_cache = self.model(
+                    x, self.k_cache, self.v_cache, cache_pos=cache_pos
+                )
             # Single sync at the end for accurate timing
             torch.cuda.synchronize()
 
@@ -181,12 +207,20 @@ class OptimizedKvCacheBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=20,
+            iterations=15,
+            warmup=3,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
+        if self.k_cache is None or self.v_cache is None:
+            return "KV caches not initialized"
+        cache_tokens = self.decode_steps * self.tokens_per_step
+        if self.k_cache.shape[2] != cache_tokens or self.v_cache.shape[2] != cache_tokens:
+            return (
+                f"Unexpected cache fill: K={self.k_cache.shape}, "
+                f"V={self.v_cache.shape}, expected tokens={cache_tokens}"
+            )
         return None
 
 

@@ -25,6 +25,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch5.gpu_requirements import skip_if_insufficient_gpus
 
 
 def resolve_device() -> torch.device:
@@ -51,6 +52,7 @@ class OptimizedDistributedBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data and distributed processing."""
+        skip_if_insufficient_gpus()
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():

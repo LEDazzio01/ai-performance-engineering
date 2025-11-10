@@ -71,7 +71,7 @@ class OptimizedOccupancyBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_occupancy_high", enable=enable_nvtx):
+        with nvtx_range("occupancy", enable=enable_nvtx):
             # Optimization: Large kernel launches - high occupancy
             # Process large amount of work per kernel
             # Maximizes threads per SM for better utilization

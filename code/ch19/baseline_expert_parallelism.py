@@ -16,6 +16,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from typing import Optional
 
@@ -55,8 +56,9 @@ class BaselineExpertParallelismBenchmark(Benchmark):
         self.experts = None
         self.router = None
         self.input_data = None
-        self.num_experts = 8
-        self.top_k = 2  # Top-k experts per token
+        self.num_experts = 32
+        self.top_k = 4  # Top-k experts per token
+        self.batch_tokens = 512
     
     def setup(self) -> None:
         """Setup: Initialize MoE model with all experts on single GPU."""
@@ -71,7 +73,7 @@ class BaselineExpertParallelismBenchmark(Benchmark):
         # Simple router (gating network) to select top-k experts
         self.router = nn.Linear(256, self.num_experts).to(self.device)
         
-        self.input_data = torch.randn(32, 256, device=self.device)  # Batch of 32 tokens
+        self.input_data = torch.randn(self.batch_tokens, 256, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -95,9 +97,14 @@ class BaselineExpertParallelismBenchmark(Benchmark):
                     expert_mask = (top_k_indices == expert_id).any(dim=-1)
                     if expert_mask.any():
                         expert_input = self.input_data[expert_mask]
-                        expert_output = self.experts[expert_id](expert_input)
-                        # Aggregate outputs (simplified)
+                        # Naive dispatch copies activations to host between experts
+                        host_copy = expert_input.to("cpu", non_blocking=False)
+                        host_copy = F.relu(host_copy * 1.0001)
+                        torch.cuda.synchronize()
+                        staged = host_copy.to(self.device, non_blocking=False)
+                        expert_output = self.experts[expert_id](staged)
                         output[expert_mask] += expert_output
+                        torch.cuda.synchronize()
         
         torch.cuda.synchronize()
     
@@ -139,4 +146,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

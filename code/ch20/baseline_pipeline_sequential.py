@@ -26,6 +26,7 @@ from common.python.benchmark_harness import (
     BenchmarkConfig,
     BenchmarkHarness,
     BenchmarkMode,
+    WorkloadMetadata,
 )
 
 
@@ -64,6 +65,14 @@ class BaselinePipelineSequentialBenchmark(Benchmark):
         self.hidden_dim = 1024
         self.num_stages = 4
     
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        """Describe workload units processed per iteration."""
+        return WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(self.batch_size),
+            samples_per_iteration=float(self.batch_size),
+        )
+    
     def setup(self) -> None:
         """Setup: Initialize pipeline stages."""
         torch.manual_seed(42)
@@ -98,11 +107,11 @@ class BaselinePipelineSequentialBenchmark(Benchmark):
             x = self.inputs
             for stage in self.stages:
                 x = stage(x)  # Wait for completion before next stage
-                torch.cuda._sleep(200000)
-                # Naive pipeline: copy activations back to host between stages
-                host_buffer = x.detach().to("cpu")
                 torch.cuda.synchronize()
-                x = host_buffer.to(self.device, non_blocking=False)
+                # Naive pipeline: copy activations back to host between stages at FP32 precision
+                host_buffer = x.detach().float().to("cpu", non_blocking=False)
+                torch.cuda.synchronize()
+                x = host_buffer.to(self.device, non_blocking=False).half()
                 torch.cuda.synchronize()
 
     

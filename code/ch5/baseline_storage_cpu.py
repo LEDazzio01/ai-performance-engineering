@@ -68,7 +68,7 @@ class BaselineStorageCpuBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_storage_cpu", enable=enable_nvtx):
+        with nvtx_range("storage_cpu", enable=enable_nvtx):
             # Write: GPU → CPU → Storage
             cpu_data = self.data.cpu().numpy()
             np.save(self.filepath, cpu_data)

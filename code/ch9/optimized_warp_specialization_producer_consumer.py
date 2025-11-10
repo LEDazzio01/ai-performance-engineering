@@ -13,8 +13,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-# Import arch_config to apply Triton SM architecture patch (fixes sm_121a issue)
-import arch_config  # noqa: F401
+from common.python import triton_compat  # noqa: F401
 
 import torch
 import torch.nn as nn

@@ -43,7 +43,10 @@ class BaselineRooflineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.hidden_dim = 1024
+        self.batch_size = 256
+        self.micro_batches = 4
     
     def setup(self) -> None:
         """Setup: Initialize model without roofline analysis."""
@@ -53,12 +56,15 @@ class BaselineRooflineBenchmark(Benchmark):
         # This baseline does not perform roofline analysis
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
         ).to(self.device).eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        self.inputs = [
+            torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+            for _ in range(self.micro_batches)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -77,17 +83,16 @@ class BaselineRooflineBenchmark(Benchmark):
                 # Baseline: No roofline analysis
                 # Does not measure arithmetic intensity or identify bottlenecks
                 # No optimization based on compute/memory characteristics
-                output = self.model(self.input)
-                
-                # Baseline: No roofline analysis
-                # Operations not optimized based on bottleneck identification
-                _ = output.sum()
+                for micro_input in self.inputs:
+                    output = self.model(micro_input)
+                    _ = output.sum()
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -101,8 +106,8 @@ class BaselineRooflineBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if not self.inputs:
+            return "Inputs not initialized"
         return None
 
 
@@ -132,4 +137,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -46,12 +46,19 @@ class BaselineLaunchBoundsBenchmark(Benchmark):
         self.N = 1024 * 1024  # 1M elements
         self.iterations = 5
         self._extension = None
+        self.extra_passes = 2
     
     def setup(self) -> None:
         """Setup: Initialize tensors and load CUDA extension."""
         # Load CUDA extension (will compile on first call)
         self._extension = load_launch_bounds_extension()
         
+        torch.manual_seed(42)
+        self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
+        self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
+        self._extension.launch_bounds_baseline(self.input_data, self.output_data, 1)
+        torch.cuda.synchronize()
         torch.manual_seed(42)
         self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
@@ -70,7 +77,8 @@ class BaselineLaunchBoundsBenchmark(Benchmark):
 
         with nvtx_range("baseline_launch_bounds", enable=enable_nvtx):
             # Call CUDA extension (already synchronizes internally)
-            self._extension.launch_bounds_baseline(self.input_data, self.output_data, self.iterations)
+            for _ in range(self.extra_passes):
+                self._extension.launch_bounds_baseline(self.input_data, self.output_data, self.iterations)
             # Additional synchronization to catch any errors
             torch.cuda.synchronize()
 
@@ -115,4 +123,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Launch Bounds (no annotation): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

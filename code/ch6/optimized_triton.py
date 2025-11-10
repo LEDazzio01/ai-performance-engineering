@@ -15,13 +15,8 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
-
-# Import arch_config to apply Triton patch for sm_12x support
-# The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
-try:
-    import arch_config  # noqa: F401
-except ImportError:
-    pass  # Continue if arch_config not available
+import torch.nn.functional as F
+from common.python import triton_compat  # noqa: F401
 
 try:
     import triton
@@ -29,10 +24,9 @@ try:
     TRITON_AVAILABLE = True
 except ImportError:
     TRITON_AVAILABLE = False
-    # Fallback if Triton not available
     tl = None
 
-from typing import Optional
+from typing import Optional, Callable
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -64,60 +58,72 @@ if TRITON_AVAILABLE:
         tl.store(output_ptr + offsets, output, mask=mask)
 
 class OptimizedTritonBenchmark(Benchmark):
-    """Optimized: Uses Triton kernels for efficient GPU operations."""
+    """Optimized: Triton when available, otherwise a fused PyTorch kernel."""
     
     def __init__(self):
         self.device = resolve_device()
         self.input = None
-        self.input2 = None  # Second input for addition
+        self.input2 = None
         self.output = None
-        self.N = 1_000_000
+        self.N = 4_000_000
+        self.block = 131_072
+        self.backend = "pytorch"
+        self._compiled_kernel: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None
+    
+    def _supports_triton(self) -> bool:
+        if not TRITON_AVAILABLE:
+            return False
+        major, _ = torch.cuda.get_device_capability(self.device)
+        return major < 12  # Triton/ptxas does not yet target SM 12.x reliably.
+    
+    def _pytorch_kernel(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        out = x + y
+        out = F.silu(out)
+        return out * 1.5 + 0.1
     
     def setup(self) -> None:
-        """Setup: Initialize tensors."""
-        
+        """Setup: Initialize tensors and pick backend."""
         torch.manual_seed(42)
-        # Optimization: Prepare for Triton kernel execution
-        # Triton is a GPU programming language for writing efficient kernels
-        # Provides Python-like syntax for CUDA kernel development
-        # Enables explicit optimization of memory access and compute patterns
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.input2 = torch.randn(self.N, device=self.device, dtype=torch.float32)  # Second input for addition
+        self.input2 = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.backend = "triton" if self._supports_triton() else "pytorch"
+        if self.backend == "pytorch":
+            compiler = getattr(torch, "compile", None)
+            if compiler is not None:
+                self._compiled_kernel = compiler(self._pytorch_kernel, mode="reduce-overhead")
+            else:
+                self._compiled_kernel = self._pytorch_kernel
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Operations using Triton kernels."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
+        """Benchmark: Operations using Triton or fused PyTorch kernel."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_triton", enable=enable_nvtx):
-            # Optimization: Use Triton kernel for efficient GPU operations
-            # Triton provides Python-like syntax for CUDA kernel development
-            # Enables explicit optimization of memory access patterns
-            # Blocksize optimization for better GPU utilization
-            if TRITON_AVAILABLE:
-                # arch_config.py patches Triton to handle sm_12x architectures (removes 'a' suffix from sm_121a)
+        with nvtx_range("triton", enable=enable_nvtx):
+            if self.backend == "triton":
                 grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
                 triton_add_kernel[grid](
                     self.input,
-                    self.input2,  # Second input for addition
+                    self.input2,
                     self.output,
                     self.N,
                     BLOCK_SIZE=1024,
                 )
-                # Apply additional operation
-                self.output = self.output * 2.0 + 1.0
-                # Triton kernels enable fine-grained optimization of GPU operations
+                self.output = self._pytorch_kernel(self.output, torch.zeros_like(self.output))
+                torch.cuda.synchronize()
             else:
-                # Fallback if Triton not available
-                # Use optimized PyTorch operations
-                self.output = (self.input + self.input2) * 2.0 + 1.0
+                assert self._compiled_kernel is not None
+                for start in range(0, self.N, self.block):
+                    end = min(start + self.block, self.N)
+                    lhs = self.input[start:end]
+                    rhs = self.input2[start:end]
+                    fused = self._compiled_kernel(lhs, rhs)
+                    self.output[start:end].copy_(fused)
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

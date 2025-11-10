@@ -45,6 +45,9 @@ class BaselineStreamsBenchmark(Benchmark):
         self.model = None
         self.input1 = None
         self.input2 = None
+        self.batch = 8
+        self.seq_len = 256
+        self.hidden_dim = 512
     
     def setup(self) -> None:
         """Setup: Initialize model without streams."""
@@ -53,15 +56,14 @@ class BaselineStreamsBenchmark(Benchmark):
         # CUDA streams allow parallel execution of independent operations
         # This baseline does not use streams
         
-        hidden_dim = 256
         self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
+            embed_dim=self.hidden_dim,
             num_heads=8,
             batch_first=True
         ).to(self.device).eval()
         
-        self.input1 = torch.randn(4, 64, hidden_dim, device=self.device)
-        self.input2 = torch.randn(4, 64, hidden_dim, device=self.device)
+        self.input1 = torch.randn(self.batch, self.seq_len, self.hidden_dim, device=self.device)
+        self.input2 = torch.randn(self.batch, self.seq_len, self.hidden_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -78,16 +80,11 @@ class BaselineStreamsBenchmark(Benchmark):
         with nvtx_range("baseline_streams", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Sequential execution (no streams)
-                # Operations execute one after another
-                # No overlap - poor GPU utilization
+                # Sequential execution: launch two attention passes back-to-back
                 output1, _ = self.model(self.input1, self.input1, self.input1)
-                torch.cuda.synchronize()  # Wait for completion
-                
+                torch.cuda.synchronize()
                 output2, _ = self.model(self.input2, self.input2, self.input2)
-                torch.cuda.synchronize()  # Wait for completion
-                
-                # Baseline: No streams benefits
-                # Sequential execution (inefficient)
+                torch.cuda.synchronize()
                 _ = output1 + output2
 
     
@@ -101,7 +98,7 @@ class BaselineStreamsBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
+            iterations=20,
             warmup=5,
         )
     

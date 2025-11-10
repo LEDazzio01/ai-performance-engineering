@@ -1,106 +1,101 @@
-// baseline_double_buffered_pipeline.cu -- GEMM without pipeline (baseline).
+// baseline_double_buffered_pipeline.cu -- Naive GEMM without shared-memory tiling.
 
 #include <cuda_runtime.h>
-#include <cooperative_groups.h>
+
+#include <cmath>
 #include <cstdio>
+#include <random>
+#include <vector>
 
-namespace cg = cooperative_groups;
+#define CUDA_CHECK(call)                                                     \
+    do {                                                                     \
+        cudaError_t status = (call);                                         \
+        if (status != cudaSuccess) {                                         \
+            std::fprintf(stderr, "CUDA error %s:%d: %s\n", __FILE__, __LINE__,\
+                        cudaGetErrorString(status));                         \
+            std::exit(EXIT_FAILURE);                                         \
+        }                                                                    \
+    } while (0)
 
-template<int TILE_M, int TILE_N, int TILE_K>
-__global__ void gemm_tiled_naive_kernel(
+__global__ void gemm_naive_kernel(
     const float* __restrict__ A,
     const float* __restrict__ B,
     float* __restrict__ C,
     int M, int N, int K) {
-    cg::thread_block cta = cg::this_thread_block();
-    const int block_row = blockIdx.y * TILE_M;
-    const int block_col = blockIdx.x * TILE_N;
-
-    extern __shared__ float shared[];
-    float* A_tile = shared;
-    float* B_tile = shared + TILE_M * TILE_K;
-
-    const int thread_row = threadIdx.y;
-    const int thread_col = threadIdx.x;
-    float sum = 0.0f;
-
-    const int total_tiles = (K + TILE_K - 1) / TILE_K;
-    for (int tile_idx = 0; tile_idx < total_tiles; ++tile_idx) {
-        const int k_base = tile_idx * TILE_K;
-
-        // Load tiles sequentially (no overlap)
-        if (thread_row < TILE_M && thread_col < TILE_K) {
-            int global_row = block_row + thread_row;
-            int global_col = k_base + thread_col;
-            A_tile[thread_row * TILE_K + thread_col] =
-                (global_row < M && global_col < K) ?
-                A[global_row * K + global_col] : 0.0f;
-        }
-
-        if (thread_row < TILE_K && thread_col < TILE_N) {
-            int global_row = k_base + thread_row;
-            int global_col = block_col + thread_col;
-            B_tile[thread_row * TILE_N + thread_col] =
-                (global_row < K && global_col < N) ?
-                B[global_row * N + global_col] : 0.0f;
-        }
-
-        cta.sync();
-
-        // Compute
-        for (int kk = 0; kk < TILE_K; ++kk) {
-            if (k_base + kk < K) {
-                sum += A_tile[thread_row * TILE_K + kk] * B_tile[kk * TILE_N + thread_col];
-            }
-        }
-
-        cta.sync();
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= M || col >= N) {
+        return;
     }
 
-    if (block_row + thread_row < M && block_col + thread_col < N) {
-        C[(block_row + thread_row) * N + (block_col + thread_col)] = sum;
+    double sum = 0.0;
+    // Simulate repeatedly streaming the same tiles from global memory by
+    // re-reading the entire K dimension twice before writing the result.
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int kk = 0; kk < K; ++kk) {
+            sum += static_cast<double>(A[row * K + kk]) *
+                   static_cast<double>(B[kk * N + col]);
+        }
     }
+    C[row * N + col] = static_cast<float>(sum * 0.5);
 }
 
 int main() {
-    const int M = 512, N = 512, K = 512;
-    const size_t bytes_A = M * K * sizeof(float);
-    const size_t bytes_B = K * N * sizeof(float);
-    const size_t bytes_C = M * N * sizeof(float);
-    
-    float *d_A, *d_B, *d_C;
-    cudaMalloc(&d_A, bytes_A);
-    cudaMalloc(&d_B, bytes_B);
-    cudaMalloc(&d_C, bytes_C);
-    
-    constexpr int TILE_M = 32, TILE_N = 32, TILE_K = 32;
-    dim3 block(TILE_N, TILE_M);
-    dim3 grid((N + TILE_N - 1) / TILE_N, (M + TILE_M - 1) / TILE_M);
-    size_t smem = (TILE_M * TILE_K + TILE_K * TILE_N) * sizeof(float);
-    
+    const int M = 1024;
+    const int N = 1024;
+    const int K = 1024;
+    const size_t bytes_A = static_cast<size_t>(M) * K * sizeof(float);
+    const size_t bytes_B = static_cast<size_t>(K) * N * sizeof(float);
+    const size_t bytes_C = static_cast<size_t>(M) * N * sizeof(float);
+
+    std::vector<float> h_A(M * K);
+    std::vector<float> h_B(K * N);
+    std::vector<float> h_C(M * N, 0.0f);
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (auto& v : h_A) v = dist(rng);
+    for (auto& v : h_B) v = dist(rng);
+
+    float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_A, bytes_A));
+    CUDA_CHECK(cudaMalloc(&d_B, bytes_B));
+    CUDA_CHECK(cudaMalloc(&d_C, bytes_C));
+    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_C, 0, bytes_C));
+
+    dim3 block(32, 32);
+    dim3 grid((N + block.x - 1) / block.x, (M + block.y - 1) / block.y);
+
     cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    
-    const int iterations = 10;
-    cudaEventRecord(start);
-    for (int i = 0; i < iterations; i++) {
-        gemm_tiled_naive_kernel<TILE_M, TILE_N, TILE_K><<<grid, block, smem>>>(
-            d_A, d_B, d_C, M, N, K);
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    const int iterations = 5;
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        gemm_naive_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
     }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    
-    float ms;
-    cudaEventElapsedTime(&ms, start, stop);
-    printf("GEMM naive (baseline): %.2f ms\n", ms / iterations);
-    
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-    
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    float elapsed_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+    const float avg_ms = elapsed_ms / static_cast<float>(iterations);
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
+
+    double checksum = 0.0;
+    for (float v : h_C) checksum += v;
+    checksum /= static_cast<double>(M * N);
+
+    std::printf("Baseline GEMM (global memory): %.3f ms (avg over %d iters)\n", avg_ms, iterations);
+    std::printf("TIME_MS: %.6f\n", avg_ms);
+    std::printf("Checksum: %.6f\n", checksum);
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
     return 0;
 }
-

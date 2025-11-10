@@ -25,7 +25,7 @@ class BaselineLookupBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=1,
             timeout_seconds=90,
-            time_regex=None,
+            time_regex=r"TIME_MS:\s*([0-9.]+)",
         )
 
 

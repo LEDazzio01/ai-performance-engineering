@@ -48,7 +48,7 @@ class BaselineOccupancyBenchmark(Benchmark):
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("baseline_occ_low", enable=enable_nvtx):
+        with nvtx_range("occupancy", enable=enable_nvtx):
             run_low_occupancy(self.input, self.output, self.work_iters)
             torch.cuda.synchronize()
     

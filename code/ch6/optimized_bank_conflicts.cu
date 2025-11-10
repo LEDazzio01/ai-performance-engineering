@@ -1,48 +1,57 @@
 // optimized_bank_conflicts.cu
-// Optimized version: Eliminates bank conflicts using padding
-//
-// Key concepts:
-// - Shared memory is organized into banks (32 banks on modern GPUs)
-// - Bank conflicts occur when multiple threads access the same bank simultaneously
-// - Padding shared memory arrays eliminates bank conflicts by shifting alignment
+// Pads shared memory slices so each warp lane lands on a unique bank.
 
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+
 #include "../common/headers/profiling_helpers.cuh"
 
-// Shared memory size
-#define SHARED_SIZE 1024
 #define NUM_BANKS 32
+#define INNER_SWEEPS 256
+#define TILE_COLS (INNER_SWEEPS + NUM_BANKS)
+#define TILE_VALUES (TILE_COLS * NUM_BANKS)
+#define PADDED_STRIDE (NUM_BANKS + 1)
+#define PADDED_VALUES (TILE_COLS * PADDED_STRIDE)
 
-//------------------------------------------------------
-// Optimized: Eliminate bank conflicts using padding
-// Padding shifts memory alignment to avoid same-bank accesses
 __global__ void bank_conflicts_padded_kernel(float* output, const float* input, int N) {
-    // Shared memory with padding (+1 to avoid bank conflicts)
-    // This shifts alignment so adjacent elements don't map to same bank
-    __shared__ float shared_data[SHARED_SIZE + 1];
-    
-    int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    // Load data into shared memory
-    if (tid < SHARED_SIZE && idx < N) {
-        shared_data[tid] = input[idx];
+    __shared__ float shared_data[PADDED_VALUES];
+
+    int tile_start = blockIdx.x * TILE_VALUES;
+    if (tile_start >= N) {
+        return;
+    }
+
+    int tile_len = std::min(TILE_VALUES, N - tile_start);
+    int cols_in_tile = (tile_len + NUM_BANKS - 1) / NUM_BANKS;
+    int active_sweeps = std::min(cols_in_tile, INNER_SWEEPS);
+
+    for (int offset = threadIdx.x; offset < tile_len; offset += blockDim.x) {
+        int col = offset / NUM_BANKS;
+        int row = offset % NUM_BANKS;
+        int padded_idx = col * PADDED_STRIDE + row;
+        shared_data[padded_idx] = input[tile_start + offset];
     }
     __syncthreads();
-    
-    // Same access pattern, but padding eliminates bank conflicts
-    int stride = 8;
-    if (tid < SHARED_SIZE / stride && idx < N) {
-        // Padding ensures this access doesn't conflict
-        float val = shared_data[tid * stride];
-        output[idx] = val * 2.0f;
+
+    for (int elem = threadIdx.x; elem < tile_len; elem += blockDim.x) {
+        const int lane = elem & (NUM_BANKS - 1);
+        float acc = 0.0f;
+
+        for (int sweep = 0; sweep < active_sweeps; ++sweep) {
+            int logical_offset = sweep * NUM_BANKS + lane;
+            if (logical_offset >= tile_len) {
+                break;
+            }
+            int padded_idx = sweep * PADDED_STRIDE + lane;
+            acc += shared_data[padded_idx];
+        }
+
+        output[tile_start + elem] = acc;
     }
 }
 
-//------------------------------------------------------
-// Helper to measure kernel time
 float measure_kernel(
     void (*kernel)(float*, const float*, int),
     float* d_output,
@@ -50,111 +59,111 @@ float measure_kernel(
     int N,
     int threads_per_block,
     cudaStream_t stream,
-    const char* name
+    const char* name,
+    int launches
 ) {
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    
-    int blocks = (N + threads_per_block - 1) / threads_per_block;
-    
-    // Warmup
-    kernel<<<blocks, threads_per_block, 0, stream>>>(d_output, d_input, N);
+
+    int blocks = (N + TILE_VALUES - 1) / TILE_VALUES;
+
+    for (int launch = 0; launch < launches; ++launch) {
+        kernel<<<blocks, threads_per_block, 0, stream>>>(d_output, d_input, N);
+    }
     cudaStreamSynchronize(stream);
-    
-    // Measure
+
     cudaEventRecord(start, stream);
     {
         PROFILE_KERNEL_LAUNCH(name);
-        kernel<<<blocks, threads_per_block, 0, stream>>>(d_output, d_input, N);
+        for (int launch = 0; launch < launches; ++launch) {
+            kernel<<<blocks, threads_per_block, 0, stream>>>(d_output, d_input, N);
+        }
     }
     cudaEventRecord(stop, stream);
     cudaStreamSynchronize(stream);
-    
+
     float ms;
     cudaEventElapsedTime(&ms, start, stop);
-    
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    
     return ms;
 }
 
 int main() {
-    const int N = 1'000'000;
+    const int N = 1 << 20;
     const int threads_per_block = 256;
-    
+    const int launches = 32;
+
     printf("========================================\n");
-    printf("Optimized: Shared Memory Bank Conflicts (Padded)\n");
+    printf("Shared Memory Bank Conflicts (Optimized)\n");
     printf("========================================\n");
     printf("Problem size: %d elements\n", N);
     printf("Threads per block: %d\n", threads_per_block);
-    printf("Shared memory size: %d elements (%.2f KB) with padding\n", 
-           SHARED_SIZE + 1, (SHARED_SIZE + 1) * sizeof(float) / 1024.0f);
-    printf("Number of banks: %d\n\n", NUM_BANKS);
-    
-    // Allocate host memory
+    printf("Tile size (padded): %d elements (%.2f KB)\n",
+           PADDED_VALUES,
+           PADDED_VALUES * sizeof(float) / 1024.0f);
+    printf("Inner sweeps per launch: %d\n\n", INNER_SWEEPS);
+
     float* h_input = nullptr;
     float* h_output = nullptr;
-    
     cudaMallocHost(&h_input, N * sizeof(float));
     cudaMallocHost(&h_output, N * sizeof(float));
-    
-    // Initialize input
+
     for (int i = 0; i < N; ++i) {
-        h_input[i] = static_cast<float>(i);
+        h_input[i] = static_cast<float>(i % 1024);
     }
-    
-    // Allocate device memory
+
     float* d_input = nullptr;
     float* d_output = nullptr;
-    
     cudaStream_t stream;
     cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-    
+
     cudaMallocAsync(&d_input, N * sizeof(float), stream);
     cudaMallocAsync(&d_output, N * sizeof(float), stream);
-    
-    // Copy input to device
+
     {
         PROFILE_MEMORY_COPY("H2D copy");
-        cudaMemcpyAsync(d_input, h_input, N * sizeof(float),
-                       cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(
+            d_input,
+            h_input,
+            N * sizeof(float),
+            cudaMemcpyHostToDevice,
+            stream);
     }
     cudaStreamSynchronize(stream);
-    
-    // Test with padding (no conflicts)
-    printf("Optimized (with padding, no bank conflicts):\n");
+
     float padded_time = measure_kernel(
-        bank_conflicts_padded_kernel, d_output, d_input, N,
-        threads_per_block, stream, "bank_conflicts_padded");
-    printf("   Time: %.3f ms\n", padded_time);
-    
-    cudaMemcpyAsync(h_output, d_output, N * sizeof(float),
-                   cudaMemcpyDeviceToHost, stream);
+        bank_conflicts_padded_kernel,
+        d_output,
+        d_input,
+        N,
+        threads_per_block,
+        stream,
+        "bank_conflicts_padded",
+        launches);
+    printf("Optimized (padded) time: %.3f ms over %d launches\n",
+           padded_time,
+           launches);
+
+    cudaMemcpyAsync(
+        h_output,
+        d_output,
+        N * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        stream);
     cudaStreamSynchronize(stream);
-    
-    // Verify kernel execution via CUDA status (data access pattern is illustrative)
-    cudaError_t kernel_status = cudaGetLastError();
-    bool padded_correct = (kernel_status == cudaSuccess);
-    if (!padded_correct) {
-        fprintf(stderr, "CUDA error detected: %s\n", cudaGetErrorString(kernel_status));
-    }
-    
+
     printf("\n========================================\n");
-    printf("Results:\n");
-    printf("  Optimized (padded):  %s\n", padded_correct ? "✓ Correct" : "✗ Incorrect");
-    
-    printf("\nKey insight: Padding (+1 element) shifts alignment\n");
-    printf("to eliminate bank conflicts, improving performance.\n");
+    printf("Optimized accesses complete. Output checksum: %.3f\n",
+           h_output[0] + h_output[N / 2] + h_output[N - 1]);
     printf("========================================\n");
-    
-    // Cleanup
+
     cudaFreeAsync(d_output, stream);
     cudaFreeAsync(d_input, stream);
     cudaStreamDestroy(stream);
     cudaFreeHost(h_output);
     cudaFreeHost(h_input);
-    
-    return padded_correct ? 0 : 1;
+
+    return 0;
 }

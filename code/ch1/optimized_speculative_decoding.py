@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -45,11 +46,13 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         self.target_model = None
         self.draft_model = None
         self.embedding = None
-        self.input_ids = None
-        # Optimization: Reduce iterations for faster benchmark
-        # Speculative decoding speedup comes from parallel token generation, not more iterations
-        self.max_length = 5  # Reduced from 20 - focus on per-iteration speedup
-        self.speculative_length = 4  # Number of tokens to predict speculatively
+        self.decode_tokens = None
+        self.workload = WORKLOAD
+        self.batch_size = self.workload.batch_size
+        self.tokens_per_step = self.workload.tokens_per_step
+        self.decode_steps = self.workload.decode_steps
+        self.speculative_length = self.workload.speculative_chunk
+        self.vocab_size = 1000
     
     def setup(self) -> None:
         """Setup: Initialize target and draft models."""
@@ -67,10 +70,9 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
         # Target model verifies predictions for correctness
         
         hidden_dim = 256
-        vocab_size = 1000
         
         # Embedding layer
-        self.embedding = nn.Embedding(vocab_size, hidden_dim).to(self.device)
+        self.embedding = nn.Embedding(self.vocab_size, hidden_dim).to(self.device)
         
         # Target model (slower, more accurate) - use same as baseline for fair comparison
         target_model = nn.TransformerDecoder(
@@ -116,11 +118,16 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
             self.target_model = target_model
             self.draft_model = draft_model
         
-        # Input
-        batch_size = 4
-        seq_len = 10
-        self.input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=self.device)
-        torch.cuda.synchronize()
+        torch.manual_seed(42)
+        decode = torch.randint(
+            0,
+            self.vocab_size,
+            (self.decode_steps, self.batch_size, self.tokens_per_step),
+            device=self.device,
+        )
+        self.decode_tokens = decode
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Speculative decoding."""
@@ -135,34 +142,27 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
 
         with nvtx_range("optimized_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Speculative decoding
-                # Draft model predicts multiple tokens in parallel
-                # Target model verifies predictions
-                
-                # Optimization: Speculative decoding - use draft model for fast parallel prediction
-                # Only verify with target model when needed (simplified: single forward pass)
-                current_ids = self.input_ids.clone()
-                embedded_input = self.embedding(current_ids)
+                # Process the decode stream in speculative chunks so each iteration
+                # handles multiple tokens. This mirrors the kv-cache workload where
+                # the optimized path reduces the number of decoder invocations.
                 dtype = torch.float16 if self.device.type == "cuda" else torch.float32
-                memory = torch.randn(current_ids.size(0), current_ids.size(1), 256, device=self.device, dtype=dtype)
-                
-                # Optimization: Draft model predicts multiple tokens in parallel (faster than sequential)
-                # This is the key speedup - parallel token generation vs sequential
-                draft_output = self.draft_model(embedded_input, memory)
-                # Get multiple tokens at once (parallel prediction)
-                draft_logits = draft_output[:, -self.speculative_length:, :]
-                draft_tokens = draft_logits.argmax(dim=-1)
-                
-                # Optimization: Single verification pass (simplified for benchmarking)
-                # In practice, would verify each token, but for benchmark we show the parallel benefit
-                # The speedup comes from draft model being faster and predicting multiple tokens
-                verified_tokens = draft_tokens
-                
-                # Optimization: Speculative decoding benefits
-                # - Parallel token prediction (draft model predicts multiple tokens at once)
-                # - Faster than sequential autoregressive decoding
-                # - Draft model is smaller/faster than target model
-                _ = verified_tokens.sum()
+                memory = torch.randn(
+                    self.batch_size,
+                    self.tokens_per_step * self.speculative_length,
+                    256,
+                    device=self.device,
+                    dtype=dtype,
+                )
+                for start in range(0, self.decode_steps, self.speculative_length):
+                    chunk = self.decode_tokens[start : start + self.speculative_length]
+                    embedded = torch.cat(
+                        [self.embedding(tokens) for tokens in chunk], dim=1
+                    )
+                    draft_output = self.draft_model(embedded, memory[:, : embedded.size(1), :])
+                    target_check = self.target_model(embedded, memory[:, : embedded.size(1), :])
+                    _ = draft_output.sum() + target_check.sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
@@ -176,8 +176,8 @@ class OptimizedSpeculativeDecodingBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
+            iterations=5,
+            warmup=2,
         )
     
     def validate_result(self) -> Optional[str]:

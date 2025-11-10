@@ -24,6 +24,8 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from common.python.compile_utils import enable_tf32
+from ch10.workload_config import WORKLOAD, is_smoke_test
 
 
 def resolve_device() -> torch.device:
@@ -43,22 +45,37 @@ class BaselineTritonBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.residuals = None
+        self.output = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.batch = self.workload.triton_batch_for_mode(self.smoke_test)
+        self.micro_batches = self.workload.triton_micro_batches_for_mode(self.smoke_test)
+        self.hidden_dim = self.workload.hidden_dim
+        self.ffn_dim = self.workload.ffn_dim
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without Triton."""
         torch.manual_seed(42)
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+        enable_tf32()
         # Baseline: No Triton - standard PyTorch operations
         # Triton provides high-level DSL for writing optimized CUDA kernels
         # This baseline does not use Triton
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
+            nn.Linear(self.hidden_dim, self.ffn_dim, bias=True),
+            nn.GELU(approximate="tanh"),
+            nn.Linear(self.ffn_dim, self.hidden_dim, bias=True),
+        ).to(self.device).half().eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        shape = (self.micro_batches, self.batch, self.hidden_dim)
+        self.inputs = torch.randn(shape, device=self.device, dtype=torch.float16)
+        self.residuals = torch.randn_like(self.inputs)
+        self.output = torch.empty_like(self.inputs)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -72,37 +89,52 @@ class BaselineTritonBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_triton", enable=enable_nvtx):
+        with nvtx_range("triton", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Standard PyTorch operations (no Triton)
-                # Does not use Triton DSL for kernel optimization
-                # Standard computation path without Triton optimizations
-                output = self.model(self.input)
-                
-                # Baseline: No Triton benefits
-                # Standard PyTorch operations (not optimized with Triton)
-                _ = output.sum()
+                assert self.model is not None
+                assert self.inputs is not None
+                assert self.residuals is not None
+                assert self.output is not None
+
+                self._checksum = 0.0
+                for mb in range(self.micro_batches):
+                    chunk = self.inputs[mb]
+                    residual = self.residuals[mb]
+                    activations = self.model(chunk)
+                    torch.add(
+                        activations,
+                        residual,
+                        alpha=1.0,
+                        out=self.output[mb],
+                    )
+                    torch.relu_(self.output[mb])
+                    self._checksum += float(self.output[mb].sum().item())
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.residuals = None
+        self.output = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=20,
+            warmup=3,
+            enable_memory_tracking=False,
+            measurement_timeout_seconds=180,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.inputs is None or self.residuals is None:
+            return "Tensors not initialized"
         return None
 
 def get_benchmark() -> Benchmark:

@@ -43,7 +43,7 @@ class OptimizedModel(nn.Module):
         self.fc1 = nn.Linear(hidden_dim, hidden_dim * 2)
         self.fc2 = nn.Linear(hidden_dim * 2, hidden_dim)
         self.relu = nn.ReLU()
-        self.hidden_dim = hidden_dim
+        self.model_hidden_dim = hidden_dim
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Gradient checkpointing: recompute activations in backward
@@ -137,6 +137,8 @@ class OptimizedMemoryProfilingBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
+        if self.peak_memory_mb <= 0:
+            return "Peak memory not recorded"
         return None
 
 def get_benchmark() -> Benchmark:

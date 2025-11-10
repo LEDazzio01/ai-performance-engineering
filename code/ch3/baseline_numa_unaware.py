@@ -1,110 +1,69 @@
-"""baseline_numa_unaware.py - NUMA-unaware memory allocation (baseline).
-
-Allocates memory without NUMA awareness - may access remote NUMA nodes.
-Implements Benchmark protocol for harness integration.
-"""
+"""NUMA-unaware baseline: copies pageable CPU tensors to GPU each step."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
-# Add repo root to path for imports
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import numpy as np
+import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 class BaselineNUMAUnawareBenchmark(Benchmark):
-    """Benchmark implementation following Benchmark protocol."""
-    
-    def __init__(self, size_mb: int = 512):
-        self.size_mb = size_mb
-        self.data = None
-    
+    """Allocates pageable host memory and blocks on every copy."""
+
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if self.device.type != "cuda":
+            raise RuntimeError("CUDA required for NUMA benchmark")
+        self.host_tensor: Optional[torch.Tensor] = None
+        self.device_buffer: Optional[torch.Tensor] = None
+
     def setup(self) -> None:
-        """Setup: allocate memory without NUMA awareness."""
-        # NUMA-unaware allocation - memory may be on remote NUMA nodes
-        self.data = np.random.rand(self.size_mb * 1024 * 1024 // 8).astype(np.float64)
-    
+        torch.manual_seed(9)
+        self.host_tensor = torch.randn(128_000_000, dtype=torch.float32)  # ~512 MB
+        self.device_buffer = torch.empty_like(self.host_tensor, device=self.device)
+
     def benchmark_fn(self) -> None:
-        """Function to benchmark."""
-        # Simulate CPU-side processing (memory access)
-        # Note: While NVTX is CUDA-specific, we use Python-level markers for CPU benchmarks
-        # to maintain consistency with profiling infrastructure
-        try:
-            import torch
-            if torch.cuda.is_available():
-                # Use NVTX if CUDA available (for GPU-side profiling of CPU-GPU transfers)
-                torch.cuda.nvtx.range_push("baseline_numa_unaware")
-        except ImportError:
-            pass
-        
-        try:
-            _ = np.sum(self.data * 1.5 + 2.0)
-        finally:
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.nvtx.range_pop()
-            except ImportError:
-                pass
-    
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
+
+        config = self.get_config()
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        assert self.host_tensor is not None and self.device_buffer is not None
+        with nvtx_range("baseline_numa_unaware", enable=enable_nvtx):
+            self.device_buffer.copy_(self.host_tensor, non_blocking=False)
+            torch.cuda.synchronize()
+
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.data
-    
+        self.host_tensor = None
+        self.device_buffer = None
+        torch.cuda.empty_cache()
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark-specific config."""
-        return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=15, warmup=3)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.data is None:
-            return "Data array not initialized"
-        expected_size = self.size_mb * 1024 * 1024 // 8
-        if self.data.size != expected_size:
-            return f"Data size mismatch: expected {expected_size} elements, got {self.data.size}"
-        if not np.isfinite(self.data).all():
-            return "Data contains non-finite values"
+        if self.host_tensor is None:
+            return "Host tensor not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
-    return BaselineNUMAUnawareBenchmark(size_mb=512)
-
-
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=20, warmup=5)
-    )
-    benchmark = BaselineNUMAUnawareBenchmark(size_mb=512)
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print("Baseline: NUMA-Unaware Memory Allocation")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
+    return BaselineNUMAUnawareBenchmark()
 
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=5, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nBaseline NUMA latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

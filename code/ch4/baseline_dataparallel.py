@@ -65,14 +65,13 @@ class BaselineDataParallelBenchmark(Benchmark):
         """Setup: Initialize model, optimizer, and data."""
         torch.manual_seed(42)
         
-        # Use single GPU for baseline (DataParallel still works on single GPU)
+        # Keep input tensors on CPU so DataParallel copies every iteration.
         model = SimpleNet(self.input_size, self.hidden_size).to(self.device)
-        self.model = nn.DataParallel(model)  # DataParallel wraps model
-        
+        self.model = nn.DataParallel(model)
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
         
-        self.data = torch.randn(self.batch_size, self.input_size, device=self.device)
-        self.target = torch.randn(self.batch_size, 1, device=self.device)
+        self.data = torch.randn(self.batch_size, self.input_size)
+        self.target = torch.randn(self.batch_size, 1)
         
         torch.cuda.synchronize()
     
@@ -87,12 +86,15 @@ class BaselineDataParallelBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_dataparallel", enable=enable_nvtx):
-            output = self.model(self.data)
-            loss = nn.functional.mse_loss(output, self.target)
-            loss.backward()
-            self.optimizer.step()
-            self.optimizer.zero_grad()
+        with nvtx_range("dataparallel", enable=enable_nvtx):
+            for _ in range(2):
+                gpu_data = self.data.to(self.device, non_blocking=False)
+                gpu_target = self.target.to(self.device, non_blocking=False)
+                output = self.model(gpu_data)
+                loss = nn.functional.mse_loss(output, gpu_target)
+                loss.backward()
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
     
     def teardown(self) -> None:

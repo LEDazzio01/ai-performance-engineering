@@ -1,171 +1,160 @@
-"""optimized_disaggregated.py - Optimized disaggregated inference in FlexAttention/KV cache context.
-
-Demonstrates disaggregated inference separating prefill and decode.
-Disaggregated: Separates prefill (parallel) and decode (autoregressive) stages.
-Improves utilization by allowing parallel execution.
-Implements Benchmark protocol for harness integration.
-"""
+"""Disaggregated inference where prefill and decode run on separate streams."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
+
+import torch
+import torch.nn as nn
+
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from ch18.workload_config import WORKLOAD, is_smoke_test
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-import torch
-import torch.nn as nn
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch18")
     return torch.device("cuda")
 
+
 class OptimizedDisaggregatedBenchmark(Benchmark):
-    """Optimized: Disaggregated inference separating prefill and decode.
-    
-    Disaggregated: Separates prefill (parallel) and decode (autoregressive) stages.
-    Improves utilization by allowing parallel execution.
-    """
-    
+    """Prefill executes in parallel with decode thanks to stream-level separation."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.prefill_model = None
-        # Optimization: Compile model for kernel fusion and optimization
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
 
-        self.decode_model = None
-        self.prefill_input = None
-        self.decode_input = None
-        self.prefill_stream = None
-        self.decode_stream = None
-    
+        self.hidden_dim = self.workload.attention_hidden_dim
+        self.num_heads = self.workload.attention_num_heads
+        self.batch_size = self.workload.attention_batch_size
+        self.prefill_seq = self.workload.seq_len(self.smoke_test)
+        self.decode_seq = self.workload.decode_len(self.smoke_test)
+        self.prefill_segments = self.workload.micro_batches_for_mode(self.smoke_test)
+        self.decode_steps = self.workload.micro_batches_for_mode(self.smoke_test) * 4
+
+        self.prefill_model: Optional[nn.TransformerDecoder] = None
+        self.decode_model: Optional[nn.GRU] = None
+        self.prefill_batches: list[torch.Tensor] = []
+        self.decode_tokens: Optional[torch.Tensor] = None
+        self.memory: Optional[torch.Tensor] = None
+        self.prefill_stream: Optional[torch.cuda.Stream] = None
+        self.decode_stream: Optional[torch.cuda.Stream] = None
+
     def setup(self) -> None:
-        """Setup: Initialize disaggregated models."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Disaggregated inference
-        # Separates prefill (parallel) and decode (autoregressive) stages
-        # Disaggregated: allows parallel execution
-        
-        hidden_dim = 256
-        
-        # Prefill model (optimized for parallel processing)
-        self.prefill_model = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=8, batch_first=True),
-            num_layers=2
-        ).to(self.device).eval()
-        
-        # Decode model (optimized for autoregressive processing)
-        self.decode_model = nn.TransformerDecoder(
-            nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=8, batch_first=True),
-            num_layers=2
-        ).to(self.device).eval()
-        
-        # Separate streams for disaggregated execution
+        layer = nn.TransformerDecoderLayer(
+            d_model=self.hidden_dim,
+            nhead=self.num_heads,
+            batch_first=True,
+            dim_feedforward=self.hidden_dim * 4,
+        )
+        self.prefill_model = nn.TransformerDecoder(layer, num_layers=4).to(self.device).half().eval()
+        self.decode_model = nn.GRU(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=2,
+            batch_first=True,
+        ).to(self.device).half().eval()
+
+        segment_len = max(32, self.prefill_seq // self.prefill_segments)
+        self.prefill_batches = [
+            torch.randn(self.batch_size, segment_len, self.hidden_dim, dtype=torch.float16, device=self.device)
+            for _ in range(self.prefill_segments)
+        ]
+        self.decode_tokens = torch.randn(
+            self.batch_size,
+            self.decode_seq,
+            self.hidden_dim,
+            dtype=torch.float16,
+            device=self.device,
+        )
+        self.memory = torch.randn(
+            self.batch_size,
+            segment_len,
+            self.hidden_dim,
+            dtype=torch.float16,
+            device=self.device,
+        )
         self.prefill_stream = torch.cuda.Stream()
         self.decode_stream = torch.cuda.Stream()
-        
-        self.prefill_input = torch.randn(4, 32, hidden_dim, device=self.device)
-        self.decode_input = torch.randn(4, 1, hidden_dim, device=self.device)
-        # Create dummy memory tensor for TransformerDecoder (encoder output)
-        self.memory = torch.randn(4, 32, hidden_dim, device=self.device)
         torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Disaggregated inference."""
-        # Use conditional NVTX ranges - only enabled when profiling
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_disaggregated", enable=enable_nvtx):
-            with torch.no_grad():
-                # Optimization: Disaggregated inference
-                # Prefill and decode execute in parallel on separate streams
-                # Disaggregated: allows parallel execution
-                
-                # Prefill phase (disaggregated: parallel execution)
-                # TransformerDecoder requires both tgt and memory arguments
-                with torch.cuda.stream(self.prefill_stream):
-                    _ = self.prefill_model(self.prefill_input, self.memory)
-                
-                # Decode phase (disaggregated: parallel with prefill)
-                # TransformerDecoder requires both tgt and memory arguments
-                with torch.cuda.stream(self.decode_stream):
-                    _ = self.decode_model(self.decode_input, self.memory)
-                
-                # Synchronize streams (disaggregated: ensure completion)
-                self.prefill_stream.synchronize()
-                self.decode_stream.synchronize()
-                
-                # Optimization: Disaggregated inference benefits
-                # - Separates prefill and decode stages
-                # - Parallel execution improves utilization
-                # - Better resource allocation
-                # - Improved throughput through disaggregation
+        assert self.prefill_model is not None
+        assert self.decode_model is not None
+        assert self.decode_tokens is not None
+        assert self.memory is not None
+        assert self.prefill_stream is not None
+        assert self.decode_stream is not None
 
-    
+        events: list[torch.cuda.Event] = []
+        with nvtx_range("optimized_disaggregated", enable=enable_nvtx):
+            with torch.cuda.stream(self.prefill_stream):
+                for batch in self.prefill_batches:
+                    _ = self.prefill_model(batch, self.memory)
+                    event = torch.cuda.Event()
+                    event.record(self.prefill_stream)
+                    events.append(event)
+
+            with torch.cuda.stream(self.decode_stream):
+                if events:
+                    events[0].wait(self.decode_stream)
+                hx: Optional[torch.Tensor] = None
+                for step in range(self.decode_steps):
+                    idx = step % self.decode_tokens.size(1)
+                    token = self.decode_tokens[:, idx : idx + 1, :]
+                    _, hx = self.decode_model(token, hx)
+
+            self.prefill_stream.synchronize()
+            self.decode_stream.synchronize()
+
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.prefill_model = None
         self.decode_model = None
-        self.prefill_input = None
-        self.decode_input = None
+        self.prefill_batches = []
+        self.decode_tokens = None
+        self.memory = None
         self.prefill_stream = None
         self.decode_stream = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
-            warmup=2,
+            iterations=3,
+            warmup=1,
+            enable_memory_tracking=False,
+            measurement_timeout_seconds=90,
         )
-    
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.prefill_model is None or self.decode_model is None:
             return "Models not initialized"
+        if not self.prefill_batches:
+            return "Prefill inputs missing"
+        if self.decode_tokens is None:
+            return "Decode tokens missing"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedDisaggregatedBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedDisaggregatedBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Disaggregated")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
+
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=3, warmup=1))
+    result = harness.benchmark(OptimizedDisaggregatedBenchmark())
+    print(f"Optimized disaggregated mean: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

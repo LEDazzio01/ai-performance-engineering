@@ -34,9 +34,12 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
+        self.data = None
         self.output = None
-        self.N = 1_000_000
+        self.weights = None
+        self.bias = None
+        self.vector_width = 32
+        self.num_rows = 32_768
     
     def setup(self) -> None:
         """Setup: Initialize tensors for vectorized operations."""
@@ -51,8 +54,11 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
         # Improves memory bandwidth utilization and reduces instruction overhead
         # PyTorch operations automatically use vectorization when beneficial
         
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        total = self.num_rows * self.vector_width
+        self.data = torch.randn(total, device=self.device, dtype=torch.float16).view(self.num_rows, self.vector_width)
+        self.output = torch.empty_like(self.data)
+        self.weights = torch.randn(1, self.vector_width, device=self.device, dtype=torch.float16)
+        self.bias = torch.randn(1, self.vector_width, device=self.device, dtype=torch.float16)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -65,12 +71,12 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_vectorization_memory", enable=enable_nvtx):
-    # Optimization: Vectorized operations
-    # Vectorization uses SIMD instructions to process multiple elements
-    # PyTorch operations automatically leverage vectorization
-    # Improves memory bandwidth utilization through parallel element processing
-            self.output = self.input * 2.0 + 1.0
+        with nvtx_range("vectorization_memory", enable=enable_nvtx):
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                fused = self.data * self.weights + self.bias
+                fused = torch.nn.functional.silu(fused)
+                self.output.copy_(fused)
+            torch.cuda.synchronize()
             
     # Vectorized operations process multiple elements per instruction
     # Improves memory efficiency compared to scalar operations
@@ -79,8 +85,10 @@ class OptimizedVectorizationMemoryBenchmark(Benchmark):
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
+        self.data = None
         self.output = None
+        self.weights = None
+        self.bias = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:

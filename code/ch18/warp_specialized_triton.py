@@ -7,18 +7,11 @@ Based on Chapter 18's attention context - warp specialization for attention head
 import sys
 from pathlib import Path
 
-# Import arch_config so the Triton sm_121a -> sm_121 patch runs before kernels build
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-try:
-    import arch_config  # noqa: F401
-except ImportError:
-    try:
-        from ch8 import arch_config  # noqa: F401
-    except ImportError:
-        pass
+from common.python import triton_compat  # noqa: F401
 
 import torch
 import triton

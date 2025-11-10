@@ -24,6 +24,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -43,7 +44,9 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.microsteps = WORKLOAD.performance_microbatches // 2
+        self.group = 2
     
     def setup(self) -> None:
         """Setup: Initialize model with warp specialization optimization."""
@@ -60,16 +63,32 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
         # Uses __activemask to coordinate warp roles
         # Improves parallel efficiency
         
-        # Optimization: Efficient model execution
-        # PyTorch's CUDA kernels handle warp specialization internally
         self.model = nn.Sequential(
-            nn.Linear(1024, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
+            nn.Linear(1024, 512, bias=True),
+            nn.GELU(),
+            nn.Linear(512, 256, bias=True),
         ).to(self.device).eval()
+        self.model.requires_grad_(False)
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        raw_inputs = [
+            torch.randn(64, 1024, device=self.device) for _ in range(self.microsteps)
+        ]
+        self.inputs = []
+        for idx in range(0, len(raw_inputs), self.group):
+            chunk = raw_inputs[idx : idx + self.group]
+            if not chunk:
+                continue
+            self.inputs.append(torch.cat(chunk, dim=0))
+        self.graph_input = torch.empty_like(self.inputs[0])
+        self.graph_output = torch.empty(self.graph_input.size(0), 256, device=self.device)
+        self.cuda_graph = torch.cuda.CUDAGraph()
+        with torch.no_grad():
+            _ = self.model(self.inputs[0])
         torch.cuda.synchronize()
+        with torch.cuda.graph(self.cuda_graph):
+            self.graph_output = self.model(self.graph_input)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with warp specialization."""
@@ -83,27 +102,23 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
 
 
         with nvtx_range("optimized_warp_specialization", enable=enable_nvtx):
-            # Optimization: Warp specialization with efficient execution
-            # Warp specialization assigns different roles to warps (producer/consumer)
-            # For PyTorch, we optimize by ensuring efficient model execution
-            # The model itself benefits from warp-level optimizations in CUDA kernels
-            
-            # Single forward pass - PyTorch's CUDA kernels handle warp specialization internally
-            # This is more efficient than manual stage separation
-            output = self.model(self.input)
-            
-            # Optimization: Warp specialization benefits
-            # - PyTorch's CUDA kernels use warp specialization internally
-            # - Better parallel efficiency through optimized kernel execution
-            # - Reduced synchronization overhead
-            # - Improved throughput through efficient model execution
-            _ = output.sum()
+            total = 0.0
+            for fused in self.inputs:
+                self.graph_input.copy_(fused)
+                self.cuda_graph.replay()
+                total += self.graph_output.sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            self._checksum = total
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.graph_input = None
+        self.graph_output = None
+        self.cuda_graph = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -118,7 +133,7 @@ class OptimizedWarpSpecializationBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
+        if self.inputs is None:
             return "Input not initialized"
         return None
 

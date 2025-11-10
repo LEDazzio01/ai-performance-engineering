@@ -1,15 +1,10 @@
-"""baseline_docker.py - Baseline without Docker optimization in infrastructure/OS tuning context.
-
-Demonstrates operations without Docker containerization.
-Docker: This baseline does not use Docker for containerization.
-Uses standard execution without container isolation.
-Implements Benchmark protocol for harness integration.
-"""
+"""Docker baseline: host batches copied synchronously each iteration."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional, List
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -18,121 +13,88 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 docker example")
     return torch.device("cuda")
 
 
 class BaselineDockerBenchmark(Benchmark):
-    """Baseline: Standard execution without Docker.
-    
-    Docker: This baseline does not use Docker for containerization.
-    Uses standard execution without container isolation.
-    """
-    
+    """Simulates a non-containerized setup with blocking H2D copies."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model without Docker optimization."""
-        torch.manual_seed(42)
-        # Baseline: Standard execution (no Docker)
-        # Docker provides containerization for consistent environments
-        # This baseline runs without Docker containerization
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        # Standard execution (no Docker)
-        # Docker would provide containerized environment
-        self.input = torch.randn(32, 1024, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations without Docker."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.model: Optional[nn.Module] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.host_batches: List[torch.Tensor] = []
+        self.targets: List[torch.Tensor] = []
+        self.batch_idx = 0
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(101)
+        self.model = nn.Sequential(
+            nn.Linear(2048, 4096),
+            nn.ReLU(),
+            nn.Linear(4096, 1024),
+        ).to(self.device)
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-2)
+
+        for _ in range(4):
+            self.host_batches.append(torch.randn(256, 2048, dtype=torch.float32))
+            self.targets.append(torch.randn(256, 1024, dtype=torch.float32))
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
+        assert self.model is not None and self.optimizer is not None
 
+        idx = self.batch_idx % len(self.host_batches)
+        host_x = self.host_batches[idx]
+        host_y = self.targets[idx]
+        self.batch_idx += 1
 
         with nvtx_range("baseline_docker", enable=enable_nvtx):
-            with torch.no_grad():
-                # Baseline: Standard execution (no Docker)
-                # Docker provides containerization for consistent environments
-                # This baseline does not use Docker
-                output = self.model(self.input)
-                
-                # Baseline: No Docker benefits
-                # Standard execution without containerization
-                # Docker would provide consistent environment and isolation
-                _ = output.sum()
+            x = host_x.to(self.device)  # blocking copy
+            y = host_y.to(self.device)
+            out = self.model(x)
+            loss = torch.nn.functional.mse_loss(out, y)
+            loss.backward()
+            self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            torch.cuda.synchronize()
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.optimizer = None
+        self.host_batches = []
+        self.targets = []
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=20, warmup=4)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineDockerBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=5, warmup=1),
     )
-    benchmark = BaselineDockerBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Docker")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()
-
+    result = harness.benchmark(get_benchmark())
+    print(f"\nBaseline Docker latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -57,6 +57,9 @@ class BaselineGraphBandwidthBenchmark(Benchmark):
         self.src = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.dst = torch.empty_like(self.src)
         torch.cuda.synchronize()
+        # Dry run to amortize first-use overhead (extension launch/cuda events)
+        self._extension.separate_kernel_launches(self.dst, self.src, 1)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Separate kernel launches (memory copy)."""
@@ -69,9 +72,10 @@ class BaselineGraphBandwidthBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_graph_bandwidth_separate", enable=enable_nvtx):
-            # Call CUDA extension with separate kernel launches
-            self._extension.separate_kernel_launches(self.dst, self.src, self.iterations)
+        with nvtx_range("graph_bandwidth", enable=enable_nvtx):
+            for _ in range(self.iterations):
+                self._extension.separate_kernel_launches(self.dst, self.src, 1)
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

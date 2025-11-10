@@ -37,18 +37,25 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.cpu_data = None
-        self.gpu_data = None
-        self.N = 10_000_000
+        self.cpu_batches: Optional[list[torch.Tensor]] = None
+        self.gpu_batches: Optional[list[torch.Tensor]] = None
+        self.total_elements = 20_000_000  # ~80 MB per iteration in float32
+        self.num_transfers = 4
+        self.chunk_size = self.total_elements // self.num_transfers
     
     def setup(self) -> None:
         """Setup: Initialize CPU tensor without pinning."""
         torch.manual_seed(42)
         
         # Baseline: Unpinned memory - standard CPU allocation
-        # This requires CPU staging buffer for H2D transfers
-        self.cpu_data = torch.randn(self.N, dtype=torch.float32)
-        self.gpu_data = None
+        self.cpu_batches = [
+            torch.randn(self.chunk_size, dtype=torch.float32)
+            for _ in range(self.num_transfers)
+        ]
+        self.gpu_batches = [
+            torch.empty(self.chunk_size, device=self.device, dtype=torch.float32)
+            for _ in range(self.num_transfers)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -58,16 +65,17 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("baseline_pinned_memory_unpinned", enable=enable_nvtx):
-            # Baseline: Transfer unpinned memory to GPU
-            # This is slower because it requires CPU staging buffer
-            self.gpu_data = self.cpu_data.to(self.device)
+        with nvtx_range("pinned_memory", enable=enable_nvtx):
+            # Baseline: Transfer unpinned memory to GPU using the default stream.
+            # Non-blocking copies are not allowed because the tensors are pageable.
+            for cpu_batch, gpu_batch in zip(self.cpu_batches, self.gpu_batches):
+                gpu_batch.copy_(cpu_batch, non_blocking=False)
             torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.cpu_data = None
-        self.gpu_data = None
+        self.cpu_batches = None
+        self.gpu_batches = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -81,14 +89,13 @@ class BaselinePinnedMemoryBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.gpu_data is None:
-            return "GPU tensor not initialized"
-        if self.cpu_data is None:
-            return "CPU tensor not initialized"
-        if self.gpu_data.shape[0] != self.N:
-            return f"GPU tensor shape mismatch: expected {self.N}, got {self.gpu_data.shape[0]}"
-        if not torch.isfinite(self.gpu_data).all():
-            return "GPU tensor contains non-finite values"
+        if not self.gpu_batches or not self.cpu_batches:
+            return "Batches not initialized"
+        for tensor in self.gpu_batches:
+            if tensor.shape[0] != self.chunk_size:
+                return "GPU tensor shape mismatch"
+            if not torch.isfinite(tensor).all():
+                return "GPU tensor contains non-finite values"
         return None
 
 
@@ -105,4 +112,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Pinned Memory (Unpinned): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

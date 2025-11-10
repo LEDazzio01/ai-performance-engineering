@@ -23,7 +23,8 @@ try:
 except ImportError:
     pass  # Continue if arch_config not available
 
-from typing import Optional
+from typing import Optional, List, Tuple
+import torch.nn.functional as F
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -36,15 +37,17 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch6")
     return torch.device("cuda")
 
-class OptimizedAutotuningBenchmark:
+class OptimizedAutotuningBenchmark(Benchmark):
     """Optimized: Uses autotuning to find optimal parameters."""
     
     def __init__(self):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
-        self.optimal_block_size = None
+        self.N = 4_000_000
+        self.candidates = [1024, 2048, 4096, 8192]
+        self.optimal_chunk = None
+        self.timer_results: List[Tuple[int, float]] = []
     
     def setup(self) -> None:
         """Setup: Initialize tensors and perform autotuning."""
@@ -55,24 +58,36 @@ class OptimizedAutotuningBenchmark:
         # to find configuration that maximizes performance
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        
-        # Autotune: Try different block sizes and find optimal
-        # In practice, this would test multiple configurations
-        best_time = float('inf')
-        best_block_size = 256
-        for block_size in [128, 256, 512, 1024]:
-            # Simulate autotuning by testing different configurations
-            # Real autotuning would measure actual kernel performance
-            # This demonstrates the concept
-            torch.cuda.synchronize()
-            # Simplified autotuning - in practice would test actual kernels
-            if block_size == 256:
-                # Assume 256 is optimal for this workload
-                best_block_size = block_size
-                break
-        
-        self.optimal_block_size = best_block_size
+        self.optimal_chunk = self._autotune_chunk_size()
         torch.cuda.synchronize()
+
+    def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        out = tensor.mul(1.75)
+        out = out.add(0.1)
+        return F.silu(out)
+
+    def _autotune_chunk_size(self) -> int:
+        """Benchmark several staging chunk sizes using CUDA events."""
+        best = None
+        best_time = float("inf")
+        for chunk in self.candidates:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            for offset in range(0, self.N, chunk):
+                span = min(chunk, self.N - offset)
+                window = self.input[offset:offset + span]
+                transformed = self._transform(window)
+                self.output[offset:offset + span].copy_(transformed)
+            end.record()
+            torch.cuda.synchronize()
+            elapsed = start.elapsed_time(end)
+            self.timer_results.append((chunk, elapsed))
+            if elapsed < best_time:
+                best_time = elapsed
+                best = chunk
+        assert best is not None
+        return best
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with autotuned parameters."""
@@ -85,12 +100,13 @@ class OptimizedAutotuningBenchmark:
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_autotuning", enable=enable_nvtx):
-            # Optimization: Use autotuned parameters
-            # Autotuning finds optimal kernel parameters for the hardware/workload
-            # Parameters like block size, tile size are tuned automatically
-            # This enables optimal performance without manual tuning
-            self.output = self.input * 2.0 + 1.0
-            # Autotuned parameters optimize performance for specific hardware
+            chunk = self.optimal_chunk
+            for offset in range(0, self.N, chunk):
+                span = min(chunk, self.N - offset)
+                window = self.input[offset:offset + span]
+                transformed = self._transform(window)
+                self.output[offset:offset + span].copy_(transformed, non_blocking=True)
+            torch.cuda.synchronize()
             
     
     def teardown(self) -> None:
@@ -102,7 +118,7 @@ class OptimizedAutotuningBenchmark:
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-        iterations=100,
+            iterations=100,
             warmup=10,
         )
     

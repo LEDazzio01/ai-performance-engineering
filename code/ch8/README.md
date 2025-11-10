@@ -119,6 +119,30 @@ Conclusion: Higher performance despite lower occupancy!
 
 ---
 
+### tcgen05 preview build (SM100)
+
+While most of Chapter 8 focuses on FP32 kernels that you can run on today’s
+hardware, the same tiling techniques extend cleanly to Blackwell’s tcgen05 tensor
+cores. The repository now ships two additional benchmarks:
+
+- `ch8/baseline_tiling_tcgen05.py` – reuses the FP32 baseline but only runs when an
+  SM100 toolchain is present so results line up with the tcgen05 path.
+- `ch8/optimized_tiling_tcgen05.py` – calls the new SM100-only
+  `matmul_tiling_tcgen05` kernel implemented in `ch8/tiling_kernels_tcgen05.cu`.
+  It feeds fp16 inputs through a tcgen05 pipeline (TMA → TMEM accumulators →
+  tcgen05.mma) so you can measure how the same tiling strategy scales on the next
+  generation hardware.
+
+Both scripts call `ensure_tcgen05_supported(...)`, so on GB10 they immediately
+report `SKIPPED: …` instead of hanging. Once you have B100/B200 access, run:
+
+```bash
+python ch8/baseline_tiling_tcgen05.py
+python ch8/optimized_tiling_tcgen05.py
+```
+
+and compare their results to the FP32 versions to see the delta that tcgen05 brings.
+
 ### 2. `[CUDA file]` (see source files for implementation) - ILP Through Unrolling
 
 **Purpose**: Show how loop unrolling increases ILP and hides latency.
@@ -460,6 +484,52 @@ python3 [script]
 
 ---
 
+## Additional Microbenchmarks (repo examples)
+
+### AI Optimization (ILP + Shared Weights)
+- **Baseline** (`ch8/baseline_ai_optimization.py`): serial dot product per sample; every warp reloads the weight vector from global memory.
+- **Optimized** (`ch8/optimized_ai_optimization.py`): stages weights into shared memory once per block and processes four elements per lane using `float4` loads to expose ILP.
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples ai_optimization ch8`
+- **Speedup**: ~2× on GB10.
+
+### Distributed Pipeline
+- **Baseline** (`ch8/baseline_distributed.py`): sequential host→device copies plus compute per virtual rank.
+- **Optimized** (`ch8/optimized_distributed.py`): issues async copies on independent CUDA streams and overlaps them with compute (mimicking NCCL pipelining).
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples distributed ch8`
+- **Speedup**: ~1.5× with four virtual ranks.
+
+### NCCL-Style Ring Reduction
+- **Baseline** (`ch8/baseline_nccl.py`): copies each chunk to the host and reduces on the CPU.
+- **Optimized** (`ch8/optimized_nccl.py`): invokes `nccl_kernels.cu`, which performs the ring reduction entirely on the GPU.
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples nccl ch8`
+- **Speedup**: ~1.5×.
+
+### HBM Residency vs. Streaming
+- **Baseline** (`ch8/baseline_hbm.py`): copies column-major tensors from host memory every iteration.
+- **Optimized** (`ch8/optimized_hbm.py`): keeps row-major tensors resident and uses vectorized loads.
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples hbm ch8`
+- **Speedup**: 3–4× once copies leave the hot loop.
+
+### Double Buffering (Host vs. Device Residency)
+- **Baseline** (`ch8/baseline_double_buffering.py`): streams input from pinned host memory each pass before launching the single-buffer kernel.
+- **Optimized** (`ch8/optimized_double_buffering.py`): keeps data on device and pipelines loads in shared memory, mirroring the chapter narrative.
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples double_buffering ch8`
+- **Speedup**: ≥4×.
+
+### Thresholding with cp.async + Warp Ballots
+- **Baseline** (`ch8/baseline_threshold.py` + `.cu`): branchy kernel that copies tensors from host per iteration and computes sin/cos everywhere.
+- **Optimized** (`ch8/optimized_threshold.py` / `optimized_threshold_predicated.cu`): stages tiles via `cp.async` (TMA) into shared memory, uses warp ballots to skip inactive lanes, and only computes sin/cos when needed.
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples threshold ch8`
+- **Speedup**: ~3× on the Python harness and ≥1.05× on CUDA-capable TMA hardware.
+
+### Threshold TMA Pipeline (Blackwell Only)
+- **Baseline** (`ch8/baseline_thresholdtma.py` / `baseline_thresholdtma.cu`): same math path as the branchy kernel but gated so it only runs when Blackwell/GB GPUs are present.
+- **Optimized** (`ch8/optimized_thresholdtma.py` / `optimized_thresholdtma.cu`): rewrites the threshold kernel using the CUDA `cuda::pipeline` API (TMA on Blackwell) with double-buffered tiles.
+- **Run**: `python tools/cli/benchmark_cli.py --smoke-test --only-examples thresholdtma ch8`
+- **Speedup**: expect ≥1.05× once TMA kernels are enabled; otherwise the harness prints `SKIPPED: …` on unsupported hardware.
+
+---
+
 ## Next Steps
 
 **Learn kernel efficiency & fusion** → [Chapter 9: Kernel Efficiency & Arithmetic Intensity](.[executable]/README.md)
@@ -484,4 +554,3 @@ Learn about:
 ---
 
 **Chapter Status**: [OK] Complete
-

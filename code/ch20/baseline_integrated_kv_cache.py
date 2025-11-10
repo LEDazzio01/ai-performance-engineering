@@ -55,7 +55,6 @@ class NaiveKVCache:
                 k = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
                 v = torch.zeros(self.max_seq_len, self.num_heads, self.head_dim, dtype=self.dtype, device=self.device)
                 self.cache[request_id].append((k, v))
-            torch.cuda._sleep(5000)
     
     def append(self, request_id: str, layer_idx: int, k: torch.Tensor, v: torch.Tensor, pos: int) -> None:
         if request_id not in self.cache:
@@ -63,7 +62,6 @@ class NaiveKVCache:
         cache_k, cache_v = self.cache[request_id][layer_idx]
         cache_k[pos:pos+1] = k.unsqueeze(0)
         cache_v[pos:pos+1] = v.unsqueeze(0)
-        torch.cuda._sleep(2000)
     
     def get(self, request_id: str, layer_idx: int, start: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
         cache_k, cache_v = self.cache[request_id][layer_idx]

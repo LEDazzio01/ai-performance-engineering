@@ -1,58 +1,104 @@
+// baseline_uneven_partition.cu -- host-driven uneven partitions (baseline).
+
 #include <cuda_runtime.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <vector>
 
-__global__ void static_partition_kernel(const float* in, float* out, int elems, int start, int count) {
+#include "uneven_partition_common.cuh"
+
+#define CUDA_CHECK(call)                                                        \
+    do {                                                                        \
+        cudaError_t status = (call);                                            \
+        if (status != cudaSuccess) {                                            \
+            std::fprintf(stderr, "CUDA error %s:%d: %s\n",                      \
+                         __FILE__, __LINE__, cudaGetErrorString(status));       \
+            std::abort();                                                       \
+        }                                                                       \
+    } while (0)
+
+__global__ void static_partition_kernel(const float* in,
+                                        float* out,
+                                        int elems,
+                                        int start,
+                                        int count) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < count) {
-        int global_idx = start + idx;
-        if (global_idx < elems) {
-            out[global_idx] = in[global_idx] * in[global_idx];
-        }
+    if (idx >= count) {
+        return;
+    }
+    const int global_idx = start + idx;
+    if (global_idx < elems) {
+        float v = in[global_idx];
+        out[global_idx] = v * v + 0.5f * v;
     }
 }
 
 int main() {
-    constexpr int elems = 1024 + 300;  // uneven size
-    std::vector<float> input(elems);
+    constexpr int elems = (1 << 20) + 153;
+    constexpr int warmup = 1;
+    constexpr int iters = 10;
+
+    std::vector<float> h_in(elems);
+    std::vector<float> h_out(elems, 0.0f);
     for (int i = 0; i < elems; ++i) {
-        input[i] = static_cast<float>(i);
+        h_in[i] = std::sin(0.0005f * static_cast<float>(i));
     }
-    std::vector<float> output(elems, 0.0f);
 
     float *d_in = nullptr, *d_out = nullptr;
-    cudaMalloc(&d_in, elems * sizeof(float));
-    cudaMalloc(&d_out, elems * sizeof(float));
+    CUDA_CHECK(cudaMalloc(&d_in, elems * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_out, elems * sizeof(float)));
+    CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), elems * sizeof(float), cudaMemcpyHostToDevice));
 
-    cudaMemcpy(d_in, input.data(), elems * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemset(d_out, 0, elems * sizeof(float));
+    const std::vector<UnevenSegment> segments = build_uneven_segments(elems);
 
-    int full_tiles = elems / 512;
-    int tail = elems % 512;
+    auto run_static = [&](cudaStream_t stream) {
+        for (const UnevenSegment& seg : segments) {
+            int blocks = (seg.length + 255) / 256;
+            static_partition_kernel<<<blocks, 256, 0, stream>>>(
+                d_in,
+                d_out,
+                elems,
+                seg.offset,
+                seg.length);
+        }
+    };
 
-    for (int tile = 0; tile < full_tiles; ++tile) {
-        int start = tile * 512;
-        static_partition_kernel<<<2, 256>>>(d_in, d_out, elems, start, 512);
+    for (int i = 0; i < warmup; ++i) {
+        CUDA_CHECK(cudaMemset(d_out, 0, elems * sizeof(float)));
+        run_static(nullptr);
     }
-    if (tail > 0) {
-        int start = full_tiles * 512;
-        int blocks = (tail + 255) / 256;
-        static_partition_kernel<<<blocks, 256>>>(d_in, d_out, elems, start, tail);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    cudaEvent_t start_evt, stop_evt;
+    CUDA_CHECK(cudaEventCreate(&start_evt));
+    CUDA_CHECK(cudaEventCreate(&stop_evt));
+
+    CUDA_CHECK(cudaEventRecord(start_evt));
+    for (int iter = 0; iter < iters; ++iter) {
+        CUDA_CHECK(cudaMemset(d_out, 0, elems * sizeof(float)));
+        run_static(nullptr);
     }
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaEventRecord(stop_evt));
+    CUDA_CHECK(cudaEventSynchronize(stop_evt));
 
-    cudaMemcpy(output.data(), d_out, elems * sizeof(float), cudaMemcpyDeviceToHost);
+    float elapsed_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start_evt, stop_evt));
+    std::printf("Uneven baseline (static partitions): %.3f ms\n", elapsed_ms / iters);
 
+    CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, elems * sizeof(float), cudaMemcpyDeviceToHost));
     double max_err = 0.0;
     for (int i = 0; i < elems; ++i) {
-        double err = std::fabs(output[i] - input[i] * input[i]);
-        max_err = std::max(max_err, err);
+        const double input = static_cast<double>(h_in[i]);
+        const double expected = input * input + 0.5 * input;
+        max_err = std::max(max_err, std::abs(static_cast<double>(h_out[i]) - expected));
     }
-    std::printf("Baseline uneven partition (static) completed. max_err=%.3e\n", max_err);
+    std::printf("Baseline uneven max error: %.3e\n", max_err);
 
-    cudaFree(d_in);
-    cudaFree(d_out);
+    CUDA_CHECK(cudaEventDestroy(start_evt));
+    CUDA_CHECK(cudaEventDestroy(stop_evt));
+    CUDA_CHECK(cudaFree(d_in));
+    CUDA_CHECK(cudaFree(d_out));
     return 0;
 }

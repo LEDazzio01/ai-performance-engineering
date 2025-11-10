@@ -14,6 +14,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn.functional as F
 from typing import Optional
 from common.python.benchmark_harness import (
     Benchmark,
@@ -26,15 +27,17 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch6")
     return torch.device("cuda")
 
-class OptimizedAdaptiveBenchmark:
+class OptimizedAdaptiveBenchmark(Benchmark):
     """Optimized: Adaptive runtime optimization."""
     
     def __init__(self):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
-        self.adaptive_config = None
+        self.N = 4_000_000
+        self.adaptive_chunk = None
+        self.prefetch_stream: Optional[torch.cuda.Stream] = None
+        self.stage_buffers: list[torch.Tensor] = []
     
     def setup(self) -> None:
         """Setup: Initialize with adaptive configuration."""
@@ -45,14 +48,22 @@ class OptimizedAdaptiveBenchmark:
         # Adapts to changing input sizes, data patterns, etc.
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        # Adaptive: Adjust configuration based on workload
-        # In practice, this would monitor performance and adjust parameters
-        # For ch6, we demonstrate the concept of adaptive optimization
-        if self.N > 500_000:
-            self.adaptive_config = "large_batch"
-        else:
-            self.adaptive_config = "small_batch"
+        props = torch.cuda.get_device_properties(self.device)
+        sm_count = props.multi_processor_count
+        warp_allocation = props.warp_size * sm_count
+        # Choose a chunk that keeps at least two CTAs per SM resident but still fits L2.
+        self.adaptive_chunk = min(self.N, warp_allocation * 256)
+        self.prefetch_stream = torch.cuda.Stream()
+        self.stage_buffers = [
+            torch.empty(self.adaptive_chunk, device=self.device, dtype=torch.float32)
+            for _ in range(2)
+        ]
         torch.cuda.synchronize()
+
+    def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
+        out = tensor.mul(1.75)
+        out = out.add(0.1)
+        return F.silu(out)
     
     def benchmark_fn(self) -> None:
         """Benchmark: Adaptive optimization operations."""
@@ -65,31 +76,36 @@ class OptimizedAdaptiveBenchmark:
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_adaptive", enable=enable_nvtx):
-            # Optimization: Adaptive runtime optimization
-            # Adjusts kernel parameters based on workload characteristics
-            # Adapts to input size, data patterns, hardware state, etc.
-            # Enables optimal performance across varying workloads
-            # Use adaptive configuration
-            if self.adaptive_config == "large_batch":
-                # Optimize for large batches
-                self.output = self.input * 2.0 + 1.0
-            else:
-                # Optimize for small batches
-                self.output = self.input * 2.0 + 1.0
-            # Adaptive optimization improves performance by adjusting to workload
-            # See ch19 for full adaptive memory management implementations
-
+            assert self.prefetch_stream is not None
+            chunk_plan = []
+            start = 0
+            while start < self.N:
+                span = min(self.adaptive_chunk, self.N - start)
+                chunk_plan.append((start, span))
+                start += span
+            for idx, (start, span) in enumerate(chunk_plan):
+                buf = self.stage_buffers[idx % len(self.stage_buffers)]
+                slice_buf = buf[:span]
+                next_slice = self.input[start:start + span]
+                with torch.cuda.stream(self.prefetch_stream):
+                    slice_buf.copy_(next_slice, non_blocking=True)
+                torch.cuda.current_stream().wait_stream(self.prefetch_stream)
+                transformed = self._transform(slice_buf)
+                self.output[start:start + span].copy_(transformed, non_blocking=True)
+            torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.input = None
         self.output = None
+        self.stage_buffers = []
+        self.prefetch_stream = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-        iterations=100,
+            iterations=100,
             warmup=10,
         )
     

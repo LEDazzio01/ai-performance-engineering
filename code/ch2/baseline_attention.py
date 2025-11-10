@@ -1,15 +1,17 @@
-"""baseline_attention.py - Baseline attention in hardware overview context.
+"""Baseline attention benchmark for Chapter 2.
 
-Demonstrates standard attention computation without hardware-specific optimizations.
-Attention: This baseline uses naive scaled dot-product attention.
-Does not leverage hardware-specific optimizations (e.g., tensor cores).
-Implements Benchmark protocol for harness integration.
+Emulates the cost of running a naive FP32 multi-head attention block that
+materializes the full attention matrix every iteration. This stresses the
+Grace↔Blackwell NVLink-C2C fabric by forcing repeated round‑trips between
+HBM and register files without any kernel fusion.
 """
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,122 +19,112 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch2")
+        raise RuntimeError("CUDA required for ch2 attention example")
     return torch.device("cuda")
 
 
+class NaiveAttention(nn.Module):
+    """Materializes QK^T and applies masking + softmax with FP32 math."""
+
+    def __init__(self, hidden_dim: int = 512, num_heads: int = 8):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        assert hidden_dim % num_heads == 0
+
+        self.q_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.k_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.v_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.out_proj = nn.Linear(hidden_dim, hidden_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        bsz, seq, _ = x.shape
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+
+        q = q.view(bsz, seq, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(bsz, seq, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(bsz, seq, self.num_heads, self.head_dim).transpose(1, 2)
+
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        mask = torch.triu(torch.ones(seq, seq, device=x.device), diagonal=1).bool()
+        scores = scores.masked_fill(mask, float("-inf"))
+        probs = F.softmax(scores, dim=-1)
+        ctx = torch.matmul(probs, v)
+        ctx = ctx.transpose(1, 2).contiguous().view(bsz, seq, self.hidden_dim)
+        return self.out_proj(ctx)
+
+
 class BaselineAttentionBenchmark(Benchmark):
-    """Baseline: Standard attention without hardware optimizations.
-    
-    Attention: This baseline uses standard attention computation.
-    Does not leverage hardware-specific optimizations for better performance.
-    """
-    
+    """FP32, non-fused scaled dot product attention."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize attention model."""
-        torch.manual_seed(42)
-        # Baseline: Standard attention - no hardware-specific optimizations
-        # Attention mechanism: scaled dot-product attention
-        
-        hidden_dim = 256
-        num_heads = 8
-        
-        self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
-            num_heads=num_heads,
-            batch_first=True
-        ).to(self.device).eval()
-        
-        # Input sequence
-        batch_size = 4
-        seq_len = 128
-        self.input = torch.randn(batch_size, seq_len, hidden_dim, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Standard attention computation."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.model: Optional[nn.Module] = None
+        self.inputs: Optional[torch.Tensor] = None
+        self.orig_tf32_matmul: Optional[bool] = None
+        self.orig_tf32_cudnn: Optional[bool] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(42)
+        self.orig_tf32_matmul = torch.backends.cuda.matmul.allow_tf32
+        self.orig_tf32_cudnn = torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+        self.model = NaiveAttention(hidden_dim=512, num_heads=8).to(self.device).eval()
+        seq_len = 512
+        self.inputs = torch.randn(4, seq_len, 512, device=self.device, dtype=torch.float32)
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
+        assert self.model is not None and self.inputs is not None
         with nvtx_range("baseline_attention", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Standard attention (scaled dot-product attention)
-                # Does not leverage hardware-specific optimizations
-                # Attention mechanism: QK^T / sqrt(d_k) then softmax then V
-                output, _ = self.model(self.input, self.input, self.input)
-                
-                # Baseline: Attention without hardware optimizations
-                # Standard computation path (not optimized for specific hardware)
+                _ = self.model(self.inputs)
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
+        if self.orig_tf32_matmul is not None:
+            torch.backends.cuda.matmul.allow_tf32 = self.orig_tf32_matmul
+        if self.orig_tf32_cudnn is not None:
+            torch.backends.cudnn.allow_tf32 = self.orig_tf32_cudnn
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=20, warmup=3)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.model is None or self.inputs is None:
+            return "Model or inputs not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineAttentionBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=10, warmup=2),
     )
-    benchmark = BaselineAttentionBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: attention")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()
+    result = harness.benchmark(get_benchmark())
+    timing = result.timing.mean_ms if result.timing else 0.0
+    print(f"\nBaseline attention latency: {timing:.3f} ms")

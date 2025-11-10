@@ -67,6 +67,10 @@ class BaselineMemoryProfilingBenchmark(Benchmark):
     def setup(self) -> None:
         """Setup: Initialize model and data."""
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            enable_tf32()
         torch.cuda.reset_peak_memory_stats()
         
         # Baseline model without memory optimization
@@ -119,7 +123,9 @@ class BaselineMemoryProfilingBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        return None and self.peak_memory_mb > 0
+        if self.peak_memory_mb <= 0:
+            return "Peak memory not recorded"
+        return None
 
 
 def get_benchmark() -> Benchmark:
@@ -136,4 +142,4 @@ if __name__ == "__main__":
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Memory Profiling: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(f"Peak Memory: {benchmark.peak_memory_mb:.2f} MB")
-
+from common.python.compile_utils import enable_tf32

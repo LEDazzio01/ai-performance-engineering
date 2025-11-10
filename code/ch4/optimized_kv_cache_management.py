@@ -22,6 +22,7 @@ import torch.distributed as dist
 
 from common.python.compile_utils import enable_tf32
 from common.python.compile_utils import compile_model
+from ch4.gpu_requirements import skip_if_insufficient_gpus
 
 from typing import Optional, Tuple
 
@@ -118,6 +119,7 @@ class OptimizedKVCacheManagementBenchmark:
     
     def setup(self) -> None:
         """Setup: Initialize model and pre-allocated KV cache."""
+        skip_if_insufficient_gpus()
         
         # Enable TF32 for faster matmul on Ampere+ GPUs
         enable_tf32()

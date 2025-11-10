@@ -22,17 +22,27 @@ __global__ void hbm3e_peak_copy(const float4* __restrict__ src,
     size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = gridDim.x * blockDim.x;
     
-    // Load 4x float4 per iteration = 64 bytes per thread
-    for (size_t i = tid * 4; i < n; i += stride * 4) {
-        float4 data0 = src[i];
-        float4 data1 = src[i + 1];
-        float4 data2 = src[i + 2];
-        float4 data3 = src[i + 3];
-        
-        dst[i] = data0;
-        dst[i + 1] = data1;
-        dst[i + 2] = data2;
-        dst[i + 3] = data3;
+    for (size_t base = tid * 4; base < n; base += stride * 4) {
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            size_t idx = base + j;
+            if (idx >= n) {
+                break;
+            }
+#if __CUDA_ARCH__ >= 900
+            float x, y, z, w;
+            asm volatile(
+                "ld.global.cs.v4.f32 {%0, %1, %2, %3}, [%4];\n"
+                : "=f"(x), "=f"(y), "=f"(z), "=f"(w)
+                : "l"(src + idx));
+            asm volatile(
+                "st.global.cs.v4.f32 [%0], {%1, %2, %3, %4};\n"
+                :
+                : "l"(dst + idx), "f"(x), "f"(y), "f"(z), "f"(w));
+#else
+            dst[idx] = src[idx];
+#endif
+        }
     }
 }
 
@@ -74,4 +84,3 @@ int main() {
     
     return 0;
 }
-

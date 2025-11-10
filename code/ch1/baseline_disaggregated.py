@@ -23,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -42,8 +43,13 @@ class BaselineDisaggregatedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.prefill_input = None
-        self.decode_input = None
+        self.prefill_inputs = None
+        self.decode_inputs = None
+        self.workload = WORKLOAD
+        self.batch_size = self.workload.batch_size
+        self.tokens_per_step = self.workload.tokens_per_step
+        self.decode_steps = max(1, self.workload.decode_steps // 2)
+        self.prefill_chunks = max(2, self.workload.prefill_chunks // 2)
     
     def setup(self) -> None:
         """Setup: Initialize model and inputs."""
@@ -57,11 +63,19 @@ class BaselineDisaggregatedBenchmark(Benchmark):
             nn.Linear(512, 256),
         ).to(self.device).eval()
         
-        # Simulate prefill (long context) and decode (single token) inputs
-        # Match optimized scale for fair comparison
-        self.prefill_input = torch.randn(8, 4096, 256, device=self.device)  # Match optimized scale
-        self.decode_input = torch.randn(8, 1, 256, device=self.device)  # Single token
-        torch.cuda.synchronize()
+        # Simulate prefill (long context) and decode inputs using a shared
+        # workload so every iteration replays the same compute footprint.
+        token_dim = 256
+        samples_per_batch = self.batch_size * self.tokens_per_step
+        torch.manual_seed(42)
+        self.prefill_inputs = torch.randn(
+            self.prefill_chunks, samples_per_batch, token_dim, device=self.device
+        )
+        self.decode_inputs = torch.randn(
+            self.decode_steps, samples_per_batch, token_dim, device=self.device
+        )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Monolithic inference."""
@@ -76,41 +90,35 @@ class BaselineDisaggregatedBenchmark(Benchmark):
 
         with nvtx_range("baseline_disaggregated", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Monolithic inference
-                # Prefill and decode phases share same resources
-                # This causes interference - prefill blocks decode and vice versa
-                # Disaggregated inference separates these phases for better efficiency
-                
-                # Process prefill (long context) - competes with decode for resources
-                prefill_output = self.model(self.prefill_input)
-                
-                # Process decode (autoregressive) - competes with prefill for resources
-                decode_output = self.model(self.decode_input)
-                
-                # Baseline: No separation - both phases interfere with each other
-                # This leads to poor GPU utilization and latency spikes
-                _ = prefill_output.sum() + decode_output.sum()
+                for step in range(self.decode_steps):
+                    prefill_batch = self.prefill_inputs[step % self.prefill_chunks]
+                    decode_batch = self.decode_inputs[step]
+                    prefill_output = self.model(prefill_batch)
+                    decode_output = self.model(decode_batch)
+                    _ = prefill_output.sum() + decode_output.sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.prefill_input = None
-        self.decode_input = None
+        self.prefill_inputs = None
+        self.decode_inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=10,
-            warmup=2,
+            iterations=5,
+            warmup=1,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.prefill_input is None or self.decode_input is None:
+        if self.prefill_inputs is None or self.decode_inputs is None:
             return "Inputs not initialized"
         return None
 

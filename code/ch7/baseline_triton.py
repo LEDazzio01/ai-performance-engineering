@@ -43,7 +43,8 @@ class BaselineTritonBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.micro_batches = None
+        self._checksum = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without Triton."""
@@ -58,7 +59,12 @@ class BaselineTritonBenchmark(Benchmark):
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        torch.manual_seed(0)
+        self.micro_batches = [
+            torch.randn(8, 1024, device=self.device)
+            for _ in range(64)
+        ]
+        self.input = self.micro_batches[0]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -72,16 +78,18 @@ class BaselineTritonBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_triton", enable=enable_nvtx):
+        with nvtx_range("triton", enable=enable_nvtx):
             with torch.no_grad():
                 # Baseline: Standard PyTorch operations (no Triton)
                 # Does not use Triton DSL for kernel optimization
                 # Standard computation path without Triton optimizations
-                output = self.model(self.input)
-                
-                # Baseline: No Triton benefits
-                # Standard PyTorch operations (not optimized with Triton)
-                _ = output.sum()
+                total = 0.0
+                assert self.micro_batches is not None
+                for shard in self.micro_batches:
+                    result = self.model(shard)
+                    total += float(result.sum().item())
+                    torch.cuda.synchronize()
+                self._checksum = total
 
     
     def teardown(self) -> None:
@@ -101,8 +109,8 @@ class BaselineTritonBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if not self.micro_batches:
+            return "Input batches not initialized"
         return None
 
 

@@ -44,6 +44,10 @@ class BaselineBankConflictsBenchmark(Benchmark):
         self.data = None
         self.output = None
         self.N = 1_000_000
+        self.bank_width = 32
+        self.conflict_sweeps = 12
+        self.tile_elems = 0
+        self.conflict_indices = None
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
@@ -54,6 +58,12 @@ class BaselineBankConflictsBenchmark(Benchmark):
         
         self.data = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.tile_elems = (self.N // self.bank_width) * self.bank_width
+        if self.tile_elems == 0:
+            raise RuntimeError("Dataset too small for bank-conflict simulation")
+        stride = 17  # coprime with 32 -> forces conflicts
+        base_idx = torch.arange(self.bank_width, device=self.device)
+        self.conflict_indices = (base_idx * stride % self.bank_width).view(1, -1)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -68,17 +78,22 @@ class BaselineBankConflictsBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_bank_conflicts", enable=enable_nvtx):
-            # Baseline: Bank conflicts
-            # Access pattern causes bank conflicts (stride=32 causes conflicts)
-            # Bank conflicts: multiple threads access same bank, causing serialization
-            stride = 32  # Causes bank conflicts
-            indices = torch.arange(0, self.N, stride, device=self.device)
-            self.output[indices] = self.data[indices] * 2.0
-            
-            # Baseline: Bank conflicts issues
-            # - Multiple threads access same memory bank
-            # - Serialized memory access (inefficient)
-            # - Reduced shared memory bandwidth
+            # Baseline: deliberately replays the same tile through conflict-heavy gathers.
+            active_elems = self.tile_elems
+            rows = active_elems // self.bank_width
+            data_view = self.data[:active_elems].view(rows, self.bank_width)
+            out_view = self.output[:active_elems].view(rows, self.bank_width)
+            gather_indices = self.conflict_indices.expand(rows, -1)
+
+            staging = data_view
+            for sweep in range(self.conflict_sweeps):
+                conflict_tile = torch.gather(staging, 1, gather_indices)
+                neighbor = torch.roll(conflict_tile, shifts=1, dims=1)
+                staging = conflict_tile * 1.0002 + neighbor * 0.5
+
+            out_view.copy_(staging)
+            if active_elems < self.N:
+                self.output[active_elems:] = self.data[active_elems:] * 2.0
 
     
     def teardown(self) -> None:
@@ -127,4 +142,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

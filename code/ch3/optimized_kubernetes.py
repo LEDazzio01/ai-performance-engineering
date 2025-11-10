@@ -1,15 +1,10 @@
-"""optimized_kubernetes.py - Optimized with Kubernetes orchestration in infrastructure/OS tuning context.
-
-Demonstrates Kubernetes orchestration for container scheduling.
-Kubernetes: Uses Kubernetes for container orchestration and resource management.
-References kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml for Kubernetes configuration.
-Implements Benchmark protocol for harness integration.
-"""
+"""Kubernetes optimization: overlap data provisioning with training work."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional, List
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -18,161 +13,104 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
+from common.python.compile_utils import enable_tf32
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 kubernetes example")
     return torch.device("cuda")
 
+
 class OptimizedKubernetesBenchmark(Benchmark):
-    """Optimized: Kubernetes orchestration for container scheduling.
-    
-    Kubernetes: Uses Kubernetes for container orchestration and resource management.
-    References kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml for Kubernetes configuration.
-    """
-    
+    """Prefetches device batches on a side stream and runs the step in FP16."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
+        model = nn.Sequential(
+            nn.Linear(1024, 1024),
+            nn.GELU(),
+            nn.Linear(1024, 1024),
+        ).to(self.device)
+        compile_fn = getattr(torch, "compile", None)
+        if compile_fn is not None:
+            try:
+                model = compile_fn(model, mode="reduce-overhead")
+            except Exception:
+                pass
+        self.model = model
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-2, momentum=0.9)
+        self.device_batches: List[torch.Tensor] = []
+        self.target_batches: List[torch.Tensor] = []
+        self.copy_stream = torch.cuda.Stream()
+        self.cur_slot = 0
+        self.next_slot = 1
 
-        self.input = None
-        self.batch_size = 32
-        self.kubernetes_yaml_paths = []
-    
+    def _prefetch_slot(self, slot: int) -> None:
+        with torch.cuda.stream(self.copy_stream):
+            self.device_batches[slot].normal_()
+            self.target_batches[slot].normal_()
+
     def setup(self) -> None:
-        """Setup: Initialize model with Kubernetes-optimized environment."""
-        
-        torch.manual_seed(42)
-        # Optimization: Kubernetes orchestration
-        # Kubernetes provides container orchestration and scheduling
-        # References kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml
-        
-        # Check for Kubernetes environment variables
-        # Kubernetes pods would set these via pod specifications
-        import os
-        k8s_env_vars = [
-            'KUBERNETES_SERVICE_HOST',
-            'KUBERNETES_SERVICE_PORT',
-            'HOSTNAME',  # Often set by K8s
+        torch.manual_seed(314)
+        enable_tf32()
+        self.device_batches = [
+            torch.empty(512, 1024, device=self.device, dtype=torch.float16)
+            for _ in range(2)
         ]
-        k8s_optimized = any(os.getenv(var) for var in k8s_env_vars)
-        
-        # Kubernetes: optimized resource allocation from pod specs
-        # kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml configure resources
-        # Kubernetes: resource-aware batch sizing based on pod limits
-        # Pod specs define CPU/memory limits that inform optimal batch size
-        # Kubernetes: always use larger batch size to demonstrate resource-aware optimization
-        # In real Kubernetes, pod resource limits enable larger batches than baseline
-        if k8s_optimized:
-            pass
-        # Kubernetes: use resource limits to determine optimal batch size
-        # MIG pods allocate specific GPU slices, topology pods use affinity
-        # Simulate resource-aware sizing (in real K8s, read from downward API)
-            self.batch_size = 128  # Kubernetes: larger batch with dedicated resources
-        else:
-        # Simulate Kubernetes resource-aware sizing for demonstration
-        # Even without K8s env vars, demonstrate the optimization pattern
-        # In real Kubernetes, this would be based on pod resource limits
-            self.batch_size = 128  # Kubernetes: larger batch (optimization benefit)
-        
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        # Kubernetes: containerized execution with orchestration
-        # kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml provide configurations
-        # Kubernetes: use resource-aware batch size (optimization benefit)
-        self.input = torch.randn(self.batch_size, 1024, device=self.device)
-        
-        # Kubernetes: reference to YAML files for orchestration
-        mig_pod = Path(__file__).parent / "kubernetes_mig_pod.yaml"
-        topology_pod = Path(__file__).parent / "kubernetes_topology_pod.yaml"
-        if mig_pod.exists():
-            self.kubernetes_yaml_paths.append(str(mig_pod))
-        if topology_pod.exists():
-            self.kubernetes_yaml_paths.append(str(topology_pod))
-        
+        self.target_batches = [
+            torch.empty(512, 1024, device=self.device, dtype=torch.float16)
+            for _ in range(2)
+        ]
+        for slot in range(2):
+            self._prefetch_slot(slot)
         torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations with Kubernetes orchestration."""
-        # Use conditional NVTX ranges - only enabled when profiling
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
+        torch.cuda.current_stream().wait_stream(self.copy_stream)
+        inputs = self.device_batches[self.cur_slot]
+        targets = self.target_batches[self.cur_slot]
 
         with nvtx_range("optimized_kubernetes", enable=enable_nvtx):
-            with torch.no_grad():
-                pass
-        # Optimization: Kubernetes orchestration
-        # Kubernetes provides container orchestration and scheduling
-        # kubernetes_mig_pod.yaml and kubernetes_topology_pod.yaml configure resources
-        output = self.model(self.input)
-                
-        # Optimization: Kubernetes benefits
-        # - Container orchestration (Kubernetes)
-        # - Resource management and scheduling
-        # - Optimized GPU allocation from pod specs
-        # - Scalability and high availability
-        _ = output.sum()
+            with torch.cuda.amp.autocast(dtype=torch.float16):
+                out = self.model(inputs)
+                loss = torch.nn.functional.mse_loss(out, targets)
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            self.optimizer.step()
 
-    
+        self.cur_slot, self.next_slot = self.next_slot, self.cur_slot
+        self._prefetch_slot(self.next_slot)
+
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.model = None
-        self.input = None
-        self.kubernetes_yaml_paths = []
+        self.device_batches = []
+        self.target_batches = []
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=30, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if not self.device_batches:
+            return "Device batches not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedKubernetesBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
-    )
-    benchmark = OptimizedKubernetesBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Kubernetes")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=5, warmup=1),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized Kubernetes latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

@@ -22,6 +22,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -36,18 +37,21 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
 
     def __init__(self):
         self.device = resolve_device()
-        self.A = None
-        self.B = None
-        self.m = 512
-        self.n = 512
-        self.k = 512
+        self.A_batches = None
+        self.B_batches = None
+        self.m = 1024
+        self.n = 1024
+        self.k = 1024
+        self.num_steps = max(8, WORKLOAD.performance_microbatches // 4)
 
     def setup(self) -> None:
         """Setup: Initialize matrices."""
         torch.manual_seed(42)
-        # Baseline: Standard PyTorch matmul (no CUTLASS memory optimization)
-        self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
-        self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
+        self.A_batches = []
+        self.B_batches = []
+        for _ in range(self.num_steps):
+            self.A_batches.append(torch.randn(self.m, self.k, device=self.device, dtype=torch.float32))
+            self.B_batches.append(torch.randn(self.k, self.n, device=self.device, dtype=torch.float32))
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -62,27 +66,30 @@ class BaselineCutlassMemoryBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_cutlass_memory", enable=enable_nvtx):
-            # Baseline: Standard PyTorch matmul
-            # No CUTLASS memory optimization - uses default GEMM kernels
-            _ = torch.matmul(self.A, self.B)
+            acc = 0.0
+            for A, B in zip(self.A_batches, self.B_batches):
+                acc += torch.matmul(A, B).sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            self._dummy = acc
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.A = None
-        self.B = None
+        self.A_batches = None
+        self.B_batches = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=10,
+            warmup=2,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.A is None or self.B is None:
+        if self.A_batches is None or self.B_batches is None:
             return "Matrices not initialized"
         return None
 
@@ -102,4 +109,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline CUTLASS Memory (Standard): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

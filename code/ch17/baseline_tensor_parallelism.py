@@ -39,7 +39,8 @@ class BaselineTensorParallelismBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input_data = None
-        self.batch_size = 8
+        self.batch_size = 256
+        self.hidden_size = 2048
     
     def setup(self) -> None:
         """Setup: Initialize model on single GPU."""
@@ -48,14 +49,14 @@ class BaselineTensorParallelismBenchmark(Benchmark):
         # Tensor parallelism splits tensors across multiple GPUs
         # This baseline processes entire tensors on one GPU
         self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-        ).to(self.device).eval()
+            nn.Linear(self.hidden_size, self.hidden_size * 2),
+            nn.GELU(),
+            nn.Linear(self.hidden_size * 2, self.hidden_size * 2),
+            nn.GELU(),
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
+        ).to(self.device, dtype=torch.float32).eval()
         
-        self.input_data = torch.randn(self.batch_size, 256, device=self.device)
+        self.input_data = torch.randn(self.batch_size, self.hidden_size, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -107,4 +108,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

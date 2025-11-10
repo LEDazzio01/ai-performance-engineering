@@ -20,6 +20,7 @@ import torch.nn as nn
 
 from typing import Optional
 
+from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
@@ -41,12 +42,12 @@ class OptimizedRooflineBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.input = None
+        self.compiled_model = None
+        self.inputs = None
         self.roofline_data = None
+        self.hidden_dim = 1024
+        self.batch_size = 256
+        self.micro_batches = 4
     
     def setup(self) -> None:
         """Setup: Initialize model with roofline analysis."""
@@ -60,13 +61,19 @@ class OptimizedRooflineBenchmark(Benchmark):
         # Identifies compute-bound vs memory-bound operations
         # Guides optimization strategy
         
-        self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
+        enable_tf32()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        self.model = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+        ).to(self.device).eval()
+        self.compiled_model = torch.compile(self.model, mode="reduce-overhead")
+        
+        self.inputs = [
+            torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+            for _ in range(self.micro_batches)
+        ]
         
         # Roofline data for analysis
         self.roofline_data = {
@@ -95,7 +102,10 @@ class OptimizedRooflineBenchmark(Benchmark):
                 end_event = torch.cuda.Event(enable_timing=True)
                 
                 start_event.record()
-                output = self.model(self.input)
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    for micro_input in self.inputs:
+                        output = self.compiled_model(micro_input)
+                        _ = output.sum()
                 end_event.record()
                 torch.cuda.synchronize()
                 
@@ -103,12 +113,12 @@ class OptimizedRooflineBenchmark(Benchmark):
                 
                 # Estimate arithmetic intensity (simplified)
                 # Arithmetic intensity = FLOPs / Bytes accessed
-                input_bytes = self.input.numel() * self.input.element_size()
+                input_bytes = sum(inp.numel() * inp.element_size() for inp in self.inputs)
                 output_bytes = output.numel() * output.element_size()
                 total_bytes = input_bytes + output_bytes
                 
                 # Estimate FLOPs (simplified)
-                flops = self.input.size(0) * self.input.size(1) * 2048 * 2
+                flops = self.batch_size * self.hidden_dim * (self.hidden_dim * 2) * 2 * self.micro_batches
                 arithmetic_intensity = flops / total_bytes if total_bytes > 0 else 0.0
                 
                 # Roofline analysis: determine bottleneck
@@ -133,13 +143,12 @@ class OptimizedRooflineBenchmark(Benchmark):
                 # - Guides optimization strategy
                 # - Measures arithmetic intensity
                 # - Performance-based optimization decisions
-                _ = output.sum()
-
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.compiled_model = None
+        self.inputs = None
         self.roofline_data = None
         torch.cuda.empty_cache()
     
@@ -152,10 +161,10 @@ class OptimizedRooflineBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
+        if self.model is None or self.compiled_model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if not self.inputs:
+            return "Inputs not initialized"
         return None
 
 def get_benchmark() -> Benchmark:
@@ -182,4 +191,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

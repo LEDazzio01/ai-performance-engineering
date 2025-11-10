@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import os
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,9 +18,10 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -27,6 +29,15 @@ from common.python.benchmark_harness import (
     BenchmarkHarness,
     BenchmarkMode,
 )
+
+from ch13.kv_cache_workload import get_workload
+
+WORKLOAD = get_workload()
+SMOKE_ENV_FLAG = "BENCHMARK_SMOKE_TEST"
+
+
+def is_smoke_test() -> bool:
+    return os.environ.get(SMOKE_ENV_FLAG) == "1"
 
 
 def resolve_device() -> torch.device:
@@ -112,9 +123,7 @@ class SimpleAttentionLayer(nn.Module):
             k = torch.cat([cached_k, k], dim=2)
             v = torch.cat([cached_v, v], dim=2)
         
-        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        attn = torch.softmax(scores, dim=-1)
-        out = torch.matmul(attn, v)
+        out = F.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_dim)
         return self.proj(out)
 
@@ -127,13 +136,15 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
         self.model = None
         self.kv_cache = None
         self.inputs = None
-        self.max_seq_len = 256
-        self.num_layers = 2
-        self.num_heads = 4
-        self.head_dim = 64
-        self.hidden_dim = self.num_heads * self.head_dim
-        self.batch_size = 1
-        self.sequence_lengths = [32, 64]
+        self.workload = WORKLOAD
+        self.max_seq_len = self.workload.max_seq_len
+        self.num_layers = self.workload.num_layers
+        self.num_heads = self.workload.num_heads
+        self.head_dim = self.workload.head_dim
+        self.hidden_dim = self.workload.hidden_dim
+        self.batch_size = self.workload.batch_size
+        self.smoke_test = is_smoke_test()
+        self.sequence_lengths = list(self.workload.lengths_for_mode(self.smoke_test))
     
     def setup(self) -> None:
         """Setup: Initialize model and KV cache."""
@@ -141,7 +152,7 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
         
         layers = []
         for _ in range(self.num_layers):
-            layers.append(SimpleAttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=torch.float16))
+            layers.append(SimpleAttentionLayer(self.hidden_dim, self.num_heads, self.head_dim, dtype=self.workload.dtype))
         self.model = nn.Sequential(*layers).to(self.device).eval()
         
         self.kv_cache = NaiveKVCache(
@@ -149,13 +160,13 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
             num_layers=self.num_layers,
             num_heads=self.num_heads,
             head_dim=self.head_dim,
-            dtype=torch.float16,
+            dtype=self.workload.dtype,
             device=self.device
         )
         
         self.inputs = []
         for seq_len in self.sequence_lengths:
-            x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=torch.float16)
+            x = torch.randn(self.batch_size, seq_len, self.hidden_dim, device=self.device, dtype=self.workload.dtype)
             self.inputs.append(x)
         
         torch.cuda.synchronize()
@@ -192,10 +203,14 @@ class BaselineKVCacheNaiveBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
+            iterations=1,
+            warmup=0,
             enable_memory_tracking=False,
             enable_profiling=False,
+            measurement_timeout_seconds=300,
+            warmup_timeout_seconds=120,
+            setup_timeout_seconds=120,
+            timeout_multiplier=1.0,
         )
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
@@ -217,4 +232,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Naive KV Cache: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

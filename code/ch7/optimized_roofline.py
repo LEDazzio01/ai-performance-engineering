@@ -51,29 +51,36 @@ class OptimizedRooflineBenchmark(Benchmark):
     def setup(self) -> None:
         """Setup: Initialize model with roofline analysis."""
         
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
+
         torch.manual_seed(42)
-        # Optimization: Roofline analysis
-        # Identifies compute-bound vs memory-bound operations
-        # Guides optimization strategy
-        
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
-            nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(1024, 2048, bias=False),
+            nn.GELU(),
+            nn.Linear(2048, 1024, bias=False),
         ).to(self.device).eval()
-        
-        self.input = torch.randn(32, 1024, device=self.device)
-        
-        # Roofline data for analysis
+
+        self.batch = 512
+        host_activation = torch.randn(self.batch, 1024)
+        self.staging = host_activation.pin_memory()
+        self.host_pinned = self.staging
+        self.device_input = host_activation.to(self.device, non_blocking=True)
+        self.input = self.device_input
+
+        try:
+            self.compiled = torch.compile(self.model, mode="max-autotune", fullgraph=True)
+        except Exception:
+            self.compiled = self.model
+
         self.roofline_data = {
-            'compute_bound': False,
-            'memory_bound': True,
-            'arithmetic_intensity': 0.0,
+            "compute_bound": False,
+            "memory_bound": True,
+            "arithmetic_intensity": 0.0,
         }
+        self._ridge_point = 4.0  # FLOP/byte crossover for this workload
+        self._prefetch_stream = torch.cuda.Stream()
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -88,52 +95,37 @@ class OptimizedRooflineBenchmark(Benchmark):
 
         with nvtx_range("optimized_roofline", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: Roofline analysis
-                # Measure execution time and estimate arithmetic intensity
                 torch.cuda.synchronize()
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
-                
+
                 start_event.record()
-                output = self.model(self.input)
+                output = self.compiled(self.device_input)
                 end_event.record()
                 torch.cuda.synchronize()
-                
+
                 elapsed_ms = start_event.elapsed_time(end_event)
-                
-                # Estimate arithmetic intensity (simplified)
-                # Arithmetic intensity = FLOPs / Bytes accessed
-                input_bytes = self.input.numel() * self.input.element_size()
-                output_bytes = output.numel() * output.element_size()
-                total_bytes = input_bytes + output_bytes
-                
-                # Estimate FLOPs (simplified)
-                flops = self.input.size(0) * self.input.size(1) * 2048 * 2
-                arithmetic_intensity = flops / total_bytes if total_bytes > 0 else 0.0
-                
-                # Roofline analysis: determine bottleneck
-                is_memory_bound = arithmetic_intensity < 1.0
-                self.roofline_data['compute_bound'] = not is_memory_bound
-                self.roofline_data['memory_bound'] = is_memory_bound
-                self.roofline_data['arithmetic_intensity'] = arithmetic_intensity
-                self.roofline_data['elapsed_ms'] = elapsed_ms
-                
-                # Use roofline analysis to guide optimization
+                bytes_accessed = self.device_input.numel() * self.device_input.element_size()
+                bytes_accessed += output.numel() * output.element_size()
+                flops = 2.0 * self.device_input.size(0) * self.device_input.size(1) * 2048 * 2
+                arithmetic_intensity = flops / bytes_accessed if bytes_accessed else 0.0
+                is_memory_bound = arithmetic_intensity < self._ridge_point
+
+                self.roofline_data["compute_bound"] = not is_memory_bound
+                self.roofline_data["memory_bound"] = is_memory_bound
+                self.roofline_data["arithmetic_intensity"] = arithmetic_intensity
+                self.roofline_data["elapsed_ms"] = elapsed_ms
+
                 if is_memory_bound:
-                    # Memory-bound: optimize memory access patterns
-                    # Roofline analysis guides memory optimization
-                    pass
+                    fused = output
+                    for _ in range(2):
+                        fused = self.compiled(fused)
+                    torch.cuda.synchronize()
+                    self.device_input.copy_(fused)
                 else:
-                    # Compute-bound: optimize compute operations
-                    # Roofline analysis guides compute optimization
-                    pass
-                
-                # Optimization: Roofline analysis benefits
-                # - Identifies compute vs memory bottlenecks
-                # - Guides optimization strategy
-                # - Measures arithmetic intensity
-                # - Performance-based optimization decisions
-                _ = output.sum()
+                    with torch.cuda.stream(self._prefetch_stream):
+                        self.device_input.copy_(self.host_pinned, non_blocking=True)
+                    torch.cuda.current_stream().wait_stream(self._prefetch_stream)
 
     
     def teardown(self) -> None:

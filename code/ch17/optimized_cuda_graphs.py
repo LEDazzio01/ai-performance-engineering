@@ -17,7 +17,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from typing import Optional, List
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
@@ -35,54 +35,42 @@ def resolve_device() -> torch.device:
 
 class OptimizedCudaGraphsBenchmark(Benchmark):
     """Optimized: CUDA graphs for reduced launch overhead."""
-    
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input_data = None
-        self.static_input = None
+        self.pipeline: Optional[nn.Sequential] = None
+        self.static_input: Optional[torch.Tensor] = None
         self._graph_callable = None
-        self.batch_size = 8
-    
+        self.batch_size = 16
+        self.hidden_dim = 256
+        self.inputs: Optional[List[torch.Tensor]] = None
+
     def setup(self) -> None:
         """Setup: Initialize model and capture CUDA graph."""
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             enable_tf32()
-        
+
         torch.manual_seed(42)
-        # Optimization: CUDA graphs capture and replay sequences of operations
-        # This reduces launch overhead by eliminating repeated kernel launch setup
-        # CUDA graphs are especially beneficial for inference workloads with fixed shapes
-        self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-        ).to(self.device).eval()
-        
-        # Create static input for graph capture
-        self.static_input = torch.randn(self.batch_size, 256, device=self.device)
-        
+        layers = []
+        for _ in range(4):
+            layers.append(nn.Linear(self.hidden_dim, self.hidden_dim))
+            layers.append(nn.ReLU())
+        self.pipeline = nn.Sequential(*layers).to(self.device).eval()
+        self.static_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+
         if hasattr(torch.cuda, "make_graphed_callables"):
-            try:
-                self._graph_callable = torch.cuda.make_graphed_callables(
-                    self.model, (self.static_input,)
-                )
-            except RuntimeError as exc:
-                raise RuntimeError(
-                    "Failed to capture CUDA graph for optimized CUDA graphs benchmark."
-                ) from exc
+            self._graph_callable = torch.cuda.make_graphed_callables(self.pipeline, (self.static_input,))
         else:
             self._graph_callable = None
-    
-        # Create input for actual execution
-        self.input_data = torch.randn(self.batch_size, 256, device=self.device)
+
+        self.inputs = [
+            torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+            for _ in range(8)
+        ]
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
         """Benchmark: CUDA graph replay."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
@@ -90,35 +78,37 @@ class OptimizedCudaGraphsBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        # Optimization: Replay CUDA graph instead of launching kernels separately
-        # CUDA graphs reduce launch overhead by replaying captured sequences
+        if self.pipeline is None or self.static_input is None or self.inputs is None:
+            raise RuntimeError("CUDA graph benchmark not initialized")
+
         with nvtx_range("optimized_cuda_graphs", enable=enable_nvtx):
-            # Copy input to static input buffer
-            self.static_input.copy_(self.input_data)
-            if self._graph_callable is not None:
-                self._graph_callable(self.static_input)
-            else:
-                _ = self.model(self.static_input)
+            for inp in self.inputs:
+                self.static_input.copy_(inp)
+                if self._graph_callable is not None:
+                    self._graph_callable(self.static_input)
+                else:
+                    with torch.no_grad():
+                        _ = self.pipeline(self.static_input)
         torch.cuda.synchronize()
-    
+
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.model = None
-        self.input_data = None
+        self.pipeline = None
+        self.inputs = None
         self.static_input = None
         self._graph_callable = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=12,
+            warmup=2,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
+        if self.pipeline is None:
             return "Model not initialized"
         if self._graph_callable is None:
             return "CUDA graph callable not initialized"

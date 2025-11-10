@@ -22,6 +22,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -36,16 +37,19 @@ class BaselineNvlinkBenchmark(Benchmark):
 
     def __init__(self):
         self.device = resolve_device()
-        self.host_data = None
-        self.device_data = None
-        self.N = 10_000_000
+        self.host_chunks = None
+        self.device_buffer = None
+        self.N = 16_000_000
+        self.num_chunks = max(16, WORKLOAD.prefill_chunks * 2)
 
     def setup(self) -> None:
         """Setup: Initialize host and device memory."""
         torch.manual_seed(42)
-        # Baseline: Standard host-device transfer without NVLink
-        self.host_data = torch.randn(self.N, dtype=torch.float32)
-        self.device_data = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        chunk = self.N // self.num_chunks
+        self.host_chunks = [
+            torch.randn(chunk, dtype=torch.float32) for _ in range(self.num_chunks)
+        ]
+        self.device_buffer = torch.empty(chunk, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -60,27 +64,33 @@ class BaselineNvlinkBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_nvlink", enable=enable_nvtx):
-            # Baseline: Standard PCIe transfer (no NVLink)
-            self.device_data = self.host_data.to(self.device)
+            # Baseline: Allocate-immediately + synchronous copies (no NVLink/pinned memory).
+            total = 0.0
+            for host_tensor in self.host_chunks:
+                device_tensor = host_tensor.to(self.device, non_blocking=False)
+                total += device_tensor.sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            self._checksum = total
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.host_data = None
-        self.device_data = None
+        self.host_chunks = None
+        self.device_buffer = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=20,
+            warmup=3,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.device_data is None:
-            return "Device tensor not initialized"
+        if self.host_chunks is None:
+            return "Host tensors not initialized"
         return None
 
 

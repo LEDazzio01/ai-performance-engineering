@@ -42,17 +42,31 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.cpu_data = None
+        self.cpu_buffers = None
+        self.device_buffers = None
+        self.copy_streams = None
+        self.compute_stream = None
+        self.copy_events = None
         self.gpu_data = None
+        self.active_slot = 0
         self.N = 10_000_000
     
     def setup(self) -> None:
         """Setup: Initialize CPU tensor with pinned memory."""
         torch.manual_seed(42)
         
-        # Optimized: Pinned memory - page-locked CPU memory
-        # pin_memory=True enables faster CPU-GPU transfers via DMA
-        self.cpu_data = torch.randn(self.N, dtype=torch.float32, pin_memory=True)
+        # Optimized: double-buffer pinned memory with overlapping copy/compute streams
+        self.cpu_buffers = [
+            torch.randn(self.N, dtype=torch.float32, pin_memory=True)
+            for _ in range(2)
+        ]
+        self.device_buffers = [
+            torch.empty(self.N, device=self.device, dtype=torch.float32)
+            for _ in range(2)
+        ]
+        self.copy_streams = [torch.cuda.Stream() for _ in range(2)]
+        self.compute_stream = torch.cuda.Stream()
+        self.copy_events = [torch.cuda.Event(blocking=False) for _ in range(2)]
         self.gpu_data = None
         torch.cuda.synchronize()
     
@@ -64,15 +78,33 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range("optimized_pinned_memory_pinned", enable=enable_nvtx):
-            # Optimized: Transfer pinned memory to GPU
-            # This is faster because it uses DMA (Direct Memory Access)
-            # Non-blocking transfer can overlap with computation
-            self.gpu_data = self.cpu_data.to(self.device, non_blocking=True)
+            slot = self.active_slot
+            host = self.cpu_buffers[slot]
+            device_buf = self.device_buffers[slot]
+            copy_stream = self.copy_streams[slot]
+            event = self.copy_events[slot]
+
+            # Start async H2D copy on dedicated stream
+            with torch.cuda.stream(copy_stream):
+                device_buf.copy_(host, non_blocking=True)
+                event.record(copy_stream)
+
+            # Overlap compute on previous buffer while copy runs
+            with torch.cuda.stream(self.compute_stream):
+                self.compute_stream.wait_event(event)
+                device_buf.mul_(1.0001).add_(0.0001)
+
+            self.gpu_data = device_buf
+            self.active_slot = 1 - slot
             torch.cuda.synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.cpu_data = None
+        self.cpu_buffers = None
+        self.device_buffers = None
+        self.copy_streams = None
+        self.compute_stream = None
+        self.copy_events = None
         self.gpu_data = None
         torch.cuda.empty_cache()
     
@@ -89,7 +121,7 @@ class OptimizedPinnedMemoryBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.gpu_data is None:
             return "GPU tensor not initialized"
-        if self.cpu_data is None:
+        if not self.cpu_buffers:
             return "CPU tensor not initialized"
         if self.gpu_data.shape[0] != self.N:
             return f"GPU tensor shape mismatch: expected {self.N}, got {self.gpu_data.shape[0]}"
@@ -111,4 +143,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Pinned Memory (Pinned): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

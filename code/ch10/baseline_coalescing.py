@@ -50,6 +50,13 @@ class BaselineCoalescingBenchmark(Benchmark):
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty_like(self.input)
         torch.cuda.synchronize()
+        # Warm up the kernel once so compilation/init costs are amortized.
+        uncoalesced_copy(self.input, self.output, self.stride)
+        torch.cuda.synchronize()
+        torch.manual_seed(42)
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty_like(self.input)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Uncoalesced memory access pattern."""

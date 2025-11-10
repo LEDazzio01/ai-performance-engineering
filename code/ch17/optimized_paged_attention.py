@@ -19,79 +19,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from typing import Optional, List, Tuple
+from typing import Optional
 
 from common.python.compile_utils import enable_tf32
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from common.python.paged_attention import PagedKVCache, PagedAttentionConfig
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch17")
     return torch.device("cuda")
-
-class PagedKVCache:
-    """Paged KV cache - non-contiguous page-based storage."""
-    
-    def __init__(self, page_size: int, num_heads: int, head_dim: int, device: torch.device):
-        self.page_size = page_size
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-        self.device = device
-        self.k_pages: List[torch.Tensor] = []
-        self.v_pages: List[torch.Tensor] = []
-    
-    def _ensure_page(self, pages: List[torch.Tensor], page_idx: int) -> None:
-        """Allocate pages up to the requested index."""
-        while len(pages) <= page_idx:
-            pages.append(
-                torch.zeros(
-                    self.page_size,
-                    self.num_heads,
-                    self.head_dim,
-                    dtype=torch.float16,
-                    device=self.device,
-                )
-            )
-    
-    def write(self, pos: int, k_token: torch.Tensor, v_token: torch.Tensor) -> None:
-        """Write single-token K/V tensors to the cache."""
-        page_idx = pos // self.page_size
-        offset = pos % self.page_size
-        
-        self._ensure_page(self.k_pages, page_idx)
-        self._ensure_page(self.v_pages, page_idx)
-        
-        self.k_pages[page_idx][offset, :, :] = k_token
-        self.v_pages[page_idx][offset, :, :] = v_token
-    
-    def get_kv(self, length: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Get cached K/V tensors up to the requested sequence length."""
-        if not self.k_pages:
-            empty = torch.empty(0, self.num_heads, self.head_dim, device=self.device)
-            return empty, empty
-        
-        k_list: List[torch.Tensor] = []
-        v_list: List[torch.Tensor] = []
-        
-        for pos in range(length):
-            page_idx = pos // self.page_size
-            offset = pos % self.page_size
-            if page_idx >= len(self.k_pages):
-                break
-            k_list.append(self.k_pages[page_idx][offset:offset+1, :, :])
-            v_list.append(self.v_pages[page_idx][offset:offset+1, :, :])
-        
-        if not k_list:
-            empty = torch.empty(0, self.num_heads, self.head_dim, device=self.device)
-            return empty, empty
-        
-        k = torch.cat(k_list, dim=0)
-        v = torch.cat(v_list, dim=0)
-        return k, v
 
 class OptimizedPagedAttentionBenchmark(Benchmark):
     """Optimized: Paged attention for efficient KV cache management.
@@ -132,9 +73,15 @@ class OptimizedPagedAttentionBenchmark(Benchmark):
             self.model = self.model.half()
         self.model.eval()
         
-        # Optimization: Paged KV cache (paged attention)
-        page_size = 16
-        self.kv_cache = PagedKVCache(page_size, self.num_heads, self.head_dim, self.device)
+        cache_config = PagedAttentionConfig(
+            batch_size=self.batch_size,
+            page_size=16,
+            num_heads=self.num_heads,
+            head_dim=self.head_dim,
+            device=self.device,
+            dtype=self.model.in_proj_weight.dtype,
+        )
+        self.kv_cache = PagedKVCache(cache_config)
         
         # Simulate autoregressive generation (single sequence for cache demo)
         input_dtype = next(self.model.parameters()).dtype
@@ -177,25 +124,18 @@ class OptimizedPagedAttentionBenchmark(Benchmark):
                     qkv = qkv.reshape(batch_size, seq_len, 3, self.num_heads, self.head_dim)
                     q, k, v = qkv.unbind(dim=2)  # Each: (batch, seq, num_heads, head_dim)
                     
-                    # Single-token generation per step
-                    q_step = q[0]               # (seq, num_heads, head_dim)
-                    k_token = k[0, 0]           # (num_heads, head_dim)
-                    v_token = v[0, 0]
-                    
-                    self.kv_cache.write(step, k_token, v_token)
+                    q_heads = q.permute(0, 2, 1, 3).contiguous()
+                    self.kv_cache.write(step, k.contiguous(), v.contiguous())
                     
                     k_all, v_all = self.kv_cache.get_kv(step + 1)
                     if k_all.numel() == 0:
                         continue
+                    k_heads = k_all.permute(0, 2, 1, 3).contiguous()
+                    v_heads = v_all.permute(0, 2, 1, 3).contiguous()
                     
-                    # Reshape to (num_heads, seq_len, head_dim)
-                    q_heads = q_step.permute(1, 0, 2).contiguous()
-                    k_heads = k_all.permute(1, 0, 2).contiguous()
-                    v_heads = v_all.permute(1, 0, 2).contiguous()
-                    
-                    scores = torch.matmul(q_heads, k_heads.transpose(-2, -1)) / (self.head_dim ** 0.5)
-                    attn_weights = torch.softmax(scores, dim=-1)
-                    attn_output = torch.matmul(attn_weights, v_heads)
+                    attn_output = torch.nn.functional.scaled_dot_product_attention(
+                        q_heads, k_heads, v_heads, is_causal=False
+                    )
                     _ = attn_output.sum()
 
     

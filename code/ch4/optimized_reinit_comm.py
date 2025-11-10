@@ -17,6 +17,8 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.distributed as dist
 
+from ch4.gpu_requirements import skip_if_insufficient_gpus
+
 try:
     from distributed_helper import setup_single_gpu_env
 except ImportError:
@@ -55,7 +57,7 @@ class OptimizedReinitCommBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize NCCL once."""
-        
+        skip_if_insufficient_gpus()
         setup_single_gpu_env()
         if not dist.is_initialized():
             dist.init_process_group("nccl", init_method="env://")
@@ -77,7 +79,7 @@ class OptimizedReinitCommBenchmark(Benchmark):
 
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        with nvtx_range("optimized_reinit_comm_reuse", enable=enable_nvtx):
+        with nvtx_range("reinit_comm", enable=enable_nvtx):
     # Good pattern: reuse existing NCCL communicator
     # No reinitialization - just perform all-reduce
             dist.all_reduce(self.tensor)

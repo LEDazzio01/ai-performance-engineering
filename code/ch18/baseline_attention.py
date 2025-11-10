@@ -1,4 +1,9 @@
-"""Baseline stream-ordered single-GPU (no distributed)."""
+"""baseline_attention.py - Baseline SDPA without Flash/Flex kernels in advanced attention context.
+
+Demonstrates scaled dot-product attention that disables Flash/FlexAcceleration.
+Attention: Uses math-based SDP kernel which is significantly slower for long contexts.
+Implements Benchmark protocol for harness integration.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,9 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -26,65 +34,89 @@ def resolve_device() -> torch.device:
 
 
 class BaselineAttentionBenchmark(Benchmark):
-    """Baseline: Single-GPU stream-ordered (no distributed computing)."""
+    """Baseline: Math SDP kernel (Flash/Flex disabled)."""
 
     def __init__(self):
         self.device = resolve_device()
+        self.qkv_proj = None
         self.input = None
-        self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.context_length = 4096
+        self.hidden_dim = 512
+        self.num_heads = 8
+        self.batch_size = 4
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: Initialize projections and synthetic workload."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.qkv_proj = (
+            nn.Linear(self.hidden_dim, self.hidden_dim * 3, bias=False)
+            .to(device=self.device, dtype=torch.float16)
+            .eval()
+        )
+        self.input = torch.randn(
+            self.batch_size,
+            self.context_length,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
         torch.cuda.synchronize()
 
-    def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
+    def _matmul_qkv(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Project activations into Q, K, V tensors."""
+        qkv = self.qkv_proj(self.input)
+        qkv = qkv.reshape(
+            self.input.shape[0],
+            self.context_length,
+            3,
+            self.num_heads,
+            self.hidden_dim // self.num_heads,
+        )
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, batch, heads, seq, head_dim)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        return q, k, v
 
+    def benchmark_fn(self) -> None:
+        """Benchmark: Execute SDPA with Flash kernels disabled."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
-        with nvtx_range("baseline_attention", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch17 for full distributed training implementations
-
+        with nvtx_range("attention", enable=enable_nvtx):
+            q, k, v = self._matmul_qkv()
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_mem_efficient=False,
+                enable_math=True,
+            ):
+                _ = F.scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    attn_mask=None,
+                    dropout_p=0.0,
+                    is_causal=True,
+                )
+        torch.cuda.synchronize()
 
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
+        """Teardown: Clean up tensors."""
+        self.qkv_proj = None
         self.input = None
-        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=20,
+            warmup=3,
         )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.output is None:
-            return "Output tensor not initialized"
+        if self.qkv_proj is None or self.input is None:
+            return "Model not initialized"
         return None
 
 
@@ -93,7 +125,7 @@ def get_benchmark() -> Benchmark:
     return BaselineAttentionBenchmark()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
     benchmark = get_benchmark()
@@ -102,5 +134,4 @@ if __name__ == '__main__':
         config=benchmark.get_config()
     )
     result = harness.benchmark(benchmark)
-    print(f"\nBaseline Attention (Single GPU): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(" Note: Single-GPU operation, no distributed computing")
+    print(f"\nBaseline Advanced Attention: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

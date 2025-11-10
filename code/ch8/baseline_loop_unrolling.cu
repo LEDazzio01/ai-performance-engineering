@@ -1,89 +1,65 @@
-// baseline_loop_unrolling.cu -- Original loop with limited ILP (baseline).
+// Baseline loop-unrolling binary: redundant accumulation with limited ILP.
 
 #include <cuda_runtime.h>
 #include <iostream>
+#include <vector>
 
-// Original loop - limited ILP
-__global__ void originalLoop(const float* A, const float* w, float* out, int N) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < N) {
-        float sum = 0.0f;
-        for (int k = 0; k < 4; ++k) {
-            float a = A[idx * 4 + k];
-            sum += a * w[k]; // dependent on load a
-        }
-        out[idx] = sum;
-    }
-}
+#include "loop_unrolling_common.cuh"
+
+using namespace ch8;
 
 int main() {
-    const int N = 1 << 18;  // 256K elements
-    const int total_elements = N * 4;
-    const size_t bytes_A = total_elements * sizeof(float);
-    const size_t bytes_out = N * sizeof(float);
-    const size_t bytes_w = 4 * sizeof(float);
-    
-    // Allocate host memory
-    float* h_A = (float*)malloc(bytes_A);
-    float* h_w = (float*)malloc(bytes_w);
-    float* h_out = (float*)malloc(bytes_out);
-    
-    // Initialize data
-    for (int i = 0; i < total_elements; ++i) {
-        h_A[i] = static_cast<float>(i % 100) / 100.0f;
+    const int rows = 1 << 15;  // 32K rows
+    const size_t input_elements = static_cast<size_t>(rows) * kElementsPerRow;
+    const size_t input_bytes = input_elements * sizeof(float);
+    const size_t weight_bytes = kWeightPeriod * sizeof(float);
+    const size_t output_bytes = static_cast<size_t>(rows) * sizeof(float);
+
+    std::vector<float> h_inputs(input_elements);
+    std::vector<float> h_weights(kWeightPeriod);
+    std::vector<float> h_output(rows);
+
+    for (size_t i = 0; i < input_elements; ++i) {
+        h_inputs[i] = static_cast<float>((i % 1024) - 512) / 512.0f;
     }
-    
-    for (int i = 0; i < 4; ++i) {
-        h_w[i] = static_cast<float>(i + 1) / 4.0f;
+    for (int i = 0; i < kWeightPeriod; ++i) {
+        h_weights[i] = 0.5f + 0.1f * static_cast<float>(i);
     }
-    
-    // Allocate device memory
-    float* d_A = nullptr;
-    float* d_w = nullptr;
-    float* d_out = nullptr;
-    
-    cudaMalloc(&d_A, bytes_A);
-    cudaMalloc(&d_w, bytes_w);
-    cudaMalloc(&d_out, bytes_out);
-    
-    // Copy to device
-    cudaMemcpy(d_A, h_A, bytes_A, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_w, h_w, bytes_w, cudaMemcpyHostToDevice);
-    
-    // Launch configuration
-    dim3 blockSize(256);
-    dim3 gridSize((N + blockSize.x - 1) / blockSize.x);
-    
-    // Timing events
+
+    float* d_inputs = nullptr;
+    float* d_weights = nullptr;
+    float* d_output = nullptr;
+    cudaMalloc(&d_inputs, input_bytes);
+    cudaMalloc(&d_weights, weight_bytes);
+    cudaMalloc(&d_output, output_bytes);
+
+    cudaMemcpy(d_inputs, h_inputs.data(), input_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_weights, h_weights.data(), weight_bytes, cudaMemcpyHostToDevice);
+
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    
+
     const int iterations = 100;
     cudaEventRecord(start);
-    for (int i = 0; i < iterations; i++) {
-        originalLoop<<<gridSize, blockSize>>>(d_A, d_w, d_out, N);
+    for (int i = 0; i < iterations; ++i) {
+        launch_loop_unrolling_baseline(d_inputs, d_weights, d_output, rows, nullptr);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-    
-    float time_total;
-    cudaEventElapsedTime(&time_total, start, stop);
-    float time_avg = time_total / iterations;
-    
-    printf("Original loop (baseline): %.3f ms\n", time_avg);
-    
-    // Cleanup
+
+    float total_ms = 0.0f;
+    cudaEventElapsedTime(&total_ms, start, stop);
+    const float avg_ms = total_ms / static_cast<float>(iterations);
+    std::cout << "Original loop (baseline): " << avg_ms << " ms\n";
+
+    cudaMemcpy(h_output.data(), d_output, output_bytes, cudaMemcpyDeviceToHost);
+
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    free(h_A);
-    free(h_w);
-    free(h_out);
-    cudaFree(d_A);
-    cudaFree(d_w);
-    cudaFree(d_out);
-    
+    cudaFree(d_inputs);
+    cudaFree(d_weights);
+    cudaFree(d_output);
+
     return 0;
 }
-

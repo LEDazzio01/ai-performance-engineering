@@ -43,7 +43,10 @@ class BaselineDistributedBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs: torch.Tensor | None = None
+        self.virtual_ranks = 4
+        self.micro_batch = 32
+        self._last_loss = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without distributed processing or CUDA graphs."""
@@ -58,7 +61,12 @@ class BaselineDistributedBenchmark(Benchmark):
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
+        self.inputs = torch.randn(
+            self.virtual_ranks,
+            self.micro_batch,
+            1024,
+            device=self.device,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -77,20 +85,21 @@ class BaselineDistributedBenchmark(Benchmark):
                 # Baseline: Single-node operations with many kernel launches
                 # Distributed: not used
                 # No CUDA graphs: multiple kernel launches
-                output = self.model(self.input)  # Multiple kernel launches
-                output = output * 0.99  # Additional kernel launch
-                output = torch.relu(output)  # Additional kernel launch
-                
-                # Baseline: No distributed processing or CUDA graphs
-                # - Single-node operations (not distributed)
-                # - Many kernel launches (high overhead)
-                _ = output.sum()
+                if self.model is None or self.inputs is None:
+                    raise RuntimeError("Benchmark not initialized")
+                totals = []
+                for rank in range(self.virtual_ranks):
+                    out = self.model(self.inputs[rank])
+                    totals.append(out.sum())
+                    torch.cuda.synchronize(self.device)
+                stacked = torch.stack(totals)
+                self._last_loss = float(stacked.sum())
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -104,8 +113,8 @@ class BaselineDistributedBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.inputs is None:
+            return "Inputs not initialized"
         return None
 
 
@@ -135,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

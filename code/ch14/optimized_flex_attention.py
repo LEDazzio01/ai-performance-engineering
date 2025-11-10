@@ -17,13 +17,6 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-# Import arch_config to apply Triton patch for sm_12x support
-# The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
-try:
-    import arch_config  # noqa: F401
-except ImportError:
-    pass  # Continue if arch_config not available
-
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -45,8 +38,12 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.original_model = None
-        self.input = None
+        self.embed_dim = 1024
+        self.seq_len = 1024
+        self.batch = 4
+        self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        self._last = 0.0
+        self.static_q = None
     
     def setup(self) -> None:
         """Setup: Initialize FlexAttention model."""
@@ -60,45 +57,24 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
         # FlexAttention provides flexible attention patterns that adapt to different use cases
         # Supports various attention mechanisms (causal, bidirectional, etc.)
         # For ch14, we demonstrate the concept (full FlexAttention is in ch13/ch18)
-        model = nn.MultiheadAttention(256, 8, batch_first=True)
-        model = model.to(self.device)
-        # Optimization: Use FP16 for faster computation
-        use_fp16 = False
-        if self.device.type == "cuda":
+        model = nn.MultiheadAttention(self.embed_dim, 16, batch_first=True).to(self.device)
+        model = model.to(self.dtype).eval()
+        compile_fn = getattr(torch, "compile", None)
+        if callable(compile_fn):
             try:
-                model = model.half()
-                use_fp16 = True
+                model = compile_fn(model, mode="reduce-overhead")
             except Exception:
-                pass  # Fallback to FP32 if FP16 not supported
-        model.eval()
-        
-        # Compile for better performance (FlexAttention benefits from compilation)
-        # Store original model for fallback
-        self.original_model = model
-        try:
-            self.model = torch.compile(model, mode="reduce-overhead")
-            # Warmup to trigger compilation and catch errors early
-            # Create input with matching dtype
-            dtype = torch.float16 if use_fp16 else torch.float32
-            test_input = torch.randn(4, 32, 256, device=self.device, dtype=dtype)
-            for _ in range(10):
-                with torch.no_grad():
-                    _ = self.model(test_input, test_input, test_input)[0]
-            torch.cuda.synchronize()
-        except (RuntimeError, Exception) as e:
-            # Fallback to eager mode if compilation fails
-            error_msg = str(e)
-            if "CppCompileError" in error_msg or "torch._inductor" in error_msg or "generator" in error_msg.lower() or "SavedTensorHooks" in error_msg:
-                # Known PyTorch internal bugs - fall back to eager mode
-                self.model = self.original_model
-            else:
-                # Re-raise unknown errors
-                raise
-        
-        # Create input with matching dtype
-        dtype = torch.float16 if use_fp16 else torch.float32
-        self.input = torch.randn(4, 32, 256, device=self.device, dtype=dtype)
+                pass
+        self.model = model
+
+        self.graph_input = torch.randn(self.batch, self.seq_len, self.embed_dim, device=self.device, dtype=self.dtype)
+        self.graph_output = torch.empty_like(self.graph_input)
+        for _ in range(3):
+            with torch.no_grad():
+                _ = self.model(self.graph_input, self.graph_input, self.graph_input)[0]
         torch.cuda.synchronize()
+
+        self.static_q = None
     
     def benchmark_fn(self) -> None:
         """Benchmark: FlexAttention operations."""
@@ -112,21 +88,18 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
 
 
         with nvtx_range("optimized_flex_attention", enable=enable_nvtx):
-            with torch.no_grad():
-                # Optimization: FlexAttention
-                # Provides flexible attention patterns that adapt to different use cases
-                # Supports various attention mechanisms (causal, bidirectional, sliding window, etc.)
-                # More flexible than standard attention implementations
-                _ = self.model(self.input, self.input, self.input)[0]
-                # FlexAttention enables adaptive attention patterns
-                # See ch13/ch18 for full FlexAttention implementations
+            if self.model is None or self.graph_input is None:
+                raise RuntimeError("Model not initialized")
+            out = self.model(self.graph_input, self.graph_input, self.graph_input)[0]
+            self._last = float(out.sum())
+            torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.original_model = None
-        self.input = None
+        self.graph_input = None
+        self.graph_output = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
@@ -139,7 +112,7 @@ class OptimizedFlexAttentionBenchmark(Benchmark):
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
+        if self.model is None or self.graph_input is None:
             return "Model not initialized"
         return None
 

@@ -26,28 +26,10 @@ def profile() -> Dict[str, Any]:
     """Compare all baseline/optimized pairs using formal harness."""
     chapter_dir = Path(__file__).parent
     
-    # Use template with custom metrics callback for chapter-specific metrics
-    def add_chapter_metrics(all_metrics: Dict[str, Any]) -> None:
-        """Add chapter-specific metrics."""
-        # MoE chapter focuses on routing efficiency
-        best_speedup = all_metrics.get('speedup', 1.0)
-        if best_speedup > 1.0:
-            all_metrics['goodput'] = min(0.95, 0.75 + (best_speedup - 1.0) * 0.05)
-        else:
-            all_metrics['goodput'] = 0.75
-        
-        # Estimate throughput based on speedups
-        if best_speedup > 1.0:
-            base_throughput = 1000.0
-            all_metrics['tokens_per_s'] = base_throughput * best_speedup
-            all_metrics['requests_per_s'] = max(32.0, 32.0 * best_speedup)
-            all_metrics['latency_s'] = max(0.001, 1.0 / (all_metrics['tokens_per_s'] / 1000.0))
-    
     return profile_template(
         chapter='ch16',
         chapter_dir=chapter_dir,
         harness_config=BenchmarkConfig(iterations=20, warmup=5),
-        custom_metrics_callback=add_chapter_metrics,
     )
 
 

@@ -55,6 +55,13 @@ class BaselineKernelFusionBenchmark(Benchmark):
         torch.manual_seed(42)
         self.data = torch.arange(self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
+        # Dry run to pay compilation/initialization cost up front
+        self._extension.separate_kernels(self.data, 1)
+        torch.cuda.synchronize()
+        # Reset data so benchmark iterations always start from same values
+        torch.manual_seed(42)
+        self.data = torch.arange(self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Separate kernel launches (3 memory round trips)."""
@@ -67,7 +74,7 @@ class BaselineKernelFusionBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_kernel_fusion_separate", enable=enable_nvtx):
+        with nvtx_range("kernel_fusion", enable=enable_nvtx):
             # Call CUDA extension with separate kernels
             self._extension.separate_kernels(self.data, self.iterations)
 

@@ -19,6 +19,7 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 
+from ch4.gpu_requirements import skip_if_insufficient_gpus
 
 try:
     from distributed_helper import setup_single_gpu_env
@@ -78,6 +79,7 @@ class BaselineNoOverlapBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize distributed environment and model."""
+        skip_if_insufficient_gpus()
         setup_single_gpu_env()
         
         if not dist.is_initialized():
@@ -118,7 +120,7 @@ class BaselineNoOverlapBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_no_overlap", enable=enable_nvtx):
+        with nvtx_range("no_overlap", enable=enable_nvtx):
             output = self.model(self.data)
             loss = nn.functional.mse_loss(output, self.target)
             loss.backward()

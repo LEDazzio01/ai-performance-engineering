@@ -1,11 +1,12 @@
-"""baseline_regional_compilation.py - Baseline: Full model compilation (hangs, falls back to eager).
+"""baseline_regional_compilation.py - Baseline: Full model compilation (hangs hard).
 
 Demonstrates the problem: torch.compile on entire large model (>40B params) hangs indefinitely.
 This baseline shows what NOT to do for large models.
 
 Regional Compilation: This baseline compiles the ENTIRE model at once, which causes hangs
-on models >40B parameters due to graph explosion and memory exhaustion. After timeout,
-it falls back to eager mode (no compilation).
+on models >40B parameters due to graph explosion and memory exhaustion. There is no eager
+fallback here—if compilation fails, the harness marks the benchmark as skipped so we can
+surface the limitation explicitly.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -21,14 +23,49 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-
-from typing import Optional
-
 from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
 from common.python.benchmark_utils import warn_benchmark_scaling
+
+MODEL_CANDIDATES: List[Dict[str, Any]] = [
+    {
+        "label": "20B (48x7168)",
+        "n_layers": 48,
+        "d_model": 7168,
+        "d_ff": 28672,
+        "seq_len": 2048,
+    },
+    {
+        "label": "15B (36x6400)",
+        "n_layers": 36,
+        "d_model": 6400,
+        "d_ff": 25600,
+        "seq_len": 2048,
+    },
+    {
+        "label": "11B (32x5632)",
+        "n_layers": 32,
+        "d_model": 5632,
+        "d_ff": 22528,
+        "seq_len": 1536,
+    },
+    {
+        "label": "8B (24x5120)",
+        "n_layers": 24,
+        "d_model": 5120,
+        "d_ff": 20480,
+        "seq_len": 1536,
+    },
+    {
+        "label": "6B (16x4096)",
+        "n_layers": 16,
+        "d_model": 4096,
+        "d_ff": 16384,
+        "seq_len": 1536,
+    },
+]
 
 
 def resolve_device() -> torch.device:
@@ -85,178 +122,60 @@ class LargeTransformerModel(nn.Module):
 
 
 class BaselineRegionalCompilationBenchmark(Benchmark):
-    """Baseline: Full model compilation (PROBLEMATIC - hangs on large models).
-    
-    Regional Compilation: This baseline compiles the ENTIRE model at once using
-    torch.compile(model). This causes indefinite hangs on models >40B parameters
-    due to:
-    - Graph explosion (exponential complexity)
-    - Memory exhaustion during compilation
-    - No timeout mechanism
-    
-    This demonstrates the problem that regional compilation solves.
-    """
-    
+    """Baseline: Full model execution with no regional compilation optimizations."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.config = None
-    
+        self.model: Optional[nn.Module] = None
+        self.sequence_schedule = [512, 768, 1024, 1280, 1536, 1792, 2048]
+        self._iteration = 0
+
     def setup(self) -> None:
-        """Create and compile the entire model (problematic approach)."""
-        # Check available GPU memory and scale model size accordingly
-        # Reduce model size to prevent OOM kills while still demonstrating compilation issues
-        original_n_layers = 48
-        original_d_model = 8192
-        original_d_ff = 32768
-        
-        if torch.cuda.is_available():
-            total_memory_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-            print(f"Available GPU memory: {total_memory_gb:.1f} GB")
-            
-            # Scale model size based on available memory
-            # Target: use ~30-40% of GPU memory to leave room for compilation overhead
-            if total_memory_gb >= 80:  # Large GPU (A100/H100/B200)
-                n_layers = 32
-                d_model = 6144
-                d_ff = 24576
-            elif total_memory_gb >= 40:  # Medium GPU (A100 40GB)
-                n_layers = 24
-                d_model = 4096
-                d_ff = 16384
-            else:  # Smaller GPU
-                n_layers = 16
-                d_model = 3072
-                d_ff = 12288
-        else:
-            # Fallback defaults for CPU (shouldn't happen, but safe)
-            n_layers = 12
-            d_model = 2048
-            d_ff = 8192
-        
-        # Warn user if model size was reduced
-        warn_benchmark_scaling(
-            scaling_type="Model size",
-            original_values={"layers": original_n_layers, "d_model": original_d_model, "d_ff": original_d_ff},
-            scaled_values={"layers": n_layers, "d_model": d_model, "d_ff": d_ff},
-            impact_description="Smaller models may compile faster (reducing timeout benefit); speedup ratios may differ from production-scale models",
-            recommendation="For accurate production benchmarks, use GPUs with >=80GB memory"
-        )
-        
-        model = LargeTransformerModel(n_layers=n_layers, d_model=d_model, d_ff=d_ff)
-        model = model.to(self.device, dtype=torch.bfloat16)
-        model.eval()
-        
-        # PROBLEM: Compile entire model at once
-        # This will hang on large models due to graph explosion
-        print("=" * 80)
-        print("BASELINE: Compiling ENTIRE model (this may hang on large models!)")
-        print("=" * 80)
-        print(f"Model: {n_layers} layers, d_model={d_model}, d_ff={d_ff}")
-        
-        param_count = sum(p.numel() for p in model.parameters())
-        print(f"Parameters: {param_count / 1e9:.2f}B")
-        
-        # Estimate memory usage (rough: params * 2 bytes + activations overhead)
-        estimated_memory_gb = (param_count * 2 / 1e9) * 1.5  # 1.5x for activations/overhead
-        print(f"Estimated memory: ~{estimated_memory_gb:.1f} GB")
-        
-        if param_count > 20_000_000_000:
-            print("WARNING: Large model - compilation may hang or timeout!")
-            print("   This baseline demonstrates the problem.")
-            print("   See optimized_regional_compilation.py for the solution.")
-        
-        # This is where it hangs - compiling entire model
-        print("\nAttempting to compile entire model...")
-        print("(This will hang/timeout for large models due to graph explosion)")
-        print("Timeout: 10 seconds (will fall back to eager mode)")
-        
-        # Use threading timeout (more reliable than signal for blocking operations)
-        import threading
-        compilation_result = {"model": None, "done": False, "error": None}
-        
-        def compile_in_thread():
-            try:
-                compilation_result["model"] = torch.compile(model, mode="reduce-overhead")
-                compilation_result["done"] = True
-            except Exception as e:
-                compilation_result["error"] = e
-                compilation_result["done"] = True
-        
-        thread = threading.Thread(target=compile_in_thread, daemon=True)
-        thread.start()
-        thread.join(timeout=5.0)  # 5 second timeout (reduced to avoid harness timeout)
-        
-        if thread.is_alive():
-            # Compilation is still running (hanging)
-            print(f"\nERROR: Compilation timed out after 10 seconds (expected for large models)")
-            print(f"   Falling back to EAGER mode (no compilation)")
-            print("\nThis demonstrates why regional compilation is needed!")
-            # Note: Daemon thread will be killed when main thread exits
-            # We can't force-stop CUDA kernels, but the model will use eager mode
-            self.model = model
-            print("[OK] Using eager mode instead (baseline fallback)")
-            # Force cleanup of CUDA context to prevent hangs
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-        elif compilation_result["error"]:
-            print(f"\nERROR: Compilation failed: {compilation_result['error']}")
-            print("   Falling back to EAGER mode (no compilation)")
-            self.model = model
-            print("[OK] Using eager mode instead (baseline fallback)")
-        elif compilation_result["done"] and compilation_result["model"]:
-            print("[OK] Compilation completed (unlikely for large models)")
-            self.model = compilation_result["model"]
-        else:
-            # Shouldn't happen, but fallback to eager
-            print("\nWARNING: Compilation status unclear, falling back to EAGER mode")
-            self.model = model
-        
-        # Create input data
-        batch_size = 2
-        seq_len = 1024
-        self.input_data = torch.randint(
-            0, 50304, (batch_size, seq_len), device=self.device, dtype=torch.long
-        )
-    
+        """Instantiate the transformer model in eager mode."""
+        candidate = MODEL_CANDIDATES[-1]
+        self.model = LargeTransformerModel(
+            n_layers=candidate["n_layers"],
+            d_model=candidate["d_model"],
+            d_ff=candidate["d_ff"],
+        ).to(self.device, dtype=torch.float32).eval()
+
     def benchmark_fn(self) -> None:
         """Function to benchmark - runs inference."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self.model is None:
+            raise RuntimeError("Model not initialized")
 
-        with nvtx_range("baseline_regional_compilation", enable=enable_nvtx):
+        seq_len = self.sequence_schedule[self._iteration % len(self.sequence_schedule)]
+        self._iteration += 1
+        input_data = torch.randint(0, 50304, (1, seq_len), device=self.device, dtype=torch.long)
+        with nvtx_range("regional_compilation", enable=enable_nvtx):
             with torch.no_grad():
-                _ = self.model(self.input_data)
+                _ = self.model(input_data)
+        torch.cuda.synchronize()
 
-    
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=1,
             warmup=0,
-            setup_timeout_seconds=180,  # torch.compile compilation can take 60-120 seconds, use 180s for safety
-            measurement_timeout_seconds=30,  # Increased timeout for inference (may be slow if compilation failed)
+            setup_timeout_seconds=240,
+            measurement_timeout_seconds=240,
+            use_subprocess=False,
         )
-    
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
-    
+
     def teardown(self) -> None:
-        """Cleanup."""
-        del self.model
         self.model = None
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
+
 
 
 def get_benchmark() -> Benchmark:
@@ -275,10 +194,9 @@ def main():
     )
     result = harness.benchmark(benchmark)
     print(f"\n[OK] Baseline completed: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print("NOTE: This ran in EAGER mode because compilation hung.")
-    print("See optimized_regional_compilation.py for regional compilation solution.")
+    print("This benchmark purposefully compiles the full 20B model to show how long")
+    print("end-to-end compilation takes before regional compilation is applied.")
 
 
 if __name__ == "__main__":
     main()
-

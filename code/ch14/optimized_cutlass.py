@@ -24,7 +24,7 @@ from common.python.benchmark_harness import (
     BenchmarkMode,
 )
 
-from ch14.cutlass_binding import cutlass_gemm_fp16
+from common.python.cutlass_binding import cutlass_gemm_fp16
 
 
 def resolve_device() -> torch.device:
@@ -87,7 +87,10 @@ class OptimizedCutlassBenchmark(Benchmark):
             # CUTLASS provides hardware-optimized kernels leveraging Tensor Cores
             # Same FP16 precision and TF32 settings as baseline for fair comparison
             # This isolates the CUTLASS library optimization effect
+            if self.A is None or self.B is None:
+                raise RuntimeError("Benchmark not initialized")
             _ = cutlass_gemm_fp16(self.A, self.B)
+            torch.cuda.synchronize(self.device)
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""

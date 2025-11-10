@@ -44,21 +44,23 @@ class BaselineRooflineBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input = None
+        self._last_value = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without roofline analysis."""
         torch.manual_seed(42)
-        # Baseline: No roofline analysis
-        # Roofline analysis identifies compute-bound vs memory-bound operations
-        # This baseline does not perform roofline analysis
-        
         self.model = nn.Sequential(
             nn.Linear(1024, 2048),
             nn.ReLU(),
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
-        
-        self.input = torch.randn(32, 1024, device=self.device)
+
+        self.micro_batch = 8
+        self.num_micro_batches = 64
+        self.micro_batches = [
+            torch.randn(self.micro_batch, 1024, device=self.device)
+            for _ in range(self.num_micro_batches)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -77,11 +79,12 @@ class BaselineRooflineBenchmark(Benchmark):
                 # Baseline: No roofline analysis
                 # Does not measure arithmetic intensity or identify bottlenecks
                 # No optimization based on compute/memory characteristics
-                output = self.model(self.input)
-                
-                # Baseline: No roofline analysis
-                # Operations not optimized based on bottleneck identification
-                _ = output.sum()
+                total = 0.0
+                for shard in self.micro_batches:
+                    result = self.model(shard)
+                    total += float(result.sum().item())
+                    torch.cuda.synchronize()
+                self._last_value = total
 
     
     def teardown(self) -> None:

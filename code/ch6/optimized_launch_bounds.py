@@ -55,6 +55,12 @@ class OptimizedLaunchBoundsBenchmark(Benchmark):
         self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
         self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
         torch.cuda.synchronize()
+        self._extension.launch_bounds_optimized(self.input_data, self.output_data, 1)
+        torch.cuda.synchronize()
+        torch.manual_seed(42)
+        self.input_data = torch.linspace(0.0, 1.0, self.N, dtype=torch.float32, device=self.device)
+        self.output_data = torch.zeros(self.N, dtype=torch.float32, device=self.device)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Kernel with launch bounds."""
@@ -111,4 +117,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized Launch Bounds (with annotation): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

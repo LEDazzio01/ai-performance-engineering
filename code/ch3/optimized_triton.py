@@ -1,21 +1,17 @@
-"""optimized_triton.py - Optimized with Triton kernels in infrastructure/OS tuning context.
-
-Demonstrates operations using Triton for efficient GPU kernel programming.
-Triton: Uses Triton kernels for optimized GPU operations.
-Triton provides a Python-like language for writing efficient CUDA kernels.
-Implements Benchmark protocol for harness integration.
-"""
+"""Optimized kernel implemented with Triton to fuse sin/scale/bias."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+from common.python import triton_compat  # noqa: F401
 
 try:
     import triton
@@ -23,143 +19,99 @@ try:
     TRITON_AVAILABLE = True
 except ImportError:
     TRITON_AVAILABLE = False
-    # Fallback if Triton not available
-    tl = None
 
-from typing import Optional
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 triton example")
     return torch.device("cuda")
 
-if TRITON_AVAILABLE:
-    @triton.jit
-    def triton_add_kernel(
-        x_ptr, y_ptr, output_ptr,
-        n_elements,
-        BLOCK_SIZE: tl.constexpr,
-        ):
-        """Triton kernel for element-wise addition."""
-        pid = tl.program_id(axis=0)
-        block_start = pid * BLOCK_SIZE
-        offsets = block_start + tl.arange(0, BLOCK_SIZE)
-        mask = offsets < n_elements
-        x = tl.load(x_ptr + offsets, mask=mask)
-        y = tl.load(y_ptr + offsets, mask=mask)
-        output = x + y
-        tl.store(output_ptr + offsets, output, mask=mask)
 
-class OptimizedTritonBenchmark:
-    """Optimized: Uses Triton kernels for efficient GPU operations.
-    
-        Triton: Uses Triton kernels for optimized GPU operations.
-        Triton provides a Python-like language for writing efficient CUDA kernels.
-        """
-    
+if TRITON_AVAILABLE:
+
+    @triton.jit
+    def fused_kernel(x_ptr, scale, bias, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(axis=0)
+        offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+        mask = offsets < n_elements
+        x = tl.load(x_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
+        scale_val = tl.load(scale).to(tl.float32)
+        bias_val = tl.load(bias).to(tl.float32)
+        y = tl.sin(x)
+        y = y * scale_val
+        y = y + bias_val
+        tl.store(out_ptr + offsets, y.to(tl.float16), mask=mask)
+
+
+class OptimizedTritonBenchmark(Benchmark):
+    """Fuses the entire elementwise op into one Triton kernel."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.N = 1_000_000
-    
-    def setup(self) -> None:
-        """Setup: Initialize tensors."""
-        
-        torch.manual_seed(42)
-        # Optimization: Prepare for Triton kernel execution
-        # Triton is a GPU programming language for writing efficient kernels
-        # Provides Python-like syntax for CUDA kernel development
-        
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations with Triton kernels."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.scale: Optional[torch.Tensor] = None
+        self.bias: Optional[torch.Tensor] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(55)
+        self.input = torch.randn(8_388_608, device=self.device, dtype=torch.float16)
+        self.output = torch.empty_like(self.input)
+        self.scale = torch.tensor([1.7], device=self.device, dtype=torch.float16)
+        self.bias = torch.tensor([-0.5], device=self.device, dtype=torch.float16)
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
+        assert self.input is not None and self.output is not None
+        assert self.scale is not None and self.bias is not None
         with nvtx_range("optimized_triton", enable=enable_nvtx):
-            # Optimization: Triton kernels
-            # Triton provides a Python-like language for writing GPU kernels
-            # Triton kernels can be more efficient through explicit optimization
             if TRITON_AVAILABLE:
-                # Triton: compute output = input * 2.0 + 1.0 using Triton kernel
-                # Create y tensor for addition operation
-                y = torch.full((self.N,), 1.0, device=self.device, dtype=torch.float32)
-                x_times_2 = self.input * 2.0
-                        
-                # Triton: use Triton kernel for addition
-                grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
-                triton_add_kernel[grid](
-                    x_times_2, y, self.output,
-                    self.N,
-                    BLOCK_SIZE=1024,
+                grid = lambda meta: (triton.cdiv(self.input.numel(), meta["BLOCK_SIZE"]),)
+                fused_kernel[grid](
+                    self.input,
+                    self.scale,
+                    self.bias,
+                    self.output,
+                    self.input.numel(),
+                    BLOCK_SIZE=2048,
                 )
             else:
-                # Fallback: standard PyTorch operations if Triton not available
-                # Triton would provide optimized kernels
-                self.output = self.input * 2.0 + 1.0
-            
-            # Optimization: Triton benefits
-            # - Python-like GPU kernel programming (Triton)
-            # - Explicit optimization control
-            # - Efficient kernels through Triton
+                tmp = torch.sin(self.input)
+                tmp = tmp * self.scale
+                self.output = tmp + self.bias
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.input = None
         self.output = None
+        self.scale = None
+        self.bias = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-        iterations=100,
-            warmup=10,
-        )
-    
+        return BenchmarkConfig(iterations=100, warmup=10)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.output is None:
-            return "Output tensor not initialized"
+        if self.input is None:
+            return "Input tensor missing"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return OptimizedTritonBenchmark()
 
-def main() -> None:
-    """Standalone execution (for testing)."""
-    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
-    harness = BenchmarkHarness(
-        mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=100, warmup=10)
-    )
-    benchmark = OptimizedTritonBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Optimized: Triton")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
 if __name__ == "__main__":
-    main()
+    from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
 
+    harness = BenchmarkHarness(
+        mode=BenchmarkMode.CUSTOM,
+        config=BenchmarkConfig(iterations=10, warmup=2),
+    )
+    result = harness.benchmark(get_benchmark())
+    print(f"\nOptimized Triton latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

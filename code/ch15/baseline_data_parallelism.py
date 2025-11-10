@@ -17,7 +17,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
+from typing import Optional, List
 
 from common.python.benchmark_harness import (
     Benchmark,
@@ -32,65 +32,83 @@ def resolve_device() -> torch.device:
     return torch.device("cuda")
 
 
+def _build_mlp(hidden_dim: int, width_multiple: int = 2) -> nn.Module:
+    """Construct a simple MLP used by both baseline and optimized variants."""
+    layers: List[nn.Module] = []
+    in_dim = hidden_dim
+    for _ in range(3):
+        layers.append(nn.Linear(in_dim, hidden_dim * width_multiple))
+        layers.append(nn.ReLU())
+        in_dim = hidden_dim * width_multiple
+    layers.append(nn.Linear(in_dim, hidden_dim))
+    return nn.Sequential(*layers)
+
+
 class BaselineDataParallelismBenchmark(Benchmark):
-    """Baseline: Sequential inference without data parallelism (single GPU)."""
-    
+    """Baseline: Sequential inference without data parallelism (single GPU).
+
+    Naive inference services issue one request at a time and block on every
+    response. There is no batching, model replication, or overlap between
+    host/device work, so GPU utilization stays low even with many queued
+    requests. This baseline intentionally mirrors that behavior.
+    """
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.requests = None
-        self.num_requests = 10
-    
+        self.model: Optional[nn.Module] = None
+        self.requests: Optional[List[torch.Tensor]] = None
+        self.num_requests = 128
+        self.hidden_dim = 256
+
     def setup(self) -> None:
-        """Setup: Initialize model and requests."""
+        """Setup: Initialize model and a queue of independent requests."""
         torch.manual_seed(42)
-        # Baseline: Single GPU inference without data parallelism
-        # Data parallelism replicates model across multiple GPUs for higher throughput
-        # This baseline processes requests sequentially on one GPU
-        self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 10),
-        ).to(self.device).eval()
-        
-        # Generate multiple inference requests
-        self.requests = [torch.randn(1, 256, device=self.device) for _ in range(self.num_requests)]
+        self.model = _build_mlp(self.hidden_dim).to(self.device, dtype=torch.float32).eval()
+
+        # Each request is prepared separately to mimic RPC driven inference where
+        # shapes can differ and batching is not possible.
+        self.requests = [
+            torch.randn(1, self.hidden_dim, device=self.device, dtype=torch.float32)
+            for _ in range(self.num_requests)
+        ]
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
-        """Benchmark: Sequential inference without data parallelism."""
+        """Benchmark: Sequential inference without any form of parallelism."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
+        if self.model is None or self.requests is None:
+            raise RuntimeError("Model/requests not prepared")
+
         with nvtx_range("baseline_data_parallelism", enable=enable_nvtx):
-            # Baseline: Sequential processing on single GPU
-            # No data parallelism - requests processed one at a time
-            # Data parallelism would replicate model across GPUs for parallel processing
             with torch.no_grad():
                 for request in self.requests:
                     _ = self.model(request)
-    
+                    # Real systems wait for a response before handling the next request.
+                    torch.cuda.synchronize()
+
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
         self.requests = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=12,
+            warmup=2,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
+        if not self.requests:
+            return "Requests not initialized"
         return None
 
 
@@ -109,4 +127,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

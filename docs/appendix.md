@@ -1,8 +1,7 @@
 # Appendix
 
-## AI Systems Performance Checklist
-
-_(175+ Items)_
+## AI Systems Performance Checklist (200+ Items)
+These are derviced from the 2025-2026 O'Reilly book, [AI Systems Performance Engineering, by Chris Fregly, O'Reilly Media](https://www.amazon.com/Systems-Performance-Engineering-Optimizing-Inference/dp/B0F47689K8).
 
 This extensive checklist covers both broad process-level best practices and detailed, low-level tuning advice for AI systems performance engineers. Each of these checklist items serves as a practical reminder to squeeze maximum performance and efficiency out of AI systems. Use this guide when debugging, profiling, analyzing, and tuning one’s AI systems. By systematically applying these tips—from low-level OS and CUDA tweaks up to cluster-scale optimizations—an AI systems performance engineer can achieve both lightning-fast execution and cost-effective operation on modern NVIDIA GPU hardware using many AI software frameworks, including CUDA, PyTorch, OpenAI’s Triton, TensorFlow, Keras, and JAX. The principles in this checklist will also apply to future generations of NVIDIA hardware, including their GPUs, ARM-based CPUs, CPU-GPU superchips, networking gear, and rack systems.
 
@@ -10,6 +9,23 @@ This extensive checklist covers both broad process-level best practices and deta
 
 A pragmatic, documented loop—quick wins before deep work—turns engineering time into measurable ROI. Start by targeting the biggest runtime and cost drivers, and always profile before and after to verify impact. Combine auto-tuning, framework upgrades, cloud pricing levers, and utilization dashboards for high-ROI wins, documenting results and favoring simple, maintainable fixes. Tune throughput-sensitive hyperparameters when accuracy allows. Here are some tips on the performance tuning and cost optimization mindset:
 
+## Global GPU Optimization Principles
+
+- **Centralize workload knobs** so baseline and optimized runs use the same tensor shapes, precision, and batch math; smoke vs. full passes become a config flip instead of a code edit.
+- **Align workloads before timing** by clamping RNG seeds, preprocessing, and data staging; measured deltas should come from the optimization, not a lucky batch.
+- **Measure the steady state**: compile extensions up front, run warmups, and place CUDA events on the execution stream so first-iteration noise never pollutes reported numbers.
+- **Track throughput and latency together**—tokens/s or GB/s next to milliseconds—to expose regressions even when one metric improves.
+- **Amortize expensive prep** by caching autotuned tile sizes, compiled graphs, NCCL communicators, and memory pools; retune only when shapes cross a new regime.
+- **Exploit structured sparsity** where accuracy allows: 2:4 pruning unlocks sparse Tensor Core paths on Ampere+/Blackwell for free FLOPs.
+- **Validate aggressively** with FP32/CPU references, checksums, or tolerance asserts so fast paths never trade correctness for speed.
+- **Stage and overlap**: chunk activations, use double buffering, and overlap transfers with compute via CUDA streams or CUDA Graph replay to keep SMs and NVLink saturated.
+- **Model realistic baselines**: show genuine inefficiencies (host staging, undersized grids, redundant syncs) instead of sleep loops so improvements stay believable.
+- **Log the environment every run** (GPU, driver, CUDA toolkit, compiler flags, git SHA, benchmark command) and archive raw artifacts so anyone can replay the exact conditions.
+- **Budget for iteration**: optimizations are investments—start with low-hanging fruit such as AMP or data loader fixes, then escalate to custom kernels only when the ROI pencils out.
+
+### Close the loop with automated autotuners
+
+Feed profiler metrics into reinforcement-learning or Bayesian autotuners that can sweep tile sizes, streams, and compiler flags during scheduled “tuning windows.” Cache the best configs per `(device, shape)` pair and set up alerts if a new driver or workload forces a retune. This keeps kernels near their hardware limits even as models and GPUs evolve.
 ## Optimize the expensive first
 
 Use the 80/20 rule. Find the top contributors to runtime and focus on those. If 90% of the time is in a couple of kernels or a communication phase, it’s better to optimize those deeply than to microoptimize something taking 1% of the time. Each chapter’s techniques should be applied where they matter most. For example, if your training is 40% data loading, 50% GPU compute, and 10% communication, then first fix data loading, as you can maybe halve the overhead. Then look at GPU kernel optimization.
@@ -110,9 +126,7 @@ Prefer modern GPUs like the Blackwell GB200/GB300 for superior performance- per-
 
 ## Leverage high-bandwidth interconnects
 
-Use systems with NVLink/NVSwitch, such as GB200/GB300 NVL72, instead of PCIe-only connectivity for multi-GPU workloads. NVLink 5 provides up to 1.8 TB/s bidirectional GPU-to-GPU bandwidth (over 14" PCIe Gen5), enabling near-linear scaling across GPUs. NVLink Switch domains can be scaled with second-level switches to connect up to 576 GPUs in one NVLink domain. This
-
-enables hierarchical collectives that stay on NVLink as long as possible before falling back to the inter-rack fabric.
+Use systems with NVLink/NVSwitch, such as GB200/GB300 NVL72, instead of PCIe-only connectivity for multi-GPU workloads. NVLink 5 provides up to 1.8 TB/s bidirectional GPU-to-GPU bandwidth (over 14" PCIe Gen5), enabling near-linear scaling across GPUs. NVLink Switch domains can be scaled with second-level switches to connect up to 576 GPUs in one NVLink domain. This enables hierarchical collectives that stay on NVLink as long as possible before falling back to the inter-rack fabric.
 
 ## Balance CPU/GPU and memory ratios
 
@@ -136,9 +150,7 @@ Ensure the data center can handle GPU thermal and power needs. High- performance
 
 ## Unified CPU-GPU “Superchip” Architecture
 
-Unified memory and on-package links let you fit larger models and cut copy overhead when you place the right data in the right tier. Using Grace for preprocessing and HBM for “hot” tensors turns the superchip into a tightly coupled engine with fewer stalls. On Grace Blackwell Superchips, treat CPU and GPU as a shared-memory complex. Keep hot weights/activations in HBM and overflow or infrequent data in Grace LPDDR via NVLink-C2C. Use the on-package Grace CPU for preprocessing/
-
-orchestration and prefetch or pipeline-managed memory to hide latency for ultralarge models. Take advantage of the superchip architecture as follows:
+Unified memory and on-package links let you fit larger models and cut copy overhead when you place the right data in the right tier. Using Grace for preprocessing and HBM for “hot” tensors turns the superchip into a tightly coupled engine with fewer stalls. On Grace Blackwell Superchips, treat CPU and GPU as a shared-memory complex. Keep hot weights/activations in HBM and overflow or infrequent data in Grace LPDDR via NVLink-C2C. Use the on-package Grace CPU for preprocessing/orchestration and prefetch or pipeline-managed memory to hide latency for ultralarge models. Take advantage of the superchip architecture as follows:
 
 ## Utilize unified CPU-GPU memory
 
@@ -201,6 +213,10 @@ For deployments that span heterogeneous environments, such as multicloud or edge
 ## Operating System and Driver Optimizations
 
 OS jitter, NUMA misses, and driver mismatches quietly drain throughput and create variability you can’t tune around. Hardening the stack (huge pages, affinities, consistent CUDA/driver, persistence) creates a stable, high-performance baseline. Run a lean, HPC-tuned Linux. Set NUMA/IRQ affinities and enable THP and high memlock. Keep NVIDIA drivers/CUDA consistent across nodes. Isolate system jitter, tune CPU libraries/storage, set container limits correctly, and keep BIOS/firmware/ NVSwitch fabric up to date for predictable throughput. Here are some host, OS, and container optimizations that you should explore in your environment:
+
+### Prioritize critical host threads
+
+Pin latency-sensitive work (data-loader processes, NCCL launchers, RPC handlers) to isolated CPU cores with higher scheduling priority. Reserve sibling cores for background daemons so kernel housekeeping never preempts threads feeding the GPU. Pair this with IRQ affinity and cgroup limits so `ksoftirqd` or noisy neighbors don’t steal cycles during all-reduce phases.
 
 ## Use a Linux kernel tuned for HPC
 
@@ -318,11 +334,19 @@ Enable pinned (aka page-locked) memory for data transfer buffers. Many framework
 
 ## Overlap compute and data transfers
 
-Pipeline your input data. While the GPU is busy computing on batch N, load and prepare batch N+1 on the CPU and transfer it in the background using CUDA streams and nonblocking cudaMemcpyAsync. This double buffering hides latency —the GPU ideally never waits for data. Ensure your training loop uses asynchronous transfers. For example, in PyTorch, you can copy tensors to GPU with non_blocking=True. Asynchronous transfer allows the CPU to continue running while the data transfer is in progress in the background. This will improve performance by overlapping computation with data transfer.
+Pipeline your input data. While the GPU is busy computing on batch N, load and prepare batch N+1 on the CPU and transfer it in the background using CUDA streams and nonblocking cudaMemcpyAsync. This double buffering hides latency —the GPU ideally never waits for data. Use dedicated streams for H2D copies, augmentation kernels, and the main training loop, then fence them once per iteration via CUDA events. In PyTorch, copy tensors with non_blocking=True so the transfer happens in parallel with compute. The CPU stays productive preparing future batches while the GPU trains on the current one.
 
 ## Use fast storage (NVMe/SSD)
 
 Store training data on fast local NVMe SSDs or a high-performance parallel filesystem. Spinning disks will severely limit throughput. If available, enable GPUDirect Storage (GDS) so that GPUs can stream data directly from NVMe or network storage—bypassing the CPU. This further reduces I/O latency and CPU load when reading large datasets. For large datasets, consider each node having a local copy or shard of the data. If using network storage, prefer a distributed filesystem like Lustre with striping or an object store that can serve many clients in parallel.
+
+## Enable GPUDirect Storage end-to-end
+
+GDS only pays off when every layer is configured: recent NVIDIA drivers, a GDS-enabled filesystem or NVMe stack, and application code that issues large, aligned reads. Batch small files into tar/record containers, align buffers to 4 KB, and issue deep I/O queues so the DMA engines stay busy. Monitor `nvidia-fs` stats and compare GPU-side throughput (via Nsight Systems) against CPU paths to ensure the zero-copy path is really engaged.
+
+## Overlap checkpointing with compute
+
+Write checkpoints asynchronously so the training loop never blocks on disk. Stage weights and optimizer states into pinned host buffers (or a background GPU stream) while the next iteration runs, then flush them to storage via dedicated I/O threads. Track checkpoint bandwidth/latency metrics; if a flush falls behind, throttle frequency or compress on the GPU before shipping data over PCIe.
 
 ## Tune I/O concurrency and striping
 
@@ -331,6 +355,14 @@ Avoid bottlenecks from single-file access. If one large file is used by all work
 ## Optimize small files access
 
 If your dataset consists of millions of small files, mitigate metadata overhead. Opening too many small files per second can overwhelm the filesystem’s metadata server. Solutions pack small files into larger containers, such as tar or RecordIO files; use data ingestion libraries that batch reads; or ensure metadata caching is enabled on clients. This reduces per-file overhead and speeds up epoch start times.
+
+## Shard and cache at the loader
+
+Give each data-loader worker (or distributed rank) its own disjoint shard of the dataset so they aren’t chasing the same files and metadata. For epoch-level shuffles, reshuffle shard indices instead of file lists so caches stay warm. Cache hot samples on local NVMe, or stage one epoch ahead on each node, so remote storage only sees sequential, prefetchable access. Pair these tactics with PyTorch’s `DistributedSampler`/`prefetch_factor` knobs so every GPU gets unique data without hammering the filesystem.
+
+## Bucket variable sequence lengths
+
+For NLP workloads with wildly varying token counts, group samples into buckets of similar lengths before batching. That keeps padding overhead low and ensures CUDA Graphs (or compiled graphs) see mostly static shapes. Rebucket every epoch with a shuffled seed so you still get randomness, and keep a “long sequence” bucket around to exercise worst-case memory paths during profiling.
 
 ## Use client-side caching when available
 
@@ -351,6 +383,14 @@ At cluster scale, ensure the storage system can handle aggregate throughput. For
 ## Minimize checkpointing and logging overhead
 
 Write checkpoints and logs efficiently. Use asynchronous writes for checkpoints if possible, or write to local disk, then copy to network storage to avoid stalling training. Compress checkpoints or use sparse storage formats to reduce size. Limit logging frequency on each step by aggregating iteration statistics and logging only every Nth iteration rather than every iteration. This will greatly reduce I/O overhead.
+
+## Compress and batch data pipeline outputs
+
+If preprocessing expands data (tokenization, augmentation), compress intermediate batches (bf16/FP16, lightweight codecs like LZ4) before copying them over PCIe or the network. Bundle many small samples into contiguous buffers so each DMA saturates bandwidth. Decompress on the GPU or immediately after DMA so the CPU never becomes the choke point. Track end-to-end throughput to make sure compression saves more time than it costs.
+
+## Prefetch checkpoints into inference nodes
+
+For high-availability serving, stage the next model version’s weights/optimizer state onto each inference node (local NVMe or GPU memory) while the current model runs. When it’s time to flip traffic, switch pointers or reuse CUDA Graph captures so the new model goes live instantly, without waiting to copy multi-gigabyte checkpoints over the network.
 
 You can also suspend a running GPU process with cuda-checkpoint and use Checkpoint/Restore in Userspace (CRIU) to persist the process image. When ready to resume, the CUDA driver can restore device memory and CUDA state —even on to other GPUs of the same device type. Treat this as complementary to your model’s state-dict or sharded checkpoint files rather than a replacement.
 
@@ -386,6 +426,10 @@ Always load data ahead of the iteration that needs it. Use background data loade
 
 If CPU preprocessing—such as image augmentation and text tokenization—is heavy, distribute it across multiple worker threads/processes. Profile to ensure the CPU isn’t the bottleneck while GPUs wait. If it is, either increase workers or move some transforms to GPU, as libraries like NVIDIA’s DALI can do image operations on a GPU asynchronously.
 
+### Offload lightweight transforms to the GPU
+
+For simple but massive transformations (token casing, normalization, color jitter), launch CUDA/Triton kernels or use DALI immediately after the H2D copy. Run them on dedicated streams so augmentation of batch N+1 overlaps training on batch N. This keeps CPU threads available for heavier parsing work and prevents small Python transforms from throttling the pipeline.
+
 ## Cache model states and outputs
 
 When inferencing with LLMs, it’s beneficial to cache the embeddings and V cache for frequently seen tokens to avoid having to recompute them repeatedly. Similarly, if an LLM training job reuses the same dataset multiple times (called epochs), you should leverage OS page cache or RAM to store the hot data.
@@ -412,6 +456,14 @@ Utilize GPU-accelerated libraries like NVIDIA DALI to perform these tasks asynch
 
 Regularly run profilers on your training/inference jobs. Use NVIDIA Nsight Systems to get a timeline of CPU and GPU activity. You can also use Nsight Compute or the PyTorch profiler to drill down into kernel efficiency. Identify whether your job is compute bound, memory bound, or waiting on I/O/communication. Target your optimizations accordingly. For example, if your workload is memory bound, focus on reducing memory traffic rather than implementing compute- bound optimizations. Combine with machine-learning–driven analytics to predict and preempt performance bottlenecks. This can help in automating fine- tuning adjustments in real time. When using GPUDirect Storage, enable GDS tracing to correlate cuFile activity with kernel gaps.
 
+## Use a systems-to-kernel profiling flow
+
+Capture the big picture with Nsight Systems first, tagging phases with NVTX so you can see CPU prep, data transfers, and GPU kernels in one timeline. Once you know which kernels or streams dominate the gap, switch to Nsight Compute and profile those kernels in isolation to collect occupancy, warp stall, and throughput metrics. This two-step loop from Chapter 8 keeps you focused on the true limiter instead of guessing from partial data.
+
+## Read roofline and automated issue hints
+
+Nsight Compute now ships a Roofline pane and “Issues” recommendations for every captured kernel. Plot achieved FLOPs versus arithmetic intensity to see if you are bandwidth limited or ALU limited, and read the autogenerated hints that flag low load efficiency, branch divergence, or register spilling. Let these reports dictate whether you need tiling, coalescing, or control-flow fixes before you touch the kernel again.
+
 ## Eliminate Python overhead
 
 Profile your training scripts to identify Python bottlenecks—such as excessive looping or logging—and replace them with vectorized operations or optimized library calls. Minimizing Python overhead helps ensure that the CPU does not become a hidden bottleneck in the overall system performance.
@@ -423,6 +475,10 @@ Continuously monitor GPU utilization, SM efficiency, memory bandwidth usage, etc
 ## Use NVTX markers
 
 Instrument your code with NVTX ranges or framework profiling APIs to label different phases, including data loading, forward pass, backward pass, etc. These markers show up in the Nsight Systems or Perfetto timeline and help you attribute GPU idle times or latencies to specific parts of the pipeline. This makes it easier to communicate to developers which part of the code needs attention. For PyTorch, you can use torch.profiler.record_function(). Utilize kernel profiling and analysis tools beyond just the PyTorch profiler For performance-critical kernels, use Nsight Compute to examine kernel-level metrics like occupancy and throughput, or Nsight Systems to analyze GPU/CPU timelines and overlap. Check achieved occupancy, memory throughput, and instruction throughput. Look for signs of memory bottlenecks, such as memory bandwidth near the hardware maximum. This helps to identify memory-bound workloads. The profiler’s “Issues” section often directly suggests if a kernel is memory bound or compute bound and why. Use this feedback to guide code changes, such as improving memory coalescing if global load efficiency is low.
+
+### Place NVTX ranges strategically
+
+Wrap the exact regions you care about—input staging, forward/backward kernels, communication—rather than blanketing entire functions. Give ranges consistent colors and human-readable names so Nsight timelines tell a story at a glance. Pair NVTX events with CUDA events for precise timings, and propagate range IDs through distributed ranks so you can correlate slow phases across GPUs.
 
 ## Check for warp divergence
 
@@ -440,6 +496,14 @@ Track GPU memory allocation and usage over time. Ensure you are not near OOM, wh
 
 For distributed jobs, use OS tools to monitor network throughput and disk throughput. Ensure the actual throughput matches expectations. For example, on a 100 Gbps link, you should see 12 GB/s if fully utilized. If not, the network might be a bottleneck or misconfigured. Similarly, monitor disk I/O on training nodes. If you see spikes of 100% disk utilization and GPU idle, you likely need to buffer or cache data better.
 
+## Tune distributed collectives
+
+Collective performance depends as much on topology as on math. For intra-node runs, favor NVLink/NVSwitch-aware algorithms such as NCCL’s tree or CollNet modes; inter-node jobs often benefit from hierarchical all-reduce (NVLink first, then InfiniBand). Set NCCL environment knobs explicitly (e.g., `NCCL_ALGO=Tree`, `NCCL_COLLNET_ENABLE=1`, `NCCL_NET_GDR_LEVEL=SYS`) and profile link utilization with Nsight Systems or DCGM. Pin communicators to dedicated streams so reductions overlap matmuls, and balance workloads so no single rank is stuck aggregating stats or logging while others sit idle.
+
+## Map workloads to NVLink/NVSwitch topology
+
+Large nodes (GB200, H100, etc.) expose multiple NVLink “islands.” Use `nvidia-smi topo -m` or vendor topology diagrams to place tensor/model-parallel shards within the same high-bandwidth domain and schedule pipeline/data-parallel groups across islands. When jobs share a node, respect NVLink partitioning: dedicate entire islands to one job or pin ranks with `CUDA_VISIBLE_DEVICES` so cross-island traffic only happens when necessary. This reduces link contention and keeps collectives latency-hiding rather than bottlenecking.
+
 ## Set up alerts for anomalies
 
 In a production or long-running training context, set up automated alerts or logs for events like GPU errors, such as ECC errors, device overheating, etc. This will help identify abnormally slow iterations. For example, NVIDIA’s DCGM can watch health metrics, and you can trigger actions if a GPU starts throttling or encountering errors. This helps catch performance issues—like a cooling failure causing throttling—immediately rather than after the job finishes.
@@ -453,6 +517,38 @@ Maintain a set of benchmark tasks to run whenever you change software, including
 Aligning kernels with the memory hierarchy and hardware features is where large, durable gains come from. Fusion, Tensor Cores, CUDA Graphs, and compiler paths (e.g., torch.compile and OpenAI’s Triton) convert launch overhead into useful math.
 
 Optimize for the memory hierarchy: coalesce global loads, tile into shared memory, manage registers/occupancy, and overlap transfers (e.g., cp.async/TMA) with compute. Prefer tuned libraries and CUDA Graphs, leverage torch.compile and OpenAI’s Triton for fusion, and validate scalability with roofline analysis and PTX/SASS inspection. The following are some GPU and CUDA programming optimization tips and techniques:
+
+## Tune Tensor Core math modes
+
+Modern NVIDIA GPUs reserve most of their peak FLOPs for Tensor Cores. Make sure your math settings actually use them: enable TF32 (`cublasSetMathMode(CUBLAS_TF32_TENSOR_OP_MATH)` or `torch.backends.cuda.matmul.allow_tf32 = True`) when FP32 accuracy is sufficient, and default to bf16 (or FP16 with loss scaling) for training loops. Keep accumulators/master weights in FP32 so you retain numerical stability while the hot path runs on Tensor Cores.
+
+## Exploit structured sparsity acceleration
+
+Ampere and newer GPUs can double Tensor Core throughput when operands satisfy the 2:4 structured sparsity pattern. If your model can tolerate it, prune weights into 2:4 groups (or train with a sparsity-aware recipe), store metadata alongside the packed values, and use CUTLASS/cuBLASLt or Triton kernels that enable sparse Tensor Core paths. Measure both accuracy and speed—structured sparsity often gives 20%+ extra throughput on transformer blocks with minimal loss when applied carefully.
+
+## Automate kernel autotuning pipelines
+
+Wrap CUTLASS/Triton/CUDA kernels in autotuners that sweep `BLOCK_M/N/K`, `num_warps`, prefetch depth, stream counts, and cp.async schedules. Run the sweeps offline on representative shapes and store the winning configs in a runtime registry keyed by `(arch, dtype, shape_bucket)`. Re-run the autotuner whenever you move to new GPUs or encounter out-of-family shapes so you’re never stuck with stale launch parameters.
+
+## Prefetch and double buffer aggressively
+
+Use `cuda::pipeline`, `cp.async`, or TMA descriptors to stream tiles into shared memory and registers while the current tile computes. Keep at least two staging buffers alive per CTA so global-memory latency is hidden, and size them as `BLOCK_ROWS × VALUES_PER_THREAD`. When the kernel supports it, prefetch one or two tiles ahead per warp so the next dataset is waiting by the time the current tile finishes.
+
+## Build asynchronous copy pipelines
+
+Hopper and Blackwell introduce `cp.async` and Tensor Memory Accelerator (TMA) engines that stream tiles into shared memory without stalling warps. Structure kernels with double-buffered stages—stage N computes while stage N+1 issues async copies. Size staging buffers as `BLOCK_ROWS × VALUES_PER_THREAD`, prefetch at least one stage ahead, and use CUDA’s `cuda::pipeline` helpers (or CUTLASS/Triton block pointers) to keep the SM fed continuously.
+
+## Coordinate pipeline stages in shared memory
+
+When you move to CUDA’s pipeline API, allocate shared memory as `[stages × tile_span]` and create a `cuda::pipeline_shared_state` per block so producer and consumer phases share progress. In `ch8/threshold_tma_kernel.cuh` (lines 21-113) each CTA keeps two stage buffers, tracks `stage_ready[]`, and alternates between them via `producer_acquire` / `consumer_release`. This structure hides latency while letting you clamp valid elements on the fly.
+
+## Clamp pipeline grids to shared-memory budgets
+
+Async copies need enough work per CTA to amortize shared memory and pipeline state. The Threshold TMA launcher (lines 131-150) limits the grid to 2,048 blocks and snaps it to at least one block so the staging area fits in SRAM and the pipeline stays resident. When you add similar kernels, cap the grid when shared memory per block is large, and compute tile spans from `blockDim.x × values_per_thread` so each launch consumes a predictable budget.
+
+## Guard async kernels for toolkit and SM support
+
+TMA and warp-specialized features only exist on recent GPUs. Wrap the kernel and its launch path with `#if CUDA_VERSION >= ...` and `#if __CUDA_ARCH__ >= ...` checks as done in `ch8/threshold_tma_kernel.cuh` (lines 14-120). This guarantees older toolkits fall back cleanly while Hopper-and-newer builds keep the optimized path.
 
 ## Understand GPU memory hierarchy
 
@@ -502,9 +598,25 @@ For predictable patterns, use the cp.async bulk prefetch to L2 path to stage lin
 
 Utilize CUDA’s cooperative groups to achieve efficient, localized synchronization among a subset of threads rather than enforcing a full block-wide barrier. This technique enables finer-grained control over synchronization, reducing unnecessary waiting times and overhead. By grouping threads that share data or perform related computations, you can synchronize only those threads that require coordination, which can lead to a more efficient execution pattern and better overall throughput.
 
+### Collect per-kernel telemetry
+
+Add lightweight instrumentation to critical kernels—`atomicMax` ranges, shared-memory utilization counters, NaN/Inf flags—and read them back periodically. These guardrails catch overflow, divergence, or tiling mistakes early, especially when porting kernels to new architectures. Combine telemetry with automated tests so out-of-range metrics fail fast before regressions reach production.
+
 ## Optimize warp divergence
 
 Structure your code so that threads within a warp follow the same execution path as much as possible. Divergence can double the execution time for that warp— for example, half the warp (16 threads) taking one branch and half the warp (16 threads) taking another branch. If you have branches that some data rarely triggers, consider “sorting” or grouping data so warps handle uniform cases such that all are true or all are false. Use warp-level primitives like ballot and shuffle to create branchless solutions for certain problems. Treat a warp as the unit of work, and aim for all 32 threads to do identical work in lockstep for maximum efficiency.
+
+## Quantify ILP vs. divergence
+
+When experimenting with ILP-heavy kernels (like gating or routing steps), profile branch efficiency and instruction throughput in Nsight Compute. Start from a baseline that intentionally thrashes warp-level control flow—random masks, per-iteration syncs—and log how long each phase takes. Then restructure branches (e.g., sort/gather inputs so each warp handles uniform cases, replace divergent updates with warp-level fused math) and compare warp execution efficiency, issued instruction rate, and achieved occupancy. Pair timings with checksum logging so every optimization pass has a correctness guard.
+
+## Capture warp-divergent baselines in the harness
+
+Keep a runnable example that highlights the divergence you are fixing so reviewers can run it themselves. The benchmark in `ch6/baseline_warp_divergence_ilp.py` (lines 32-116) uses `BenchmarkConfig` to fix iterations, wraps the hot loop in a conditional NVTX range, and even forces `torch.cuda.synchronize()` each branch to exaggerate the stall. Pairing this baseline with the optimized variant makes ILP wins obvious and keeps regressions reproducible.
+
+## Contrast residency strategies
+
+When illustrating an optimization, keep baselines intentionally naive—single-block grids, per-iteration cudaMemcpy, or serial host staging—while the optimized kernel keeps buffers device-resident, strides across large tiles, and lights up the full SM set. Showing both resident and nonresident approaches side-by-side makes the impact of coalescing, async copies, and occupancy tuning unmistakable.
 
 ## Leverage warp-level operations
 
@@ -515,6 +627,10 @@ Use CUDA’s warp intrinsics to let threads communicate without going to shared 
 Within a single process/GPU, launch independent kernels in different CUDA streams to overlap their execution if they don’t use all resources. Overlap computation with computation—e.g., one stream computing one part of the model while another stream launches an independent kernel like data preprocessing on GPU or asynchronous memcpy. Be mindful of dependencies and use CUDA events to synchronize when needed. Proper use of streams can increase GPU
 
 utilization by not leaving any resource idle—especially if you have some kernels that are light.
+
+## Schedule inference work across streams
+
+For serving stacks, dedicate streams per request class (high-priority vs. background) or per model stage (embedding lookup, attention, decoder). Use CUDA events to enforce data dependencies but let the scheduler overlap light kernels (tokenization, logits post-processing) with heavy matmuls. When batching, queue incoming requests per stream and consolidate them just before launch so small bursts don’t stall larger batches.
 
 ## Prefer library functions
 
@@ -532,19 +648,63 @@ As you optimize a kernel, periodically check how it scales with problem size and
 
 For performance-critical custom CUDA kernels, use Nsight Compute to examine the generated PTX and SASS. This deep dive can reveal issues like memory bank conflicts or redundant computations, guiding you toward targeted low-level optimizations.
 
+## Instrument kernels for repeatable timing
+
+Wrap hot kernels with CUDA events (or emit a `TIME_MS:<value>` log line) so every benchmark captures the same measurement. Record the GPU model, driver, CUDA version, and command line alongside the timing so you can rerun identical conditions later. Consistent instrumentation makes it obvious when a new driver, compiler flag, or kernel change improves—or regresses—performance.
+
 ## Use the PyTorch compiler
 
 Take advantage of PyTorch’s torch.compile to fuse Python-level operations into optimized kernels through TorchInductor. The compiler can also reduce launch overhead by integrating CUDA Graphs. Typical gains of about 10%–40% are common once the optimizations are warmed up. This eliminates interpreter overhead and unlocks compiler-level optimizations. In practice, enabling torch.compile has produced substantial speedups (e.g., 20%–50% on many models) by automatically combining kernels and utilizing
 
 NVIDIA GPU hardware (e.g., Tensor Cores) more efficiently. Always test compiled mode on your model. While it can massively boost throughput, you should ensure compatibility and correctness before deploying. When graphs are stable, enable CUDA Graphs to reduce per-iteration CPU overhead. Keep static memory pools to satisfy pointer-stability constraints.
 
+## Embrace AMP and bf16 for tensor cores
+
+PyTorch makes it trivial to run the math that Tensor Cores want. Wrap heavy regions in `torch.cuda.amp.autocast(dtype=torch.bfloat16)` (or FP16 with loss scaling), keep master weights and reductions in FP32, and enable TF32 matmuls for inference (`torch.backends.cuda.matmul.allow_tf32 = True`). This lights up Tensor Cores automatically while retaining numerical stability, often yielding 20%–50% higher throughput with minimal code change.
+
+## Share workload knobs across code paths
+
+Express total work as `micro_batch_size × micro_batches` and drive both baseline (serial micro-batches) and optimized (fused megabatches) paths from the same config. That keeps apples-to-apples comparisons honest and makes it easy to dial smoke tests vs. full runs without editing source.
+
+## Balance gradient accumulation for throughput
+
+When batch size is capped by memory, trade off `micro_batch_size` vs. `accumulation_steps` so each step keeps tensor cores busy without blowing out activation memory. Profile throughput as you sweep accumulation factors; often, a slightly larger micro batch with fewer accumulation steps delivers better performance even if the effective batch stays constant. Update learning-rate schedules to account for the new effective batch size.
+
+## Use precision-aware optimizers
+
+Mixed-precision training benefits from optimizers that keep critical statistics in higher precision. Keep first/second moments and master weights in FP32, but cast intermediate math to bf16/FP16 so tensor cores stay busy. For Adam-like optimizers, fuse bias-correction, weight decay, and update steps into a single CUDA/Triton kernel to avoid repeated casts. Monitor loss scaling or dynamic clipping to catch NaNs early.
+
+## Trim Python overhead from training loops
+
+Even after kernel tuning, Python dispatch can bottleneck small ops. Use `torch.profiler` with `with_stack=True` to find high-frequency Python frames, then migrate those hot paths into scripted/compiled modules or fused Triton kernels. Batch tiny tensor ops into larger custom autograd Functions, move bookkeeping onto the GPU, and keep host-side loops minimal so CUDA Graph capture has a clean region to replay.
+
+## Run asynchronous validation and guardrails
+
+Spin up lightweight validation jobs (lower-frequency eval datasets, gradient-norm checks, NaN detectors) on spare GPUs or background streams so they don’t steal from the main training loop. Wire these checks into dashboards and CI so anomalies trigger alerts or automatic rollbacks before they corrupt long-running jobs. This keeps the fast path safe even as you push aggressive mixed-precision and kernel tweaks.
+
 ## Plan for dynamic shapes
 
 If your input sizes vary, use torch._dynamo.mark_dynamic() to annotate dynamic dimensions or export shape-polymorphic graphs with torch.export(), and then compile. Control recompilation behavior with torch.com piler.set_stance() using "fail_on_recompile" to surface problematic shape churn in testing and CI. Use static shapes where possible to enable CUDA Graphs to reduce per-iteration CPU overhead. Leverage Triton kernels using torch.compile If PyTorch doesn’t fuse an operation well, consider writing a custom GPU kernel in Triton and integrating it. PyTorch makes it easy to register a custom GPU kernel with torch.library.triton_op.
 
+## Capture CUDA Graphs with static buffers
+
+Allocate persistent input/output tensors, copy fresh data into them each step, and wrap the steady portion of the training loop in `torch.cuda.make_graphed_callables`. CUDA Graph replay removes CPU launch overhead and keeps streams saturated. Reset Philox seeds or apply per-step RNG offsets so stochastic layers remain correct under graph capture.
+
 ## Use autotuning when available
 
 Enable library autotuning features to maximize low-level performance. For example, set torch.backends.cudnn.benchmark=True when input sizes are fixed. This lets NVIDIA’s cuDNN library try multiple convolution algorithms and pick the fastest one for your hardware. The one-time overhead leads to optimized kernels that can accelerate training and inference. If exact reproducibility isn’t required, allow nondeterministic algorithms by disabling cudnn.deterministic to unlock these faster implementations.
+
+## Reuse tensors via `out=` buffers
+
+Elementwise chains often end up allocating fresh tensors every iteration. When chasing bandwidth wins, favor PyTorch ops that accept `out` buffers (`torch.addcmul`, `torch.mul`, etc.) or safe in-place updates so you recycle storage. Pair this with the CUDA caching allocator (or `torch.cuda.memory.reserve`) to keep working sets device-resident and minimize pressure on the allocator.
+
+## Manage autoregressive caches intelligently
+
+Decoder workloads live and die by KV-cache efficiency. Keep caches in persistent device buffers, update them in-place per token, and prefetch the right shards to each GPU before the next batch arrives. When memory gets tight, compress cold layers (FP8/INT8) or spill the oldest cache blocks to host asynchronously while compute streams advance. Log cache hit rates, DMA volume, and spill latency so you know whether to scale memory or improve eviction heuristics.
+
+## Trim Python overhead from training loops
+
+Even after kernel tuning, Python dispatch can bottleneck small ops. Use `torch.profiler` with `with_stack=True` to find high-frequency Python frames, then migrate those hot paths into scripted/compiled modules or fused Triton kernels. Batch tiny tensor ops into larger custom autograd Functions, move bookkeeping onto the GPU, and keep host-side loops minimal so CUDA Graph capture has a clean region to replay.
 
 ## Leverage the read-only path
 
@@ -563,6 +723,10 @@ Avoid unnecessary global synchronizations that stall GPU progress. Excessive use
 ## Fuse small kernels to amortize launch overhead
 
 If you have many tiny GPU kernels launching back-to-back, consider merging their operations to run in a single kernel where possible. Every kernel launch has a fixed cost on the order of tens of microseconds, so combining operations through manual CUDA kernel fusion, XLA fusion, or tools like NVIDIA CUTLASS/Triton for custom ops can improve throughput. Fused kernels spend more time doing actual work and less time in launch overhead or memory round trips. This is especially helpful in inference or preprocessing pipelines where chains of elementwise ops can be executed in one go. Try torch.compile(mode="reduce- overhead") first. The compiler can fuse operation chains and wrap steady regions in CUDA Graphs. This will reduce CPU launch overhead. For unfused hotspots, consider migrating them to Triton kernels and using asynchronous TMA and automatic warp specialization where applicable.
+
+## Adopt persistent kernels for work queues
+
+When a workload launches the same kernel thousands of times (streaming batches, work queues, MoE routing), consider a persistent kernel: launch once, keep warps alive, and feed them new work items via global memory or CUDA graphs. You trade a slightly more complex kernel for dramatically lower launch overhead and better cache reuse. Size the persistent grid so each SM keeps at least one CTA resident, and fall back to traditional launches only when work patterns are highly irregular.
 
 ## Utilize GPU dynamic parallelism for intra-GPU work scheduling
 
@@ -627,6 +791,17 @@ Specifically, autotune kernel and layer parameters, swap in fused/FlashAttention
 ## Autotune kernel parameters
 
 Autotune your custom CUDA kernels for the target GPU. Choosing the correct block size, tile size, unroll factors, etc., can affect performance, and the optimal settings often differ between GPUs’ generations, such as Ampere, Hopper, Blackwell, and beyond. Use autotuning scripts or frameworks like OpenAI Triton—or even brute-force search in a preprocessing step—to find the best launch config. This can easily yield 20%–30% improvements that you’d miss with static “reasonable” settings. Use Triton features in your autotuning loop—for instance, set num_warps and num_stages, enable automatic warp specialization, and test asynchronous TMA layouts. Prefer descriptor/block-pointer APIs for shared- memory staging. Re-benchmark tile shapes when migrating to different hardware, as optimal choices will differ across GPU generations.
+
+## Align Triton kernels with hardware limits
+
+Pick `BLOCK_M/N/K` as multiples of 64 or 128 so memory transactions stay coalesced, then tune `num_warps` (4–8 for bandwidth-bound, 8–16 for compute-bound kernels) and `num_stages` (2–3) to balance register pressure against latency hiding. Benchmark candidate configs in isolation with `triton.testing.do_bench` or CUDA events before wiring them into PyTorch. When epilogues are lightweight—bias adds, GELU, scale—fuse them directly inside the Triton kernel so data never makes an extra trip through global memory.
+
+## Triton kernel tuning quick reference
+
+- Map `pid_m`, `pid_n`, etc., to contiguous tiles, use `tl.arange` broadcasting for index math, and prefer `cache_modifier=".cg"` when streaming.  
+- Fuse bias/activation/residual epilogues inside the Triton kernel so data stays in registers/shared memory.  
+- Use descriptor/block-pointer APIs plus automatic warp specialization for async TMA pipelines.  
+- Keep fallbacks handy: detect unsupported SMs at import time and route to CUDA extensions or `torch.compile` variants so the optimized logic still runs everywhere.
 
 ## Use kernel fusion in ML workloads
 
@@ -794,6 +969,18 @@ Modern data centers are increasingly using energy-aware scheduling to adjust wor
 
 In multi-GPU deployments where power budget is constrained (or energy cost is high), consider tuning for efficiency. Many workloads, especially memory-bound ones, can run at slightly reduced GPU clocks with negligible performance loss but noticeably lower power draw. For example, if a kernel is memory bound, locking the GPU at a lower clock can save power while not hurting runtime. This increases throughput per watt. Test a few power limits using nvidia-smi -pl to see if your throughput/watt improves. For some models, going from a 100% to 80% power limit yields nearly the same speed at 20% less power usage.
 
+## Tune GPU clocks deliberately
+
+Use `nvidia-smi -lgc` or vendor APIs to sweep SM/memory clocks and find the knee of the curve. Compute-bound kernels benefit from higher SM clocks; memory-bound workloads often plateau well below max and can run at 80–90% without losing throughput. Record power, thermals, and performance for each setting so you can pick the best perf/watt point (or enforce a lower cap when rack power is constrained).
+
+## Enforce QoS in multi-tenant clusters
+
+When GPUs are shared across services, throttle noisy neighbors before they tank latency for high-priority jobs. Use MIG partitions or gang-schedule whole GPU slices per tenant, enforce per-job SM and memory caps, and pin critical services to untouched partitions. Monitor queueing delay and preempt background work when latency budgets slip.
+
+### Isolate workloads with MIG and scheduler policies
+
+On A100/H100/H200-class parts, carve GPUs into MIG slices aligned with application SLAs (e.g., dedicate 1g.5gb to low-latency inference, 4g.40gb to training). Teach the cluster scheduler to place compatible jobs on the same physical GPU and avoid mixing latency-sensitive slices with bandwidth-heavy ones. Track per-slice utilization and thermals so you can rebalance partitions before contention builds.
+
 ## Use adaptive cooling strategies
 
 If running in environments with variable cooling or energy availability, integrate with cluster management to adjust workloads. For instance, schedule heavy jobs during cooler times of the day or when renewable energy supply is high—if that’s a factor for cost. Some sites implement policies to queue nonurgent jobs to run at night when electricity is cheaper. This doesn’t change single-job performance but significantly cuts costs.
@@ -814,8 +1001,103 @@ Use tools to monitor per-GPU power draw. nvidia-smi reports instantaneous draw, 
 
 If you are running a months-long training job or 24-7 inference job, consider the impact of thermals on hardware longevity. Running at 100% power and thermal limit constantly can marginally increase failure risk over time. In practice, data center GPUs are built for this type of resiliency, but if you want to be extra safe, running at 90% power target can reduce component stress with minimal slowdown. It’s a trade-off of longer training runs versus less wear on the hardware— especially if that hardware will be reused for multiple projects over a long period of time.
 
+## Effective Benchmarking Playbook
+
+Reliable speedups only matter when measurements are disciplined and reproducible. Use this playbook to keep baselines honest, optimized variants consistent, and every data point auditable.
+
+## Align workloads before timing
+
+Feed baseline and optimized paths the same tensor shapes, precisions, RNG seeds, and data staging. Clamp randomness and preprocessing so any timing delta comes from the optimization rather than a lucky input distribution.
+
+## Warm up for steady state
+
+Compile custom extensions up front, run enough warmup iterations to clear allocators, and pin CUDA events to the measured stream. Separate setup from the timed region so first-iteration noise never pollutes reported numbers.
+
+## Report throughput and latency together
+
+Log tokens per second or gigabytes per second next to wall-clock milliseconds. Improvements in one dimension can mask regressions in the other. Recording both makes tradeoffs obvious during reviews.
+
+## Cache tuning artifacts
+
+Store autotuned tile sizes, compiled TorchDynamo or Triton graphs, TMA descriptors, and NCCL communicators. Reload them between runs and only retune when batch shapes or sequence lengths cross a new regime.
+
+## Model realistic baselines
+
+Let baseline kernels exhibit the real inefficiencies you plan to fix, including host staging, tiny grids, redundant synchronizations, or single-stream launches. Avoid fake delays. Authentic baselines make speedups believable.
+
+## Validate outputs aggressively
+
+Guard every fast path with CPU or FP32 reference checks, checksums, or tolerance asserts. Run them on smoke tests and full benchmarks so optimizations never trade correctness for speed.
+
+## Stage, overlap, and keep data resident
+
+Chunk activations or tiles, use double buffering, and overlap transfers with compute through streams or CUDA Graph replay. Keep data device resident whenever possible so tuned kernels are not bottlenecked by needless PCIe round trips.
+
+## Log the environment every run
+
+Capture GPU model, driver version, CUDA toolkit, compiler flags, command line, git SHA, and benchmarking mode labels such as smoke versus full. Store RNG seeds and input descriptions alongside the metrics so others can rerun the experiment exactly.
+
+## Archive benchmark artifacts
+
+Write raw JSON or CSV measurements to timestamped directories, snapshot the console log, and refresh summary tables whenever a kernel or graph changes. Having the raw files makes regressions traceable months later.
+
+## Parameterize benchmark configs
+
+Keep every harness knob (iterations, warmup, deterministic flags, seeds, timeout multipliers, profiler toggles) in a single config object so baselines and optimizations run under identical rules. The shared BenchmarkConfig in `common/python/benchmark_harness.py` (lines 157-253) pulls defaults from one source and lets you flip deterministic or NVTX settings per run without touching the benchmark code.
+
+## Gate NVTX instrumentation automatically
+
+Wrap NVTX ranges behind a helper that checks whether profiling is enabled before touching torch.cuda.nvtx. The `nvtx_range` context manager in `common/python/nvtx_helper.py` (lines 1-118) filters the known threading warning and turns into a no-op when tracing is off. Benchmarks like `ch6/baseline_warp_divergence_ilp.py` (lines 57-96) query `get_nvtx_enabled` once per run so the hot loop stays clean when you are not collecting traces.
+
+## Autotune once and cache the winner
+
+When your kernel supports multiple tile shapes, measure a small candidate set on first use, pick the fastest, and cache that choice for the current device and problem size. The Threshold TMA pipeline launcher in `ch8/threshold_tma_kernel.cuh` (lines 168-217) records CUDA event timings for `ValuesPerThread` options, caches the best variant per `(device, count)`, and reuses it on future calls. This keeps benchmarks fast while still adapting to new shapes.
+
+## Follow a repeatable workflow
+
+1. Define matched baseline and optimized pairs.  
+2. Warm up into steady state.  
+3. Apply the targeted CUDA, Triton, or PyTorch optimizations.  
+4. Measure smoke and full runs, capturing throughput and latency.  
+5. Validate outputs against trusted references.  
+6. Summarize findings with speedup and applied knobs.  
+7. Trigger automation that rebuilds, reruns, and guards against regressions.
+
+## Maintain golden benchmark suites
+
+Keep a small set of representative workloads (single-node, multi-node, inference, training) and rerun them whenever you change drivers, CUDA, frameworks, or kernel code. Store baseline metrics and automatically diff new runs so regressions surface immediately. A few disciplined golden tests catch most performance slips long before they reach production.
+
+## Wire performance gates into CI/CD
+
+Automate the golden-suite runs as part of CI/CD so no pull request merges without meeting latency/throughput budgets. Store historical metrics, visualize trends, and fail the build when a regression exceeds tolerance. This keeps the checklist alive—optimizations stay sticky because every change must prove it doesn’t undo previous gains.
+
+## Keep a postmortem log for regressions
+
+Whenever a performance regression slips through, write a short postmortem describing the root cause, detection gap, and new guardrails (tests, telemetry). A living log helps the team spot patterns—e.g., driver upgrades or shape polymorphism repeatedly causing trouble—and proactively strengthens future optimization work.
+
+## Chapter Pattern Playbook
+
+- **Chapter 6 – ILP & launch bounds:** Baselines serialize micro-batches and relaunch tiny grids; optimized kernels keep data resident, stride across large tiles, and overlap multiple streams to prove occupancy gains.  
+- **Chapter 7 – Copy/transpose/Triton:** Start with redundant gathers or undersized tiles, then move to coalesced vector loads, padded shared-memory tiles, and Triton kernels tuned per SM target for decisive bandwidth wins.  
+- **Chapter 8 – HBM & TMA pipelines:** Contrast host→device staging loops with cp.async/TMA double buffers that reuse resident tiles and overlap producer/consumer stages.  
+- **Chapter 9 – Bank conflicts & GEMM:** Let baselines hammer the same shared-memory banks or rely on naive matmuls; optimized paths pad shared memory, reuse `out` buffers, and call cuBLAS/cuBLASLt tensor-core routines for order-of-magnitude throughput.  
+- **Chapters 10–12 – Cooperative launches & graph capture:** Baselines relaunch per iteration; optimized flows lean on cooperative grids, CUDA Graph replay, or persistent kernels so launch overhead disappears once work is resident.  
+- **Chapters 15–18 – Expert/pipeline parallelism:** Baselines sync every stage and recompute hidden states; optimized versions reuse caches, overlap streams, and report both tokens/s and latency improvements.  
+- **Chapter 19 – Memory-aware pipelines:** Baselines shuttle activations through host memory; optimized runs keep contexts resident, push work through Tensor Core matmuls, and capture steady-state loops with CUDA Graphs.
+
 ## Conclusion
 
-Treat the checklist as a repeatable playbook: profile, tune the right bottleneck at the right layer, and verify gains before scaling out. By methodically applying these practices—from OS and kernels to distributed comms and serving—you’ll achieve fast, cost-efficient, and reliable AI systems at any size. This list, while comprehensive, is not exhaustive. The field of AI systems performance engineering will continue to grow as hardware, software, and algorithms evolve. And not every best practice listed here applies to every situation. But, collectively, they cover the breadth of performance engineering scenarios for AI systems. These tips encapsulate much of the practical wisdom accumulated over years of optimizing AI system performance. When tuning your AI system, you should systematically go through each of the relevant categories listed in this chapter and run through each of the items in the checklist. For example, you should ensure the OS is tuned, confirm GPU kernels are efficient, check that you’re using libraries properly, monitor the data pipeline, optimize the training loop, tune the inference strategies, and scale out gracefully. By following these best practices, you can diagnose and resolve most performance issues and extract the maximum performance from your AI system. And remember that before you scale up your cluster drastically, you should profile on a smaller number of nodes and identify potential scale bottlenecks. For example, if you see an all-reduce collective operation already taking 20% of an iteration on 8 GPUs, it will only get worse at a larger scale—especially as you exceed the capacity of a single compute node or data center rack system, such as the Grace Blackwell GB200 and GB300 NVL72 and Vera Rubin VR200 and VR300 NVL systems. Keep this checklist handy and add to it as you discover new tricks. Combine these tips and best practices with the in-depth understanding from the earlier chapters, and you will design and run AI systems that are efficient, scalable, maintainable, cost- effective, and reliable. Now go forth and make your most ambitious ideas a reality. 
+Treat the checklist as a repeatable playbook: profile, tune the right bottleneck at the right layer, and verify gains before scaling out. By methodically applying these practices—from OS and kernels to distributed comms and serving—you’ll achieve fast, cost-efficient, and reliable AI systems at any size. This list, while comprehensive, is not exhaustive. The field of AI systems performance engineering will continue to grow as hardware, software, and algorithms evolve. And not every best practice listed here applies to every situation. But, collectively, they cover the breadth of performance engineering scenarios for AI systems. 
+
+These tips encapsulate much of the practical wisdom accumulated over years of optimizing AI system performance. When tuning your AI system, you should systematically go through each of the relevant categories listed in this chapter and run through each of the items in the checklist. For example, you should ensure the OS is tuned, confirm GPU kernels are efficient, check that you’re using libraries properly, monitor the data pipeline, optimize the training loop, tune the inference strategies, and scale out gracefully. 
+
+By following these best practices, you can diagnose and resolve most performance issues and extract the maximum performance from your AI system. And remember that before you scale up your cluster drastically, you should profile on a smaller number of nodes and identify potential scale bottlenecks. For example, if you see an all-reduce collective operation already taking 20% of an iteration on 8 GPUs, it will only get worse at a larger scale—especially as you exceed the capacity of a single compute node or data center rack system, such as the Grace Blackwell GB200 and GB300 NVL72 and Vera Rubin VR200 and VR300 NVL systems. 
+
+Keep this checklist handy and add to it as you discover new tricks. Combine these tips and best practices with the in-depth understanding from the earlier chapters, and you will design and run AI systems that are efficient, scalable, maintainable, cost- effective, and reliable. Now go forth and make your most ambitious ideas a reality. 
 
 Happy optimizing!!
+
+-Chris Fregly, San Francisco
+- **Chapters 15–18 – Expert/pipeline parallelism:** Baselines sync every stage and recompute hidden states; optimized versions reuse caches, overlap streams, and report both tokens/s and latency improvements. Tune micro-batch counts so each stage has enough work to hide latency but not so many that activation memory explodes—profile stage utilization with Nsight Systems before and after adjustments.
+- Instrument NCCL timelines with `NCCL_DEBUG=INFO`/`TRACE` or Nsight Systems to correlate slow collectives with SM idle gaps. Watch for stragglers—one rank stuck on disk or CPU can stall the whole all-reduce.
+- When links saturate, try gradient compression (FP16/bf16 all-reduce, sparsification) or pipeline the reduce so the next micro batch computes while the current gradients drain. Apply compression selectively to the largest tensors to balance accuracy and bandwidth.

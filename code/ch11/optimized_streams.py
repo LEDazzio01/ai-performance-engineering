@@ -80,7 +80,7 @@ class OptimizedStreamsBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_streams_concurrent", enable=enable_nvtx):
+        with nvtx_range("streams", enable=enable_nvtx):
             # Launch kernels on different streams - they can overlap
             with torch.cuda.stream(self.stream1):
                 self.data1 = self.data1 * 2.0

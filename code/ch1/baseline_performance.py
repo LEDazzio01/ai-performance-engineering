@@ -31,6 +31,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -54,6 +55,11 @@ class BaselinePerformanceBenchmark(Benchmark):
         self.data = None
         self.target = None
         self.optimizer = None
+        self.workload = WORKLOAD
+        self.batch_size = self.workload.microbatch_size
+        self.num_microbatches = self.workload.performance_microbatches
+        self.microbatches = None
+        self.targets = None
     
     def setup(self) -> None:
         """Setup: initialize model and data."""
@@ -74,9 +80,26 @@ class BaselinePerformanceBenchmark(Benchmark):
             self.model = self.model.to(self.device)
         
         self.model.eval()
-        self.data = torch.randn(32, 256, device=self.device)
-        self.target = torch.randint(0, 10, (32,), device=self.device)
+        self.microbatches = [
+            torch.randn(self.batch_size, 256, device=self.device)
+            for _ in range(self.num_microbatches)
+        ]
+        self.targets = [
+            torch.randint(0, 10, (self.batch_size,), device=self.device)
+            for _ in range(self.num_microbatches)
+        ]
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=1e-3)
+        # Warm up: run a few iterations so any torch.compile graph capture or
+        # kernel autotuning occurs before the harness starts timing.
+        for _ in range(3):
+            self.optimizer.zero_grad(set_to_none=True)
+            logits = self.model(self.microbatches[0])
+            loss = torch.nn.functional.cross_entropy(logits, self.targets[0])
+            loss.backward()
+            self.optimizer.step()
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+        self.optimizer.zero_grad(set_to_none=True)
     
     def benchmark_fn(self) -> None:
         """Function to benchmark."""
@@ -90,31 +113,34 @@ class BaselinePerformanceBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_performance", enable=enable_nvtx):
-            self.optimizer.zero_grad(set_to_none=True)
-            logits = self.model(self.data)
-            loss = torch.nn.functional.cross_entropy(logits, self.target)
-            loss.backward()
-            self.optimizer.step()
+            for data, target in zip(self.microbatches, self.targets):
+                self.optimizer.zero_grad(set_to_none=True)
+                logits = self.model(data)
+                loss = torch.nn.functional.cross_entropy(logits, target)
+                loss.backward()
+                self.optimizer.step()
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Cleanup."""
-        del self.model, self.data, self.target, self.optimizer
+        del self.model, self.microbatches, self.targets, self.optimizer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
+            iterations=5,
+            warmup=1,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.data is None:
+        if self.microbatches is None:
             return "Data not initialized"
         # Check that model can produce valid output
         try:

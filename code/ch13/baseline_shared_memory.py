@@ -45,7 +45,10 @@ class BaselineSharedMemoryBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs: torch.Tensor | None = None
+        self.micro_batches = 64
+        self.micro_batch = 8
+        self._last_loss = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model and data in global memory."""
@@ -62,8 +65,12 @@ class BaselineSharedMemoryBenchmark(Benchmark):
         
         self.model.train()
         
-        # Data in global memory (no shared memory optimization)
-        self.input = torch.randn(32, 1024, device=self.device)
+        self.inputs = torch.randn(
+            self.micro_batches,
+            self.micro_batch,
+            1024,
+            device=self.device,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -82,21 +89,21 @@ class BaselineSharedMemoryBenchmark(Benchmark):
             # Shared memory would cache frequently accessed data
             # This baseline accesses global memory repeatedly (inefficient)
             
-            # Multiple operations accessing same data from global memory
-            output1 = self.model(self.input)
-            output2 = self.model(self.input)  # Re-access from global memory
-            output3 = self.model(self.input)  # Re-access from global memory
-            
-            # Baseline: No shared memory benefit
-            # Global memory access is slower than shared memory
-            # Poor cache utilization for repeated data access
-            _ = output1 + output2 + output3
+            if self.model is None or self.inputs is None:
+                raise RuntimeError("Benchmark not initialized")
+            loss = 0.0
+            for idx in range(self.micro_batches):
+                tile = self.inputs[idx].clone()  # Force global read each time
+                out = self.model(tile)
+                loss += float(out.sum())
+                torch.cuda.synchronize(self.device)
+            self._last_loss = loss
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -110,7 +117,7 @@ class BaselineSharedMemoryBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
+        if self.inputs is None:
             return "Input not initialized"
         return None
 

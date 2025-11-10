@@ -43,7 +43,10 @@ class BaselineOccupancyBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.requests = None
+        self.num_requests = 512
+        self.feature_dim = 1024
+        self.micro_batch = 1
     
     def setup(self) -> None:
         """Setup: Initialize model with small input (low occupancy)."""
@@ -53,13 +56,12 @@ class BaselineOccupancyBenchmark(Benchmark):
         # This baseline uses small input causing low occupancy
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.feature_dim, 2048),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(2048, self.feature_dim),
         ).to(self.device).eval()
         
-        # Small input (low occupancy)
-        self.input = torch.randn(2, 1024, device=self.device)  # Very small batch
+        self.requests = torch.randn(self.num_requests, self.feature_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -78,12 +80,13 @@ class BaselineOccupancyBenchmark(Benchmark):
                 # Baseline: Low occupancy
                 # Small input causes insufficient work per kernel
                 # Occupancy: low GPU utilization due to small batch size
-                output = self.model(self.input)
-                
+                for start in range(0, self.num_requests, self.micro_batch):
+                    batch = self.requests[start:start + self.micro_batch]
+                    output = self.model(batch)
+                    _ = output.sum()
                 # Baseline: Low occupancy issues
                 # Small batch size causes GPU underutilization
                 # Not enough work to keep GPU busy
-                _ = output.sum()
 
     
     def teardown(self) -> None:
@@ -103,8 +106,8 @@ class BaselineOccupancyBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.requests is None:
+            return "Requests not initialized"
         return None
 
 

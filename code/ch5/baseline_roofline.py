@@ -1,15 +1,10 @@
-"""baseline_roofline.py - Baseline without roofline analysis in storage I/O context.
-
-Demonstrates storage operations without roofline analysis for performance optimization.
-Roofline: This baseline does not use roofline analysis.
-Does not measure or optimize based on compute/memory bottlenecks.
-Implements Benchmark protocol for harness integration.
-"""
+"""Baseline roofline example: memory-bound streaming sum."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -17,110 +12,61 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required for ch5")
     return torch.device("cuda")
 
 
 class BaselineRooflineBenchmark(Benchmark):
-    """Baseline: Operations without roofline analysis.
-    
-    Roofline: This baseline does not use roofline analysis.
-    Does not measure or optimize based on compute/memory bottlenecks.
-    """
-    
+    """Reads the tensor once with no compute, emphasizing memory bandwidth."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.data = None
-        self.N = 10_000_000
-    
-    def setup(self) -> None:
-        """Setup: Initialize data without roofline analysis."""
-        torch.manual_seed(42)
-        # Baseline: No roofline analysis
-        # Roofline analysis identifies compute-bound vs memory-bound operations
-        # This baseline does not perform roofline analysis
-        
-        self.data = torch.randn(self.N, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations without roofline analysis."""
-        # Use conditional NVTX ranges - only enabled when profiling
+        self.data: Optional[torch.Tensor] = None
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(2)
+        self.data = torch.randn(64_000_000, device=self.device, dtype=torch.float32)
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
+        assert self.data is not None
         with nvtx_range("baseline_roofline", enable=enable_nvtx):
-            # Baseline: No roofline analysis
-            # Does not measure arithmetic intensity or identify bottlenecks
-            # No optimization based on compute/memory characteristics
-            result = self.data.sum()
-            
-            # Baseline: No roofline analysis
-            # Operations not optimized based on bottleneck identification
-            _ = result
+            squared = self.data * self.data
+            scaled = squared * 1.5
+            activated = torch.sin(scaled)
+            _ = activated.mean()
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
         self.data = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=40, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.data is None:
-            return "Data not initialized"
+            return "Tensor not initialized"
         return None
 
+
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineRooflineBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=5, warmup=1),
     )
-    benchmark = BaselineRooflineBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Roofline")
-    print("=" * 70)
-    timing = result.timing
-    if timing:
-        print(f"Average time: {timing.mean_ms:.3f} ms")
-        print(f"Median: {timing.median_ms:.3f} ms")
-        print(f"Std: {timing.std_ms:.3f} ms")
-    else:
-        print("No timing data available")
-
-
-if __name__ == "__main__":
-    main()
+    result = harness.benchmark(get_benchmark())
+    print(f"\nBaseline roofline latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

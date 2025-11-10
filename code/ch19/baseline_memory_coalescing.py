@@ -30,48 +30,48 @@ class MemoryCoalescingBenchmark(Benchmark):
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.input_matrix = None
+        self.output_matrix = None
+        self.shuffle = None
+        self.chunk = 32
+        self.rows = 2048
+        self.cols = 1024
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: Initialize tensors with poor memory layout."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        # Baseline: intentionally touch columns in random order which defeats coalescing
+        self.input_matrix = torch.randn(
+            self.rows, self.cols, device=self.device, dtype=torch.float32
+        )
+        self.output_matrix = torch.empty_like(self.input_matrix)
+        self.shuffle = torch.randperm(self.cols, device=self.device)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
+        """Benchmark: Column scatter/gather with non-coalesced memory."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
         with nvtx_range("baseline_memory_coalescing", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch197 for full distributed training implementations
+            matrix = self.input_matrix
+            scale = 1.0003
+            bias = 0.01
+            for start in range(0, self.cols, self.chunk):
+                cols = self.shuffle[start:start + self.chunk]
+                gathered = matrix[:, cols]
+                transformed = gathered * scale + bias
+                self.output_matrix[:, cols] = transformed
+            torch.cuda.synchronize()
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
-        self.output = None
+        self.input_matrix = None
+        self.output_matrix = None
+        self.shuffle = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -83,7 +83,7 @@ class MemoryCoalescingBenchmark(Benchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.output is None:
+        if self.output_matrix is None:
             return "Output tensor not initialized"
         return None
 

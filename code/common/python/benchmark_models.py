@@ -256,6 +256,32 @@ class ProfilerMetrics(BaseModel):
     schemaVersion: str = Field("1.0", description="Schema version for forward compatibility")
 
 
+class ThroughputStats(BaseModel):
+    """Measured throughput derived from benchmark timing and workload metadata."""
+    
+    requests_per_s: Optional[float] = Field(None, description="Requests processed per second")
+    tokens_per_s: Optional[float] = Field(None, description="Tokens processed per second")
+    samples_per_s: Optional[float] = Field(None, description="Samples/items processed per second")
+    bytes_per_s: Optional[float] = Field(None, description="Bytes processed per second")
+    custom_unit_per_s: Optional[float] = Field(None, description="Custom workload unit throughput per second")
+    custom_unit_name: Optional[str] = Field(None, description="Name of the custom workload unit")
+    latency_ms: Optional[float] = Field(None, description="Mean latency per iteration in milliseconds")
+    goodput: Optional[float] = Field(None, description="Goodput ratio reported by benchmark (0-1)")
+    
+    schemaVersion: str = Field("1.0", description="Schema version for forward compatibility")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "requests_per_s": 800.0,
+                "tokens_per_s": 6400.0,
+                "latency_ms": 1.25,
+                "schemaVersion": "1.0"
+            }
+        }
+    )
+
+
 class BenchmarkResult(BaseModel):
     """Comprehensive benchmark result with timing, memory, and profiling data."""
     
@@ -267,6 +293,9 @@ class BenchmarkResult(BaseModel):
     
     # Memory statistics
     memory: Optional[MemoryStats] = Field(None, description="Memory statistics")
+    
+    # Throughput statistics
+    throughput: Optional[ThroughputStats] = Field(None, description="Throughput metrics derived from workload metadata")
     
     # Profiling artifacts
     artifacts: Optional[ProfilerArtifacts] = Field(None, description="Profiling artifact paths")
@@ -288,6 +317,7 @@ class BenchmarkResult(BaseModel):
     benchmark_name: Optional[str] = Field(None, description="Name of the benchmark")
     device: Optional[str] = Field(None, description="Device used (e.g., 'cuda:0', 'cpu')")
     mode: Optional[str] = Field(None, description="Benchmark mode (e.g., 'triton', 'pytorch', 'custom')")
+    custom_metrics: Dict[str, float] = Field(default_factory=dict, description="Benchmark-specific custom metrics")
     
     schemaVersion: str = Field("1.0", description="Schema version for forward compatibility")
     
@@ -311,6 +341,15 @@ class BenchmarkResult(BaseModel):
                     "schemaVersion": "1.0"
                 },
                 "errors": [],
+                "throughput": {
+                    "requests_per_s": 800.0,
+                    "tokens_per_s": 6400.0,
+                    "latency_ms": 1.25,
+                    "schemaVersion": "1.0"
+                },
+                "custom_metrics": {
+                    "scenario_total_phase_ms": 123.4
+                },
                 "schemaVersion": "1.0"
             }
         }
@@ -355,4 +394,3 @@ class BenchmarkRun(BaseModel):
                 "schemaVersion": "1.0"
             }
         }
-

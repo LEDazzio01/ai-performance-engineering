@@ -20,6 +20,10 @@ from common.python.symmetric_memory_patch import (
     ensure_symmetric_memory_api as _ensure_symmetric_memory_api,
 )
 from common.python.compile_utils import enable_tf32
+from common.python.triton_compat import (
+    ENABLE_TRITON_PATCH as _TRITON_PATCH_ENABLED,
+    ensure_triton_compat,
+)
 
 _ensure_symmetric_memory_api()
 
@@ -245,10 +249,13 @@ class ArchitectureConfig:
             if "CMAKE_CUDA_ARCHITECTURES" not in os.environ:
                 os.environ["CMAKE_CUDA_ARCHITECTURES"] = "100;103"
         elif self.arch == "grace_blackwell":
-            if "TORCH_CUDA_ARCH_LIST" not in os.environ:
-                os.environ["TORCH_CUDA_ARCH_LIST"] = "12.1"
-            if "CMAKE_CUDA_ARCHITECTURES" not in os.environ:
-                os.environ["CMAKE_CUDA_ARCHITECTURES"] = "121"
+            # CUDA 13.0's ptxas refuses tcgen05/tensormap opcodes for sm_121, so clamp to sm_120.
+            arch_list = os.environ.get("TORCH_CUDA_ARCH_LIST")
+            if not arch_list or "12.1" in arch_list:
+                os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0"
+            cmake_arch = os.environ.get("CMAKE_CUDA_ARCHITECTURES")
+            if not cmake_arch or "121" in cmake_arch:
+                os.environ["CMAKE_CUDA_ARCHITECTURES"] = "120"
         
         # PyTorch Inductor configuration
         inductor = getattr(torch, "_inductor", None)
@@ -385,12 +392,11 @@ class ArchitectureConfig:
 
 _OPTIMIZATIONS_APPLIED = False
 _SYMMETRIC_SHIM_INSTALLED = False
-_TRITON_ARCH_PATCHED = False
 
 # Feature flags (can be disabled via environment variables)
 ENABLE_SYMMETRIC_MEMORY_SHIM = os.environ.get("ENABLE_SYMMETRIC_MEMORY_SHIM", "1") == "1"
-ENABLE_TRITON_PATCH = os.environ.get("ENABLE_TRITON_PATCH", "1") == "1"
 VERBOSE_EXPERIMENTAL_FEATURES = os.environ.get("VERBOSE_EXPERIMENTAL_FEATURES", "0") == "1"
+ENABLE_TRITON_PATCH = _TRITON_PATCH_ENABLED
 
 
 def _install_symmetric_memory_shim() -> None:
@@ -570,154 +576,13 @@ def _install_symmetric_memory_shim() -> None:
         # Don't raise - allow code to continue without shim
 
 
-def _patch_triton_sm_arch_suffix() -> None:
-    """
-    Patch Triton compiler to handle Blackwell (SM 10.0) and Grace-Blackwell (SM 12.1) architectures correctly.
-    
-    WHY THIS EXISTS:
-    Triton 3.5+ may generate SM architecture names with 'a' suffix (e.g., "sm_100a", "sm_121a")
-    that PTXAS doesn't support. This patch ensures compatibility by:
-    1. Clamping SM 10.1+ to SM 10.0 (Blackwell) until Triton adds native support
-    2. Removing 'a' suffix from architecture names when present (sm_121a -> sm_121, sm_100a -> sm_100)
-    
-    WHAT IT DOES:
-    - Patches sm_arch_from_capability() to return compatible SM names
-    - Patches CUDABackend.make_ptx() and make_cubin() to clamp capabilities
-    
-    WHEN TO DISABLE:
-    - Set ENABLE_TRITON_PATCH=0 if Triton adds native Blackwell/Grace-Blackwell support
-    - The patch gracefully skips if Triton is unavailable
-    
-    KNOWN ISSUES:
-    - Triton 3.5 has compiler bugs with optimal TMA configurations (see triton_tma_blackwell.py)
-    - This patch doesn't fix those bugs, only ensures compilation succeeds
-    
-    PERFORMANCE IMPACT:
-    - None: Only affects compilation, not runtime
-    - Required for Triton kernels to compile on Blackwell and Grace-Blackwell
-    
-    UPSTREAM BUG TRACKING:
-    This is a known upstream Triton compiler bug. Similar issues are tracked in:
-    
-    - **SGLang**: GitHub issue #8879
-      https://github.com/sgl-project/sglang/issues/8879
-      "[Bug] GPT-OSS Blackwell: ptxas fails with invalid architecture sm_120a during Triton kernel compilation"
-    
-    - **SGLang**: GitHub issue #1413 (related)
-      https://github.com/sgl-project/sglang/issues/1413
-      "[Bug] triton attention-backend bug" - TMA descriptor initialization failures
-    
-    - **vLLM**: NVIDIA Developer Forums discussion
-      https://forums.developer.nvidia.com/t/running-llama-3-1-8b-fp4-get-triton-error-value-sm-121a-is-not-defined-for-option-gpu-name/348808
-      Error: "Value 'sm_121a' is not defined for option 'gpu-name'"
-    
-    - **Upstream Triton**: Should be reported/fixed in Triton repository
-      https://github.com/triton-lang/triton/issues
-      Bug: Triton generates SM architecture names with 'a' suffix that PTXAS doesn't support
-    """
-    global _TRITON_ARCH_PATCHED
-    
-    if _TRITON_ARCH_PATCHED:
-        return
-    
-    if not ENABLE_TRITON_PATCH:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print("INFO:  Triton SM arch patch disabled via ENABLE_TRITON_PATCH=0")
-        return
-
-    try:
-        import triton
-        import triton.backends.nvidia.compiler as triton_compiler
-    except (ImportError, ModuleNotFoundError):
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print("WARNING: Triton SM arch patch: Triton not available")
-        return
-
-    # Version check: Only apply patch to Triton 3.5+ where the bug exists
-    # Triton < 3.5 doesn't have the 'a' suffix bug
-    try:
-        triton_version_str = getattr(triton, "__version__", "0.0.0")
-        triton_version = _parse_version_tuple(triton_version_str)
-        # Bug exists in Triton 3.5.0 and later
-        if triton_version < (3, 5, 0):
-            if VERBOSE_EXPERIMENTAL_FEATURES:
-                print(f"INFO:  Triton SM arch patch: Skipping (Triton {triton_version_str} < 3.5.0, bug not present)")
-            return
-    except Exception as e:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"WARNING: Triton SM arch patch: Could not check version ({e}), applying patch anyway")
-
-    # Check if already patched
-    if getattr(triton_compiler, "_sm_arch_patch_applied", False):
-        _TRITON_ARCH_PATCHED = True
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print("PASSED: Triton SM arch patch: Already applied")
-        return
-
-    # Patch sm_arch_from_capability
-    original_fn = triton_compiler.sm_arch_from_capability
-
-    def _safe_sm_arch_from_capability(capability: int, _orig=original_fn):
-        """
-        Generate safe SM architecture name for Blackwell.
-        
-        GB10 (SM 12.1) supports TMA. CUDA 13.0 supports sm_121!
-        Just remove 'a' suffix if present (ptxas doesn't recognize it).
-        """
-        arch = _orig(capability)
-        
-        # Remove 'a' suffix if present - CUDA 13.0 knows sm_121, not sm_121a
-        # Examples: "sm_121a" -> "sm_121", "sm_100a" -> "sm_100"
-        if arch.endswith("a"):
-            return arch[:-1]
-        
-        return arch
-
-    try:
-        triton_compiler.sm_arch_from_capability = _safe_sm_arch_from_capability  # type: ignore[assignment]
-        triton_compiler._sm_arch_patch_applied = True  # type: ignore[attr-defined]
-    except Exception as e:
-        if VERBOSE_EXPERIMENTAL_FEATURES:
-            print(f"WARNING: Triton SM arch patch: Failed to patch sm_arch_from_capability ({e})")
-        return
-
-    # Patch CUDABackend PTX/CUBIN generation
-    implementation_cls = getattr(triton_compiler, "CUDABackend", None)
-    if implementation_cls is not None and not hasattr(implementation_cls, "_capability_clamp_patch"):
-        original_make_ptx = implementation_cls.make_ptx
-        original_make_cubin = implementation_cls.make_cubin
-
-        def _make_ptx_with_clamp(self, src, metadata, opt, capability, _orig=original_make_ptx):
-            """Keep capability as-is - CUDA 13.0 supports SM 12.1."""
-            # No clamping needed - CUDA 13.0 ptxas knows sm_121
-            return _orig(self, src, metadata, opt, capability)
-
-        def _make_cubin_with_clamp(self, src, metadata, opt, capability, _orig=original_make_cubin):
-            """Keep capability as-is - CUDA 13.0 supports SM 12.1."""
-            # No clamping needed - CUDA 13.0 ptxas knows sm_121
-            return _orig(self, src, metadata, opt, capability)
-
-        try:
-            implementation_cls.make_ptx = _make_ptx_with_clamp  # type: ignore[assignment]
-            implementation_cls.make_cubin = _make_cubin_with_clamp  # type: ignore[assignment]
-            implementation_cls._capability_clamp_patch = True  # type: ignore[attr-defined]
-        except Exception as e:
-            if VERBOSE_EXPERIMENTAL_FEATURES:
-                print(f"WARNING: Triton SM arch patch: Failed to patch CUDABackend ({e})")
-            # Continue - sm_arch_from_capability patch may be sufficient
-    
-    _TRITON_ARCH_PATCHED = True
-    if VERBOSE_EXPERIMENTAL_FEATURES:
-        print("PASSED: Triton SM arch patch: Applied successfully")
-
-
 def configure_optimizations() -> None:
     global _OPTIMIZATIONS_APPLIED
     if _OPTIMIZATIONS_APPLIED:
         return
     ArchitectureConfig().configure_pytorch_optimizations()
     _install_symmetric_memory_shim()
-    _patch_triton_sm_arch_suffix()
+    ensure_triton_compat()
     _OPTIMIZATIONS_APPLIED = True
 
 

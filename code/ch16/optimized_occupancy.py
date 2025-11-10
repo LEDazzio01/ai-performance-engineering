@@ -80,7 +80,7 @@ class OptimizedOccupancyBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("optimized_occupancy_high", enable=enable_nvtx):
+        with nvtx_range("occupancy", enable=enable_nvtx):
             with torch.no_grad():
                 # Optimization: Large forward pass - high occupancy
                 # Process large amount of work per pass

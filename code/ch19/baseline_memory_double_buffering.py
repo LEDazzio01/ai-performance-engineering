@@ -1,4 +1,4 @@
-"""Baseline stream-ordered single-GPU (no distributed)."""
+"""baseline_memory_double_buffering.py - Single-stream baseline."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn as nn
 from typing import Optional
 
 from common.python.benchmark_harness import (
@@ -26,25 +27,40 @@ def resolve_device() -> torch.device:
 
 
 class MemoryDoubleBufferingBenchmark(Benchmark):
-    """Baseline: Single-GPU stream-ordered (no distributed computing)."""
+    """Baseline: single stream, single buffer (no overlap)."""
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.model: Optional[nn.Module] = None
+        self.buffer: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        self.stream: Optional[torch.cuda.Stream] = None
+        self.batch_size = 4
+        self.seq_len = 1024
+        self.hidden_dim = 1024
 
     def setup(self) -> None:
         """Setup: Initialize single-GPU tensors."""
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
+        self.model = nn.Sequential(
+            nn.Linear(self.hidden_dim, self.hidden_dim * 4),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim * 4, self.hidden_dim),
+        ).to(self.device).half().eval()
+        self.buffer = torch.randn(
+            self.batch_size,
+            self.seq_len,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self.output = torch.empty_like(self.buffer)
         self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        torch.cuda.synchronize()
+        with torch.cuda.stream(self.stream):
+            self.output.copy_(self.buffer, non_blocking=True)
+        self.stream.synchronize()
 
     def benchmark_fn(self) -> None:
         """Benchmark: Single-GPU stream-ordered operations."""
@@ -57,28 +73,27 @@ class MemoryDoubleBufferingBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
+        assert self.model is not None and self.buffer is not None and self.stream is not None
         with nvtx_range("baseline_memory_double_buffering", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch197 for full distributed training implementations
+            with torch.no_grad():
+                with torch.cuda.stream(self.stream):
+                    self.output = self.model(self.buffer)
+            self.stream.synchronize()
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
+        self.model = None
+        self.buffer = None
         self.output = None
+        self.stream = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=20,
+            warmup=5,
         )
 
     def validate_result(self) -> Optional[str]:

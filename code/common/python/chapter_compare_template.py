@@ -126,10 +126,6 @@ def load_benchmark(module_path: Path, timeout_seconds: int = 15) -> Optional[Ben
 def create_standard_metrics(
     chapter: str,
     all_metrics: Dict[str, Any],
-    default_tokens_per_s: float = 100.0,
-    default_requests_per_s: float = 10.0,
-    default_goodput: float = 0.85,
-    default_latency_s: float = 0.001,
 ) -> Dict[str, Any]:
     """Create standardized metrics dictionary from collected results.
     
@@ -163,16 +159,6 @@ def create_standard_metrics(
         all_metrics['speedup'] = 1.0
         all_metrics['average_speedup'] = 1.0
     
-    # Ensure required metrics exist (use defaults if not set)
-    if 'tokens_per_s' not in all_metrics:
-        all_metrics['tokens_per_s'] = default_tokens_per_s
-    if 'requests_per_s' not in all_metrics:
-        all_metrics['requests_per_s'] = default_requests_per_s
-    if 'goodput' not in all_metrics:
-        all_metrics['goodput'] = default_goodput
-    if 'latency_s' not in all_metrics:
-        all_metrics['latency_s'] = default_latency_s
-    
     return all_metrics
 
 
@@ -198,6 +184,68 @@ def profile_template(
     logger.info("=" * 70)
     logger.info(f"Chapter {chapter.upper()}: Comparing Implementations")
     logger.info("=" * 70)
+    
+    chapter_tokens: List[float] = []
+    chapter_requests: List[float] = []
+    chapter_latencies_ms: List[float] = []
+    chapter_goodputs: List[float] = []
+
+    def record_throughput(prefix: str, throughput_obj: Optional[Any], metrics: Dict[str, Any]) -> None:
+        if not throughput_obj:
+            return
+        tokens = getattr(throughput_obj, "tokens_per_s", None)
+        requests = getattr(throughput_obj, "requests_per_s", None)
+        samples = getattr(throughput_obj, "samples_per_s", None)
+        bytes_per_s = getattr(throughput_obj, "bytes_per_s", None)
+        custom_unit = getattr(throughput_obj, "custom_unit_per_s", None)
+        custom_unit_name = getattr(throughput_obj, "custom_unit_name", None)
+        latency_ms = getattr(throughput_obj, "latency_ms", None)
+        goodput = getattr(throughput_obj, "goodput", None)
+
+        if tokens is not None:
+            metrics[f"{prefix}_tokens_per_s"] = tokens
+            chapter_tokens.append(tokens)
+        if requests is not None:
+            metrics[f"{prefix}_requests_per_s"] = requests
+            chapter_requests.append(requests)
+        if samples is not None:
+            metrics[f"{prefix}_samples_per_s"] = samples
+        if bytes_per_s is not None:
+            metrics[f"{prefix}_bytes_per_s"] = bytes_per_s
+        if custom_unit is not None:
+            key = f"{prefix}_custom_unit_per_s"
+            metrics[key] = custom_unit
+            if custom_unit_name:
+                metrics[f"{prefix}_custom_unit_name"] = custom_unit_name
+        if latency_ms is not None:
+            metrics[f"{prefix}_latency_ms"] = latency_ms
+            metrics[f"{prefix}_latency_s"] = latency_ms / 1000.0
+            chapter_latencies_ms.append(latency_ms)
+        if goodput is not None:
+            metrics[f"{prefix}_goodput"] = goodput
+            chapter_goodputs.append(goodput)
+
+    def format_throughput_summary(throughput_obj: Optional[Any]) -> str:
+        if not throughput_obj:
+            return ""
+        parts = []
+        requests = getattr(throughput_obj, "requests_per_s", None)
+        tokens = getattr(throughput_obj, "tokens_per_s", None)
+        samples = getattr(throughput_obj, "samples_per_s", None)
+        latency_ms = getattr(throughput_obj, "latency_ms", None)
+        goodput = getattr(throughput_obj, "goodput", None)
+
+        if requests:
+            parts.append(f"{requests:,.2f} req/s")
+        if tokens:
+            parts.append(f"{tokens:,.2f} tokens/s")
+        if samples and samples != tokens:
+            parts.append(f"{samples:,.2f} samples/s")
+        if latency_ms:
+            parts.append(f"{latency_ms:.3f} ms/iter")
+        if goodput is not None:
+            parts.append(f"goodput={goodput:.2%}")
+        return ", ".join(parts)
     
     if not torch.cuda.is_available():
         logger.warning("CUDA not available - skipping")
@@ -312,6 +360,11 @@ def profile_template(
                 if p99:
                     logger.info(f"      📈 Percentiles: p99={p99:.2f}ms, p75={baseline_timing.percentiles.get(75.0, 0):.2f}ms, "
                           f"p50={baseline_timing.percentiles.get(50.0, 0):.2f}ms")
+            baseline_throughput = getattr(baseline_result, "throughput", None)
+            throughput_summary = format_throughput_summary(baseline_throughput)
+            if throughput_summary:
+                logger.info(f"      ⚡ Throughput: {throughput_summary}")
+            record_throughput(f"{example_name}_baseline", baseline_throughput, all_metrics)
         except Exception as e:
             error_msg = str(e)
             # Check for skip warnings
@@ -376,6 +429,12 @@ def profile_template(
                         logger.info(f"        💾 Memory: peak={opt_peak:.2f}MB{mem_change}")
                     if optimized_result.memory.allocated_mb is not None:
                         logger.info(f"                 allocated={optimized_result.memory.allocated_mb:.2f}MB")
+                
+                optimized_throughput = getattr(optimized_result, "throughput", None)
+                throughput_summary = format_throughput_summary(optimized_throughput)
+                if throughput_summary:
+                    logger.info(f"        ⚡ Throughput: {throughput_summary}")
+                record_throughput(f"{example_name}_{technique}", optimized_throughput, all_metrics)
                 
                 # Percentile comparison
                 if optimized_timing and optimized_timing.percentiles and baseline_timing and baseline_timing.percentiles:
@@ -443,6 +502,17 @@ def profile_template(
                 'num_optimizations': 0
             })
     
+    if chapter_requests:
+        all_metrics['requests_per_s'] = max(chapter_requests)
+    if chapter_tokens:
+        all_metrics['tokens_per_s'] = max(chapter_tokens)
+    if chapter_latencies_ms:
+        best_latency = min(chapter_latencies_ms)
+        all_metrics['latency_ms'] = best_latency
+        all_metrics['latency_s'] = best_latency / 1000.0
+    if chapter_goodputs:
+        all_metrics['goodput'] = max(chapter_goodputs)
+
     # Apply custom metrics callback if provided
     if custom_metrics_callback is not None:
         custom_metrics_callback(all_metrics)

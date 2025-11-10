@@ -21,15 +21,25 @@ def discover_benchmarks(chapter_dir: Path) -> List[Tuple[Path, List[Path], str]]
     """
     pairs = []
     baseline_files = list(chapter_dir.glob("baseline_*.py"))
+    example_names = {
+        baseline_file.stem.replace("baseline_", "")
+        for baseline_file in baseline_files
+    }
     
     for baseline_file in baseline_files:
-        # Extract example name: baseline_moe_dense.py -> moe
-        example_name = baseline_file.stem.replace("baseline_", "").split("_")[0]
+        # Extract example name using the entire suffix after "baseline_"
+        # This preserves variants like "moe_dense" instead of collapsing everything to "moe".
+        example_name = baseline_file.stem.replace("baseline_", "")
         optimized_files: List[Path] = []
         
         # Pattern 1: optimized_{name}_*.py (e.g., optimized_moe_sparse.py)
         pattern1 = chapter_dir / f"optimized_{example_name}_*.py"
-        optimized_files.extend(pattern1.parent.glob(pattern1.name))
+        for opt_path in pattern1.parent.glob(pattern1.name):
+            suffix = opt_path.stem.replace(f"optimized_{example_name}_", "", 1)
+            candidate_name = f"{example_name}_{suffix}"
+            if candidate_name in example_names:
+                continue
+            optimized_files.append(opt_path)
         
         # Pattern 2: optimized_{name}.py (e.g., optimized_moe.py)
         pattern2 = chapter_dir / f"optimized_{example_name}.py"
@@ -87,6 +97,10 @@ def discover_all_chapters(repo_root: Path) -> List[Path]:
         d for d in repo_root.iterdir()
         if d.is_dir() and d.name.startswith('ch') and d.name[2:].isdigit()
     ], key=chapter_sort_key)
+    
+    capstone_dir = repo_root / "capstone"
+    if capstone_dir.is_dir():
+        chapter_dirs.append(capstone_dir)
     return chapter_dirs
 
 
@@ -106,20 +120,23 @@ def discover_benchmark_pairs(repo_root: Path, chapter: str = "all") -> List[Tupl
         chapter_dirs = discover_all_chapters(repo_root)
     else:
         # Normalize chapter argument
-        if chapter.isdigit():
-            chapter = f"ch{chapter}"
-        elif not chapter.startswith('ch'):
-            chapter = f"ch{chapter}"
-        
-        chapter_dir = repo_root / chapter
-        if chapter_dir.exists():
-            chapter_dirs = [chapter_dir]
+        normalized = chapter.lower()
+        if normalized == "capstone":
+            chapter_dir = repo_root / "capstone"
+            chapter_dirs = [chapter_dir] if chapter_dir.exists() else []
         else:
-            chapter_dirs = []
+            if chapter.isdigit():
+                chapter = f"ch{chapter}"
+            elif not chapter.startswith('ch'):
+                chapter = f"ch{chapter}"
+            chapter_dir = repo_root / chapter
+            if chapter_dir.exists():
+                chapter_dirs = [chapter_dir]
+            else:
+                chapter_dirs = []
     
     for chapter_dir in chapter_dirs:
         pairs = discover_benchmarks(chapter_dir)
         all_pairs.extend(pairs)
     
     return all_pairs
-

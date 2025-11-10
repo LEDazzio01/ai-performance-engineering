@@ -62,7 +62,7 @@ class BaselineMemoryTransferBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_memory_transfer_pcie", enable=enable_nvtx):
+        with nvtx_range("memory_transfer", enable=enable_nvtx):
             # Traditional synchronous copy (simulates PCIe transfer)
             self.device_data.copy_(self.host_data, non_blocking=False)
 

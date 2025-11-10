@@ -39,7 +39,8 @@ class BaselinePipelineParallelismBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input_data = None
-        self.batch_size = 8
+        self.batch_size = 256
+        self.hidden_size = 1024
     
     def setup(self) -> None:
         """Setup: Initialize model with all layers on single GPU."""
@@ -48,17 +49,17 @@ class BaselinePipelineParallelismBenchmark(Benchmark):
         # Pipeline parallelism splits model layers across multiple GPUs
         # This baseline processes all layers sequentially on one GPU
         self.model = nn.Sequential(
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
+            nn.Linear(self.hidden_size, self.hidden_size * 4),
+            nn.GELU(),
+            nn.Linear(self.hidden_size * 4, self.hidden_size * 4),
+            nn.GELU(),
+            nn.Linear(self.hidden_size * 4, self.hidden_size * 2),
+            nn.GELU(),
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
         ).to(self.device).eval()
         
         # Input data for inference
-        self.input_data = torch.randn(self.batch_size, 256, device=self.device)
+        self.input_data = torch.randn(self.batch_size, self.hidden_size, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -72,7 +73,10 @@ class BaselinePipelineParallelismBenchmark(Benchmark):
         # No pipeline parallelism - all layers processed on one device
         with nvtx_range("baseline_pipeline_parallelism", enable=enable_nvtx):
             with torch.no_grad():
-                output = self.model(self.input_data)
+                activations = self.input_data
+                for layer in self.model:
+                    activations = layer(activations)
+                    torch.cuda.synchronize()
         torch.cuda.synchronize()
     
     def teardown(self) -> None:
@@ -110,4 +114,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

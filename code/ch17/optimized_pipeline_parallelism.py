@@ -35,51 +35,50 @@ def resolve_device() -> torch.device:
 
 class OptimizedPipelineParallelismBenchmark(Benchmark):
     """Optimized: Pipeline parallelism with layers split across GPUs."""
-    
+
     def __init__(self):
         self.device = resolve_device()
-        self.pipeline_stages = None
-        self.input_data = None
-        self.batch_size = 8
+        self.pipeline_stages: List[nn.Module] = []
+        self.hidden_size = 1024
+        self.batch_size = 256
+        self.micro_batches = 4
         self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
-    
+        self.stage_streams: List[torch.cuda.Stream] = []
+        self.stage_events: List[List[torch.cuda.Event]] = []
+        self.microbatch_inputs: Optional[List[torch.Tensor]] = None
+
     def setup(self) -> None:
         """Setup: Initialize pipeline stages across multiple GPUs."""
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             enable_tf32()
-        
+
         torch.manual_seed(42)
-        # Optimization: Pipeline parallelism splits model layers across GPUs
-        # Each GPU processes different layers (pipeline stages)
-        # Microbatches flow through the pipeline stages for parallel processing
-        
-        # Define layers for each pipeline stage
         layers_per_stage = [
-            [nn.Linear(256, 512), nn.ReLU()],
-            [nn.Linear(512, 512), nn.ReLU()],
-            [nn.Linear(512, 512), nn.ReLU()],
-            [nn.Linear(512, 256)],
+            [nn.Linear(self.hidden_size, self.hidden_size * 4), nn.GELU()],
+            [nn.Linear(self.hidden_size * 4, self.hidden_size * 4), nn.GELU()],
+            [nn.Linear(self.hidden_size * 4, self.hidden_size * 2), nn.GELU()],
+            [nn.Linear(self.hidden_size * 2, self.hidden_size)],
         ]
-        
-        # Always create all stages, assigning multiple stages to same GPU if needed
-        # This ensures the model architecture matches the baseline
-        self.pipeline_stages: List[nn.Module] = []
-        num_stages = len(layers_per_stage)
-        
-        for stage_id in range(num_stages):
-            # Distribute stages across available GPUs (round-robin)
-            # If num_gpus < num_stages, multiple stages will be on same GPU
+
+        self.pipeline_stages = []
+        for stage_id, layer_stack in enumerate(layers_per_stage):
             gpu_id = stage_id % self.num_gpus
-            stage = nn.Sequential(*layers_per_stage[stage_id]).to(torch.device(f"cuda:{gpu_id}")).eval()
+            stage = nn.Sequential(*layer_stack).to(torch.device(f"cuda:{gpu_id}"), dtype=torch.bfloat16).eval()
             self.pipeline_stages.append(stage)
-        
-        # Input data for first pipeline stage
-        self.input_data = torch.randn(self.batch_size, 256, device=torch.device("cuda:0"))
+
+        self.microbatch_inputs = torch.randn(
+            self.batch_size, self.hidden_size, device=torch.device("cuda:0"), dtype=torch.bfloat16
+        ).chunk(self.micro_batches, dim=0)
+
+        self.stage_streams = [torch.cuda.Stream(priority=-1) for _ in self.pipeline_stages]
+        self.stage_events = [
+            [torch.cuda.Event(enable_timing=False) for _ in range(self.micro_batches)]
+            for _ in self.pipeline_stages
+        ]
         torch.cuda.synchronize()
-    
+
     def benchmark_fn(self) -> None:
         """Benchmark: Pipeline parallelism processing across multiple GPUs."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
@@ -87,51 +86,61 @@ class OptimizedPipelineParallelismBenchmark(Benchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-        # Optimization: Model partitioning across pipeline stages
-        # IMPORTANT: This demonstrates model partitioning, not true pipeline parallelism.
-        # True pipeline parallelism requires:
-        # - Multiple microbatches in flight simultaneously (not implemented here)
-        # - Asynchronous transfers between stages (uses blocking .to() transfers)
-        # - Overlapping computation and communication (stages run sequentially)
-        # This implementation partitions the model correctly but executes sequentially,
-        # which is model parallelism, not pipeline parallelism.
+        if not self.pipeline_stages or self.microbatch_inputs is None:
+            raise RuntimeError("Pipeline not initialized")
+
+        num_stages = len(self.pipeline_stages)
+        stage_buffers: List[List[Optional[torch.Tensor]]] = [
+            [None for _ in range(self.micro_batches)] for _ in range(num_stages + 1)
+        ]
+        stage_buffers[0] = list(self.microbatch_inputs)
+
+        stage_devices = [next(stage.parameters()).device for stage in self.pipeline_stages]
+
         with nvtx_range("optimized_pipeline_parallelism", enable=enable_nvtx):
-            with torch.no_grad():
-                # Process through pipeline stages sequentially (model partitioning only)
-                # This does NOT demonstrate true pipelining with overlapping execution
-                x = self.input_data
-                for stage_idx, stage in enumerate(self.pipeline_stages):
-                    x = stage(x)
-                    # Transfer to next GPU if needed (blocking transfer - simplified)
-                    if stage_idx < len(self.pipeline_stages) - 1:
-                        next_stage_idx = stage_idx + 1
-                        next_gpu_id = next_stage_idx % self.num_gpus
-                        current_gpu_id = stage_idx % self.num_gpus
-                        if next_gpu_id != current_gpu_id:
-                            x = x.to(torch.device(f"cuda:{next_gpu_id}"))
-        
-        # Synchronize all GPUs
-        for gpu_id in range(self.num_gpus):
-            torch.cuda.synchronize(torch.device(f"cuda:{gpu_id}"))
-    
+            with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                for micro_idx in range(self.micro_batches + num_stages - 1):
+                    for stage_idx, stage in enumerate(self.pipeline_stages):
+                        chunk_idx = micro_idx - stage_idx
+                        if chunk_idx < 0 or chunk_idx >= self.micro_batches:
+                            continue
+                        stream = self.stage_streams[stage_idx]
+                        with torch.cuda.stream(stream):
+                            if stage_idx > 0:
+                                stream.wait_event(self.stage_events[stage_idx - 1][chunk_idx])
+                            x = stage_buffers[stage_idx][chunk_idx]
+                            if x is None:
+                                continue
+                            out = stage(x.to(stage_devices[stage_idx]))
+                            next_stage_idx = stage_idx + 1
+                            if next_stage_idx < len(stage_devices):
+                                next_device = stage_devices[next_stage_idx]
+                                if next_device != stage_devices[stage_idx]:
+                                    out = out.to(next_device)
+                            stage_buffers[next_stage_idx][chunk_idx] = out
+                            self.stage_events[stage_idx][chunk_idx].record(stream)
+
+        for stream in self.stage_streams:
+            stream.synchronize()
+
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.pipeline_stages = None
-        self.input_data = None
-        if torch.cuda.is_available():
-            for gpu_id in range(self.num_gpus):
-                torch.cuda.empty_cache()
-    
+        self.pipeline_stages = []
+        self.microbatch_inputs = None
+        self.stage_streams = []
+        self.stage_events = []
+        torch.cuda.empty_cache()
+
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=3,
+            iterations=12,
+            warmup=2,
         )
-    
+
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.pipeline_stages is None or len(self.pipeline_stages) == 0:
+        if not self.pipeline_stages:
             return "Pipeline stages not initialized"
         return None
 
@@ -151,4 +160,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

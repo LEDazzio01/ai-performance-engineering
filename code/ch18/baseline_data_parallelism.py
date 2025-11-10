@@ -44,7 +44,8 @@ class BaselineDataParallelismBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.requests = None
-        self.num_requests = 10
+        self.num_requests = 64
+        self.feature_dim = 512
     
     def setup(self) -> None:
         """Setup: Initialize model and requests."""
@@ -53,15 +54,14 @@ class BaselineDataParallelismBenchmark(Benchmark):
         # Data parallelism replicates model across multiple GPUs for higher throughput
         # This baseline processes requests sequentially on one GPU
         self.model = nn.Sequential(
-            nn.Linear(256, 512),
+            nn.Linear(self.feature_dim, 1024),
             nn.ReLU(),
-            nn.Linear(512, 256),
+            nn.Linear(1024, self.feature_dim),
             nn.ReLU(),
-            nn.Linear(256, 10),
+            nn.Linear(self.feature_dim, 10),
         ).to(self.device).eval()
         
-        # Generate multiple inference requests
-        self.requests = [torch.randn(1, 256, device=self.device) for _ in range(self.num_requests)]
+        self.requests = torch.randn(self.num_requests, self.feature_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -76,7 +76,8 @@ class BaselineDataParallelismBenchmark(Benchmark):
             # No data parallelism - requests processed one at a time
             # Data parallelism would replicate model across GPUs for parallel processing
             with torch.no_grad():
-                for request in self.requests:
+                for idx in range(self.num_requests):
+                    request = self.requests[idx].unsqueeze(0)
                     _ = self.model(request)
     
     def teardown(self) -> None:
@@ -114,4 +115,3 @@ if __name__ == '__main__':
     )
     result = harness.benchmark(benchmark)
     print(result)
-

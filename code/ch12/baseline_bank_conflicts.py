@@ -23,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.cuda_extensions import load_bank_conflicts_extension
 
 
 def resolve_device() -> torch.device:
@@ -43,17 +44,19 @@ class BaselineBankConflictsBenchmark(Benchmark):
         self.device = resolve_device()
         self.data = None
         self.output = None
-        self.N = 1_000_000
+        self._extension = None
+        self.N = 1 << 20
+        self.launches_per_iter = 64
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
-        # Baseline: Bank conflicts with many kernel launches
-        # Bank conflicts: multiple threads access same memory bank
-        # No CUDA graphs: each operation launches separate kernel
-        
+        self._extension = load_bank_conflicts_extension()
         self.data = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = torch.empty_like(self.data)
+        # Warm up to include JIT + L2 residency cost in baseline path.
+        for _ in range(2):
+            self._extension.bank_conflicts(self.output, self.data)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -71,25 +74,18 @@ class BaselineBankConflictsBenchmark(Benchmark):
             # Baseline: Bank conflicts with many kernel launches
             # Bank conflicts: stride access pattern causes conflicts
             # No CUDA graphs: each operation is a separate kernel launch
-            stride = 32  # Causes bank conflicts
-            indices = torch.arange(0, self.N, stride, device=self.device)
-            
-            # Multiple kernel launches (no CUDA graphs)
-            # Bank conflicts: serialized memory access
-            self.output[indices] = self.data[indices] * 2.0  # Kernel launch 1
-            self.output[indices] = self.output[indices] + 1.0  # Kernel launch 2
-            self.output[indices] = torch.relu(self.output[indices])  # Kernel launch 3
-            
-            # Baseline: Bank conflicts issues
-            # - Multiple kernel launches (high overhead)
-            # - Bank conflicts cause serialization
-            # - No CUDA graphs optimization
+            if self._extension is None:
+                raise RuntimeError("CUDA extension not initialized")
+            for _ in range(self.launches_per_iter):
+                self._extension.bank_conflicts(self.output, self.data)
+            torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.data = None
         self.output = None
+        self._extension = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -132,4 +128,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

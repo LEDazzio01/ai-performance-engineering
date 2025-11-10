@@ -43,7 +43,10 @@ class BaselineHbmBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.host_inputs: torch.Tensor | None = None
+        self.micro_batches = 64
+        self.micro_batch = 32
+        self._last_total = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without HBM optimization or CUDA graphs."""
@@ -57,9 +60,13 @@ class BaselineHbmBenchmark(Benchmark):
             nn.ReLU(),
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
-        
-        # Standard memory allocation (no HBM optimization)
-        self.input = torch.randn(32, 1024, device=self.device)
+        self.host_inputs = torch.randn(
+            self.micro_batches,
+            self.micro_batch,
+            1024,
+            pin_memory=True,
+            dtype=torch.float32,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -78,20 +85,21 @@ class BaselineHbmBenchmark(Benchmark):
                 # Baseline: Standard memory access with many kernel launches
                 # HBM: not optimized for high bandwidth memory
                 # No CUDA graphs: multiple kernel launches
-                output = self.model(self.input)  # Multiple kernel launches
-                output = output * 0.99  # Additional kernel launch
-                output = torch.relu(output)  # Additional kernel launch
-                
-                # Baseline: No HBM optimization or CUDA graphs
-                # - Standard memory access (not optimized for HBM)
-                # - Many kernel launches (high overhead)
-                _ = output.sum()
+                if self.host_inputs is None or self.model is None:
+                    raise RuntimeError("Benchmark not initialized")
+                total = 0.0
+                for idx in range(self.micro_batches):
+                    batch = self.host_inputs[idx].to(self.device, non_blocking=False)
+                    out = self.model(batch)
+                    total += float(out.sum())
+                self._last_total = total
+                torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.host_inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -105,8 +113,8 @@ class BaselineHbmBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.host_inputs is None:
+            return "Host inputs not initialized"
         return None
 
 
@@ -136,4 +144,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

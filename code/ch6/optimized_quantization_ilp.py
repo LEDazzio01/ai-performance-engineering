@@ -20,6 +20,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.workload_config import WORKLOAD, is_smoke_test
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -34,7 +35,9 @@ class OptimizedQuantizationILPBenchmark(Benchmark):
         self.device = resolve_device()
         self.input = None
         self.output = None
-        self.N = 1_000_000
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.N = self.workload.quantization_elements_for_mode(self.smoke_test)
     
     def setup(self) -> None:
         """Setup: Initialize quantized tensors."""
@@ -78,8 +81,8 @@ class OptimizedQuantizationILPBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=self.workload.ilp_iterations,
+            warmup=self.workload.ilp_warmup,
         )
     
     def validate_result(self) -> Optional[str]:

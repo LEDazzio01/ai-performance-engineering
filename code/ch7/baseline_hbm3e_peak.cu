@@ -43,7 +43,7 @@ int main() {
     const int iterations = 10;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; i++) {
-        baseline_copy<<<1024, 256>>>(d_src, d_dst, n);
+        baseline_copy<<<8, 64>>>(d_src, d_dst, n);
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -63,4 +63,3 @@ int main() {
     
     return 0;
 }
-

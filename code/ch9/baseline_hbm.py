@@ -44,6 +44,7 @@ class BaselineHbmBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.input = None
+        self._last = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model without HBM optimization."""
@@ -57,9 +58,14 @@ class BaselineHbmBenchmark(Benchmark):
             nn.ReLU(),
             nn.Linear(2048, 1024),
         ).to(self.device).eval()
-        
-        # Standard memory allocation (no HBM optimization)
-        self.input = torch.randn(32, 1024, device=self.device)
+
+        torch.manual_seed(42)
+        self.micro_batch = 8
+        self.num_micro_batches = 64
+        self.micro_batches = [
+            torch.randn(self.micro_batch, 1024, device=self.device)
+            for _ in range(self.num_micro_batches)
+        ]
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -78,11 +84,12 @@ class BaselineHbmBenchmark(Benchmark):
                 # Baseline: Standard memory access (no HBM optimization)
                 # Does not leverage HBM high bandwidth characteristics
                 # HBM optimization would use bandwidth-optimized access patterns
-                output = self.model(self.input)
-                
-                # Baseline: No HBM optimization
-                # Standard memory access (not optimized for HBM bandwidth)
-                _ = output.sum()
+                total = 0.0
+                for shard in self.micro_batches:
+                    result = self.model(shard)
+                    total += float(result.sum().item())
+                    torch.cuda.synchronize()
+                self._last = total
 
     
     def teardown(self) -> None:
@@ -133,4 +140,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

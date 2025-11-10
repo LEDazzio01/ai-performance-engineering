@@ -1,4 +1,4 @@
-"""Baseline stream-ordered single-GPU (no distributed)."""
+"""Baseline flex attention – naive per-head computation without fusion."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+import math
 import torch
 from typing import Optional
 
@@ -26,28 +27,30 @@ def resolve_device() -> torch.device:
 
 
 class BaselineFlexAttentionBenchmark(Benchmark):
-    """Baseline: Single-GPU stream-ordered (no distributed computing)."""
+    """Baseline: Naive attention that iterates per head without fusion."""
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
-        self.output = None
-        self.stream = None
-        self.N = 1_000_000
+        self.q = None
+        self.k = None
+        self.v = None
+        self.num_heads = 16
+        self.head_dim = 64
+        self.seq_len = 1024
+        self._last = 0.0
+        self.repeat_passes = 8
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: materialize query/key/value tensors."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        shape = (self.seq_len, self.num_heads, self.head_dim)
+        self.q = torch.randn(shape, device=self.device, dtype=torch.float32)
+        self.k = torch.randn(shape, device=self.device, dtype=torch.float32)
+        self.v = torch.randn(shape, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
+        """Benchmark: per-head attention computed serially."""
         # Use conditional NVTX ranges - only enabled when profiling
 
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
@@ -58,20 +61,28 @@ class BaselineFlexAttentionBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_flex_attention", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch17 for full distributed training implementations
+            if self.q is None or self.k is None or self.v is None:
+                raise RuntimeError("Tensors not initialized")
+            scale = 1.0 / math.sqrt(self.head_dim)
+            outputs = []
+            for _ in range(self.repeat_passes):
+                for head in range(self.num_heads):
+                    qh = self.q[:, head, :]
+                    kh = self.k[:, head, :]
+                    vh = self.v[:, head, :]
+                    scores = torch.matmul(qh, kh.transpose(0, 1)) * scale
+                    attn = torch.softmax(scores, dim=-1)
+                    outputs.append(torch.matmul(attn, vh))
+            stacked = torch.stack(outputs, dim=1)
+            self._last = float(stacked.sum())
+            torch.cuda.synchronize(self.device)
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
-        self.output = None
+        self.q = None
+        self.k = None
+        self.v = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -83,8 +94,8 @@ class BaselineFlexAttentionBenchmark(Benchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.output is None:
-            return "Output tensor not initialized"
+        if self.q is None or self.k is None or self.v is None:
+            return "Tensors not initialized"
         return None
 
 

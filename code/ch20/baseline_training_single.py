@@ -72,7 +72,7 @@ class BaselineTrainingSingleBenchmark(Benchmark):
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).float().train()
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
         self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         
         # Warmup
@@ -92,7 +92,7 @@ class BaselineTrainingSingleBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_training_single", enable=enable_nvtx):
+        with nvtx_range("training", enable=enable_nvtx):
             self.optimizer.zero_grad()
             outputs = self.model(self.inputs)
             loss = self.criterion(outputs, self.targets)

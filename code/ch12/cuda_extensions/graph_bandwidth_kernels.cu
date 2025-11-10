@@ -57,6 +57,26 @@ void separate_kernel_launches(torch::Tensor dst, torch::Tensor src, int iteratio
     // Note: No explicit synchronization here - PyTorch benchmark harness handles synchronization
 }
 
+struct GraphCache {
+    bool initialized = false;
+    int n = 0;
+    int device_id = -1;
+    float* dst_ptr = nullptr;
+    const float* src_ptr = nullptr;
+    cudaStream_t stream = nullptr;
+    cudaGraphExec_t exec = nullptr;
+};
+
+static GraphCache g_graph_cache;
+
+static void destroy_graph_cache() {
+    if (g_graph_cache.initialized) {
+        cudaGraphExecDestroy(g_graph_cache.exec);
+        cudaStreamDestroy(g_graph_cache.stream);
+        g_graph_cache = {};
+    }
+}
+
 void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
     TORCH_CHECK(dst.is_cuda(), "dst must be CUDA tensor");
     TORCH_CHECK(src.is_cuda(), "src must be CUDA tensor");
@@ -67,53 +87,66 @@ void graph_kernel(torch::Tensor dst, torch::Tensor src, int iterations) {
     int threads_per_block = 256;
     int num_blocks = (n + threads_per_block - 1) / threads_per_block;
     
-    // Create a non-blocking stream for graph capture (required for CUDA graphs)
-    // Use the same device as the tensors for consistency
     int device_id = dst.device().index();
-    cudaStream_t stream = nullptr;
     CHECK_CUDA(cudaSetDevice(device_id));
-    CHECK_CUDA(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     
-    cudaGraph_t graph = nullptr;
-    cudaGraphExec_t exec = nullptr;
+    float* dst_ptr = dst.data_ptr<float>();
+    const float* src_ptr = src.data_ptr<float>();
     
-    try {
-        CHECK_CUDA(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-        copy_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
-            dst.data_ptr<float>(),
-            src.data_ptr<float>(),
-            n
-        );
-        CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaStreamEndCapture(stream, &graph));
-        CHECK_CUDA(cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
+    bool rebuild = !g_graph_cache.initialized ||
+                   g_graph_cache.n != n ||
+                   g_graph_cache.device_id != device_id ||
+                   g_graph_cache.dst_ptr != dst_ptr ||
+                   g_graph_cache.src_ptr != src_ptr;
+    
+    if (rebuild) {
+        destroy_graph_cache();
         
-        {
-            PROFILE_KERNEL_LAUNCH("graph_kernel");
-            for (int i = 0; i < iterations; ++i) {
-                CHECK_CUDA(cudaGraphLaunch(exec, stream));
+        cudaStream_t stream = nullptr;
+        cudaGraph_t graph = nullptr;
+        cudaGraphExec_t exec = nullptr;
+        try {
+            CHECK_CUDA(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+            CHECK_CUDA(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+            copy_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+                dst_ptr,
+                src_ptr,
+                n
+            );
+            CHECK_CUDA(cudaGetLastError());
+            CHECK_CUDA(cudaStreamEndCapture(stream, &graph));
+            CHECK_CUDA(cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
+        } catch (...) {
+            if (exec != nullptr) {
+                cudaGraphExecDestroy(exec);
             }
+            if (graph != nullptr) {
+                cudaGraphDestroy(graph);
+            }
+            if (stream != nullptr) {
+                cudaStreamDestroy(stream);
+            }
+            throw;
         }
         
-        // Synchronize only the stream we're using (not the entire device)
-        // Required here because we created our own stream for graph capture
-        CHECK_CUDA(cudaStreamSynchronize(stream));
-    } catch (...) {
-        if (exec != nullptr) {
-            cudaGraphExecDestroy(exec);
-        }
-        if (graph != nullptr) {
-            cudaGraphDestroy(graph);
-        }
-        if (stream != nullptr) {
-            cudaStreamDestroy(stream);
-        }
-        throw;
+        cudaGraphDestroy(graph);
+        g_graph_cache.initialized = true;
+        g_graph_cache.n = n;
+        g_graph_cache.device_id = device_id;
+        g_graph_cache.dst_ptr = dst_ptr;
+        g_graph_cache.src_ptr = src_ptr;
+        g_graph_cache.stream = stream;
+        g_graph_cache.exec = exec;
     }
     
-    cudaGraphExecDestroy(exec);
-    cudaGraphDestroy(graph);
-    cudaStreamDestroy(stream);
+    {
+        PROFILE_KERNEL_LAUNCH("graph_kernel");
+        for (int i = 0; i < iterations; ++i) {
+            CHECK_CUDA(cudaGraphLaunch(g_graph_cache.exec, g_graph_cache.stream));
+        }
+    }
+    
+    CHECK_CUDA(cudaStreamSynchronize(g_graph_cache.stream));
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

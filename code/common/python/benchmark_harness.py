@@ -60,6 +60,7 @@ from common.python.benchmark_models import (
     NsysMetrics,
     NcuMetrics,
     TorchMetrics,
+    ThroughputStats,
 )
 
 PYDANTIC_AVAILABLE = True
@@ -198,7 +199,8 @@ class BenchmarkConfig:
     warmup_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("warmup_timeout_seconds", None))
     measurement_timeout_seconds: int = field(default_factory=lambda: _get_default_value("measurement_timeout_seconds", 15))
     profiling_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("profiling_timeout_seconds", None))
-    
+
+
     # Legacy timeout field (deprecated, use measurement_timeout_seconds)
     timeout_seconds: int = field(default_factory=lambda: _get_default_value("timeout_seconds", 15))
     
@@ -305,6 +307,19 @@ class BenchmarkConfig:
         return timeouts.get(stage)
 
 
+@dataclass
+class WorkloadMetadata:
+    """Metadata describing workload units processed per benchmark iteration."""
+    
+    requests_per_iteration: float = 1.0
+    tokens_per_iteration: Optional[float] = None
+    samples_per_iteration: Optional[float] = None
+    bytes_per_iteration: Optional[float] = None
+    custom_units_per_iteration: Optional[float] = None
+    custom_unit_name: Optional[str] = None
+    goodput: Optional[float] = None
+
+
 # BenchmarkResult is provided by benchmark_models.py
 BenchmarkResult = PydanticBenchmarkResult
 
@@ -330,6 +345,14 @@ class Benchmark(Protocol):
     
     def validate_result(self) -> Optional[str]:
         """Optional: validate benchmark result, return error message if invalid."""
+        return None
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        """Optional: describe workload units processed per benchmark iteration."""
+        return None
+
+    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
+        """Optional: return benchmark-specific custom metrics for reporting."""
         return None
 
 
@@ -365,6 +388,7 @@ class BaseBenchmark:
         """
         self.device = self._resolve_device()
         self._config = None  # Cache for get_config()
+        self._workload_metadata: Optional[WorkloadMetadata] = None
     
     def _resolve_device(self) -> torch.device:
         """Resolve CUDA device, failing fast if CUDA is not available.
@@ -419,6 +443,36 @@ class BaseBenchmark:
         Returns:
             None if validation passes, or error message string if validation fails
         """
+        return None
+
+    def register_workload_metadata(
+        self,
+        *,
+        requests_per_iteration: Optional[float] = None,
+        tokens_per_iteration: Optional[float] = None,
+        samples_per_iteration: Optional[float] = None,
+        bytes_per_iteration: Optional[float] = None,
+        custom_units_per_iteration: Optional[float] = None,
+        custom_unit_name: Optional[str] = None,
+        goodput: Optional[float] = None,
+    ) -> None:
+        """Register workload metadata for throughput calculations."""
+        self._workload_metadata = WorkloadMetadata(
+            requests_per_iteration=requests_per_iteration if requests_per_iteration is not None else 1.0,
+            tokens_per_iteration=tokens_per_iteration,
+            samples_per_iteration=samples_per_iteration,
+            bytes_per_iteration=bytes_per_iteration,
+            custom_units_per_iteration=custom_units_per_iteration,
+            custom_unit_name=custom_unit_name,
+            goodput=goodput,
+        )
+
+    def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        """Return workload metadata if registered."""
+        return self._workload_metadata
+
+    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
+        """Benchmarks can override to expose custom metrics."""
         return None
     
     def _scale_workload_by_memory(self, base_size: int) -> int:
@@ -1000,6 +1054,17 @@ class BenchmarkHarness:
         
         # Compute statistics
         result = self._compute_stats(times_ms, config)
+        custom_metrics = self._resolve_custom_metrics(benchmark)
+        if custom_metrics:
+            result.custom_metrics = custom_metrics
+        custom_metrics = self._resolve_custom_metrics(benchmark)
+        if custom_metrics:
+            result.custom_metrics = custom_metrics
+        custom_metrics = self._resolve_custom_metrics(benchmark)
+        if custom_metrics:
+            result.custom_metrics = custom_metrics
+        self._attach_throughput_metrics(result, benchmark)
+        self._attach_throughput_metrics(result, benchmark)
         
         # Add inference timing if available
         if inference_timing_data and inference_timing_data.get("ttft_times_ms") and inference_timing_data.get("tpot_times_ms"):
@@ -1966,6 +2031,193 @@ class BenchmarkHarness:
             timeout_limit_seconds=None,
             schemaVersion="1.0",
         )
+
+    def _resolve_workload_metadata(self, benchmark: Benchmark) -> Optional[WorkloadMetadata]:
+        """Resolve workload metadata declared by the benchmark (if any)."""
+        metadata: Optional[WorkloadMetadata] = None
+        getter = getattr(benchmark, "get_workload_metadata", None)
+        if callable(getter):
+            try:
+                metadata = getter()
+            except Exception as exc:  # pragma: no cover - defensive
+                if LOGGER_AVAILABLE:
+                    logger.debug(f"get_workload_metadata() raised: {exc}")
+        if metadata is None:
+            candidate = getattr(benchmark, "workload_metadata", None)
+            if isinstance(candidate, WorkloadMetadata):
+                metadata = candidate
+        if metadata is None:
+            metadata = self._infer_workload_metadata_from_attributes(benchmark)
+        return metadata
+
+    def _resolve_custom_metrics(self, benchmark: Benchmark) -> Optional[Dict[str, float]]:
+        """Resolve benchmark-specific custom metrics if provided."""
+        getter = getattr(benchmark, "get_custom_metrics", None)
+        if callable(getter):
+            try:
+                metrics = getter()
+                if isinstance(metrics, dict) and metrics:
+                    return metrics
+            except Exception as exc:  # pragma: no cover - defensive
+                if LOGGER_AVAILABLE:
+                    logger.debug(f"get_custom_metrics() raised: {exc}")
+        return None
+
+    def _infer_workload_metadata_from_attributes(self, benchmark: Benchmark) -> Optional[WorkloadMetadata]:
+        """Best-effort inference of workload metadata from common benchmark attributes."""
+        def _read_numeric_attr(names: List[str]) -> Optional[float]:
+            for name in names:
+                if hasattr(benchmark, name):
+                    value = getattr(benchmark, name)
+                    if isinstance(value, (int, float)) and value > 0:
+                        return float(value)
+            return None
+
+        batch = _read_numeric_attr([
+            "batch_size",
+            "train_batch_size",
+            "eval_batch_size",
+            "micro_batch_size",
+            "micro_batchsize",
+        ])
+        seq_len = _read_numeric_attr([
+            "seq_len",
+            "seq_length",
+            "sequence_length",
+            "token_count",
+            "tokens",
+        ])
+        explicit_tokens = _read_numeric_attr([
+            "tokens_per_iteration",
+            "tokens_per_step",
+            "tokens_per_batch",
+        ])
+        explicit_requests = _read_numeric_attr([
+            "requests_per_iteration",
+            "requests_per_step",
+            "num_requests",
+        ])
+        samples = _read_numeric_attr([
+            "samples_per_iteration",
+            "samples_per_step",
+            "num_samples",
+        ])
+        bytes_per_iter = _read_numeric_attr([
+            "bytes_per_iteration",
+            "payload_bytes",
+            "data_bytes",
+        ])
+        custom_units = _read_numeric_attr([
+            "workload_units_per_iteration",
+            "flops_per_iteration",
+        ])
+        goodput = _read_numeric_attr([
+            "target_goodput",
+            "expected_goodput",
+        ])
+
+        tokens = explicit_tokens
+        if tokens is None:
+            if batch is not None and seq_len is not None:
+                tokens = batch * seq_len
+            elif seq_len is not None:
+                tokens = seq_len
+            elif batch is not None:
+                tokens = batch
+
+        if samples is None and batch is not None:
+            samples = batch
+
+        if custom_units is not None and getattr(benchmark, "workload_unit_name", None):
+            custom_unit_name = getattr(benchmark, "workload_unit_name")
+        else:
+            custom_unit_name = None
+
+        requests = explicit_requests or batch or 1.0
+
+        if (
+            tokens is None
+            and samples is None
+            and bytes_per_iter is None
+            and custom_units is None
+            and (requests == 1.0 or requests is None)
+        ):
+            return None
+
+        return WorkloadMetadata(
+            requests_per_iteration=requests or 1.0,
+            tokens_per_iteration=tokens,
+            samples_per_iteration=samples,
+            bytes_per_iteration=bytes_per_iter,
+            custom_units_per_iteration=custom_units,
+            custom_unit_name=custom_unit_name,
+            goodput=goodput,
+        )
+
+    def _compute_throughput_stats(
+        self,
+        timing: Optional[TimingStats],
+        workload: Optional[WorkloadMetadata],
+    ) -> Optional[ThroughputStats]:
+        """Convert timing + workload metadata into throughput statistics."""
+        if timing is None or timing.mean_ms <= 0:
+            return None
+        mean_seconds = timing.mean_ms / 1000.0
+        requests_per_iteration = 1.0
+        tokens_per_iteration = None
+        samples_per_iteration = None
+        bytes_per_iteration = None
+        custom_units_per_iteration = None
+        custom_unit_name = None
+        goodput = None
+        
+        if workload is not None:
+            if workload.requests_per_iteration is not None:
+                requests_per_iteration = max(float(workload.requests_per_iteration), 0.0)
+            if workload.tokens_per_iteration is not None:
+                tokens_per_iteration = float(workload.tokens_per_iteration)
+            if workload.samples_per_iteration is not None:
+                samples_per_iteration = float(workload.samples_per_iteration)
+            if workload.bytes_per_iteration is not None:
+                bytes_per_iteration = float(workload.bytes_per_iteration)
+            if workload.custom_units_per_iteration is not None:
+                custom_units_per_iteration = float(workload.custom_units_per_iteration)
+            custom_unit_name = workload.custom_unit_name
+            goodput = workload.goodput
+        
+        requests_per_s = requests_per_iteration / mean_seconds if mean_seconds > 0 else None
+        tokens_per_s = (
+            tokens_per_iteration / mean_seconds if tokens_per_iteration is not None and mean_seconds > 0 else None
+        )
+        samples_per_s = (
+            samples_per_iteration / mean_seconds if samples_per_iteration is not None and mean_seconds > 0 else None
+        )
+        bytes_per_s = (
+            bytes_per_iteration / mean_seconds if bytes_per_iteration is not None and mean_seconds > 0 else None
+        )
+        custom_unit_per_s = (
+            custom_units_per_iteration / mean_seconds
+            if custom_units_per_iteration is not None and mean_seconds > 0
+            else None
+        )
+        
+        return ThroughputStats(
+            requests_per_s=requests_per_s,
+            tokens_per_s=tokens_per_s,
+            samples_per_s=samples_per_s,
+            bytes_per_s=bytes_per_s,
+            custom_unit_per_s=custom_unit_per_s,
+            custom_unit_name=custom_unit_name,
+            latency_ms=timing.mean_ms,
+            goodput=goodput,
+        )
+
+    def _attach_throughput_metrics(self, result: PydanticBenchmarkResult, benchmark: Benchmark) -> None:
+        """Attach throughput metrics to the benchmark result when possible."""
+        workload = self._resolve_workload_metadata(benchmark)
+        throughput_stats = self._compute_throughput_stats(result.timing, workload)
+        if throughput_stats:
+            result.throughput = throughput_stats
 
 
 def compare_benchmarks(

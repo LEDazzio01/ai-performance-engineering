@@ -77,7 +77,7 @@ class BaselineKernelLaunchesBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_kernel_launches", enable=enable_nvtx):
+        with nvtx_range("kernel_launches", enable=enable_nvtx):
             with torch.no_grad():
                 self.output = many_small_ops_regular(self.x.clone(), self.iterations)
 

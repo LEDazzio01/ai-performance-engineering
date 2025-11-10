@@ -72,6 +72,16 @@ def supports_tensor_memory_accelerator() -> bool:
     return tma_support_status()[0]
 
 
+def blackwell_tma_support_status() -> Tuple[bool, str]:
+    """Return (supported, reason) for Blackwell-ready TMA pipelines."""
+    major, minor = _get_compute_capability()
+    if major == 0 and minor == 0:
+        return False, "CUDA device not available"
+    if major >= 12:
+        return True, f"compute capability {major}.{minor} (Blackwell/GB series)"
+    return False, f"requires compute capability >= 12.0 (Blackwell), found {major}.{minor}"
+
+
 def pipeline_runtime_allowed() -> Tuple[bool, str]:
     """Return (allowed, reason) for actually running pipeline kernels safely.
     

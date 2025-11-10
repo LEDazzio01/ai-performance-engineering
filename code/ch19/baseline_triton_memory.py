@@ -30,48 +30,45 @@ class TritonBenchmark(Benchmark):
 
     def __init__(self):
         self.device = resolve_device()
-        self.input = None
+        self.input_a = None
+        self.input_b = None
         self.output = None
-        self.stream = None
+        self.scatter_idx = None
         self.N = 1_000_000
+        self.chunk = 4096
 
     def setup(self) -> None:
-        """Setup: Initialize single-GPU tensors."""
+        """Setup: Initialize tensors with random gather pattern."""
         torch.manual_seed(42)
-        # Baseline: Single-GPU stream-ordered operation
-        # Distributed computing uses multiple GPUs for parallel stream-ordered operations
-        # This baseline uses only one GPU
-        self.stream = torch.cuda.Stream()
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.input_a = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.input_b = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.scatter_idx = torch.randperm(self.N, device=self.device)
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Single-GPU stream-ordered operations."""
-        # Use conditional NVTX ranges - only enabled when profiling
-
+        """Benchmark: Non-coalesced scatter that issues many kernels."""
         from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
-
-        with nvtx_range("baseline_triton", enable=enable_nvtx):
-            # Baseline: Single-GPU stream-ordered
-            # Distributed computing enables stream-ordered operations across multiple GPUs
-            # This baseline processes on single GPU only
-            # Distributed stream-ordered enables larger workloads through multi-GPU parallelism
-            with torch.cuda.stream(self.stream):
-                self.output = self.input * 2.0 + 1.0
-                # Single-GPU: Limited by single device's capacity
-                # See ch197 for full distributed training implementations
+        with nvtx_range("triton_memory", enable=enable_nvtx):
+            for start in range(0, self.N, self.chunk):
+                positions = self.scatter_idx[start:start + self.chunk]
+                gathered_a = torch.index_select(self.input_a, 0, positions)
+                gathered_b = torch.index_select(self.input_b, 0, positions)
+                fused = gathered_a * gathered_b + torch.sin(gathered_a)
+                self.output.index_copy_(0, positions, fused)
+            torch.cuda.synchronize()
 
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.input = None
+        self.input_a = None
+        self.input_b = None
         self.output = None
+        self.scatter_idx = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

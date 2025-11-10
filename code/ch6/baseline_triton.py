@@ -14,6 +14,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 import torch
+import torch.nn.functional as F
 from typing import Optional
 from common.python.benchmark_harness import (
     Benchmark,
@@ -34,18 +35,23 @@ class BaselineTritonBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.input = None
+        self.bias = None
         self.output = None
-        self.N = 1_000_000
+        self.N = 4_000_000
+        self.chunk = 4096
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
-        # Baseline: Standard PyTorch operations
-        # Triton is a GPU programming language for writing efficient kernels
-        # This baseline does not use Triton kernels
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
+        self.bias = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize()
+
+    def _transform(self, window: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+        out = window + bias
+        out = F.silu(out)
+        return out * 1.5 + 0.1
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard PyTorch operations."""
@@ -58,13 +64,14 @@ class BaselineTritonBenchmark(Benchmark):
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
 
-        with nvtx_range("baseline_triton", enable=enable_nvtx):
-            # Baseline: Standard PyTorch operations
-            # Triton provides a Python-like language for writing GPU kernels
-            # This baseline uses PyTorch's default CUDA kernels
-            # Triton kernels can be more efficient through explicit optimization
-            self.output = self.input * 2.0 + 1.0
-            # Without Triton, uses PyTorch's default kernel implementations
+        with nvtx_range("triton", enable=enable_nvtx):
+            for start in range(0, self.N, self.chunk):
+                end = min(start + self.chunk, self.N)
+                chunk = self.input[start:end]
+                bias = self.bias[start:end]
+                out = self._transform(chunk, bias)
+                self.output[start:end].copy_(out)
+            torch.cuda.synchronize()
 
     
     def teardown(self) -> None:

@@ -56,7 +56,9 @@ ARCH_LIST := sm_100 sm_103 sm_121
 ifeq ($(ARCH),sm_121)
 ARCH_NAME := Grace-Blackwell GB10 (CC 12.1)
 ARCH_SUFFIX := _sm121
-CUDA_ARCH_GENCODE := -gencode arch=compute_121,code=[sm_121,compute_121]
+# CUDA 13.0's ptxas does not yet accept sm_121, so clamp to sm_120 targets.
+# This keeps GB10 builds working until CUDA 13.1 introduces native support.
+CUDA_ARCH_GENCODE := -gencode arch=compute_120,code=[sm_120,compute_120]
 HOST_ARCH_FLAGS := -Xcompiler -mcpu=native
 else ifeq ($(ARCH),sm_100)
 ARCH_NAME := Blackwell B200/B300 (CC 10.0)

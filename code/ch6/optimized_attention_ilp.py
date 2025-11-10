@@ -15,6 +15,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 # Import arch_config to apply Triton patch for sm_12x support
 # The patch removes 'a' suffix from sm_121a -> sm_121 for ptxas compatibility
@@ -29,6 +30,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch6.workload_config import WORKLOAD, is_smoke_test
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -41,37 +43,32 @@ class OptimizedAttentionILPBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
+        self.qkv = None
+        self.out_proj = None
         self.input = None
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.batch = self.workload.attention_batch
+        self.embed_dim = self.workload.attention_embed_dim
+        self.num_heads = self.workload.attention_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        self.tokens = self.workload.attention_tokens_for_mode(self.smoke_test)
+        self._last_sum = None
+        self.streams = [torch.cuda.Stream() for _ in range(2)]
     
     def setup(self) -> None:
         """Setup: Initialize optimized attention model."""
         
         torch.manual_seed(42)
-        # Optimization: Attention optimized for high ILP
-        # Independent attention operations expose instruction-level parallelism
-        # Uses optimized attention patterns that maximize ILP
-        self.model = nn.MultiheadAttention(256, 8, batch_first=True)
-        self.model = self.model.to(self.device)
-        # Optimization: Use FP16 for faster computation
-        if self.device.type == "cuda":
-            try:
-                self.model = self.model.half()
-            except Exception:
-                pass  # Fallback to FP32 if FP16 not supported
-        self.model.eval()
-        
-        # Note: For CUDA-level ILP optimization, we focus on kernel-level patterns,
-        # not PyTorch compilation. ILP is achieved through kernel design.
-        
-        self.input = torch.randn(4, 32, 256, device=self.device)
-        # Convert input to match model dtype (FP16 if model was converted)
-        try:
-            first_param = next(self.model.parameters())
-            if first_param.dtype == torch.float16:
-                self.input = self.input.half()
-        except StopIteration:
-            pass  # No parameters, use default dtype
+        self.qkv = nn.Linear(self.embed_dim, self.embed_dim * 3, bias=False).to(self.device).half()
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=False).to(self.device).half()
+        self.input = torch.randn(
+            self.batch,
+            self.tokens,
+            self.embed_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -86,31 +83,49 @@ class OptimizedAttentionILPBenchmark(Benchmark):
 
         with nvtx_range("optimized_attention_ilp", enable=enable_nvtx):
             with torch.no_grad():
-                # Optimization: High ILP attention operations
-                # Independent attention computations expose ILP
-                # Parallel processing of attention heads maximizes parallelism
-                _ = self.model(self.input, self.input, self.input)[0]
-                # High ILP: Optimized attention operations expose instruction-level parallelism
-                # See ch13 for full attention optimizations
+                assert self.qkv is not None and self.out_proj is not None
+                chunks = self.input.chunk(len(self.streams), dim=0)
+                self._last_sum = torch.zeros(1, device=self.device, dtype=self.input.dtype)
+
+                for stream, chunk in zip(self.streams, chunks):
+                    with torch.cuda.stream(stream):
+                        qkv = self.qkv(chunk)
+                        q, k, v = qkv.chunk(3, dim=-1)
+                        # reshape() tolerates non-contiguous chunks from the stream split
+                        q = q.reshape(chunk.size(0), chunk.size(1), self.num_heads, self.head_dim).transpose(1, 2)
+                        k = k.reshape(chunk.size(0), chunk.size(1), self.num_heads, self.head_dim).transpose(1, 2)
+                        v = v.reshape(chunk.size(0), chunk.size(1), self.num_heads, self.head_dim).transpose(1, 2)
+                        attn = F.scaled_dot_product_attention(
+                            q,
+                            k,
+                            v,
+                            is_causal=False,
+                        )
+                        merged = attn.transpose(1, 2).reshape(chunk.size(0), chunk.size(1), self.embed_dim)
+                        out = self.out_proj(merged)
+                        self._last_sum += out.sum()
+
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
-        self.model = None
+        self.qkv = None
+        self.out_proj = None
         self.input = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=self.workload.ilp_iterations,
+            warmup=self.workload.ilp_warmup,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
+        if self._last_sum is None:
+            return "Attention output not computed"
         return None
 
 def get_benchmark() -> Benchmark:

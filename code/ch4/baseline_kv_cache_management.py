@@ -21,6 +21,7 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 from common.python.compile_utils import compile_model
+from ch4.gpu_requirements import skip_if_insufficient_gpus
 
 from typing import Optional, Tuple
 
@@ -102,6 +103,8 @@ class BaselineKVCacheManagementBenchmark(Benchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model and inputs."""
+        skip_if_insufficient_gpus()
+
         # Initialize distributed if available
         if dist.is_available() and torch.cuda.device_count() > 1:
             try:

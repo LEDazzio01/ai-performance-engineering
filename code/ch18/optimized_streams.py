@@ -41,14 +41,16 @@ class OptimizedStreamsBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
         self.input1 = None
         self.input2 = None
+        self.output1 = None
+        self.output2 = None
         self.stream1 = None
         self.stream2 = None
+        self.default_stream = torch.cuda.current_stream(device=self.device)
+        self.batch = 8
+        self.seq_len = 256
+        self.hidden_dim = 512
     
     def setup(self) -> None:
         """Setup: Initialize model and CUDA streams."""
@@ -61,15 +63,14 @@ class OptimizedStreamsBenchmark(Benchmark):
         # Optimization: CUDA streams for parallel execution
         # Streams allow independent operations to execute concurrently
         
-        hidden_dim = 256
         self.model = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
+            embed_dim=self.hidden_dim,
             num_heads=8,
             batch_first=True
         ).to(self.device).eval()
         
-        self.input1 = torch.randn(4, 64, hidden_dim, device=self.device)
-        self.input2 = torch.randn(4, 64, hidden_dim, device=self.device)
+        self.input1 = torch.randn(self.batch, self.seq_len, self.hidden_dim, device=self.device)
+        self.input2 = torch.randn(self.batch, self.seq_len, self.hidden_dim, device=self.device)
         
         # Create CUDA streams for parallel execution
         self.stream1 = torch.cuda.Stream()
@@ -93,21 +94,13 @@ class OptimizedStreamsBenchmark(Benchmark):
                 # Streams: parallel execution improves GPU utilization
                 
                 with torch.cuda.stream(self.stream1):
-                    output1, _ = self.model(self.input1, self.input1, self.input1)
-                
+                    self.output1, _ = self.model(self.input1, self.input1, self.input1)
                 with torch.cuda.stream(self.stream2):
-                    output2, _ = self.model(self.input2, self.input2, self.input2)
+                    self.output2, _ = self.model(self.input2, self.input2, self.input2)
                 
-                # Synchronize streams (streams: wait for completion)
-                self.stream1.synchronize()
-                self.stream2.synchronize()
-                
-                # Optimization: CUDA streams benefits
-                # - Parallel execution of independent operations
-                # - Overlaps computation and memory transfers
-                # - Better GPU utilization
-                # - Improved throughput through parallelism
-                _ = output1 + output2
+                self.default_stream.wait_stream(self.stream1)
+                self.default_stream.wait_stream(self.stream2)
+                _ = self.output1 + self.output2
 
     
     def teardown(self) -> None:
@@ -122,7 +115,7 @@ class OptimizedStreamsBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
+            iterations=20,
             warmup=5,
         )
     

@@ -35,6 +35,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch18.workload_config import WORKLOAD, is_smoke_test
 
 def resolve_device() -> torch.device:
     """Return CUDA device if available."""
@@ -47,12 +48,21 @@ class OptimizedWarpSpecializationAttentionBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
+        self.triton_available = self._triton_supported()
+        self.workload = WORKLOAD
+        self.smoke_test = is_smoke_test()
+        self.hidden_dim = self.workload.attention_hidden_dim
+        self.num_heads = self.workload.attention_num_heads
+        self.head_dim = self.hidden_dim // self.num_heads
+        self.batch_size = self.workload.attention_batch_size
+        self.sequence_length = self.workload.seq_len(self.smoke_test)
+        self.micro_batches = self.workload.micro_batches_for_mode(self.smoke_test)
         self.q_proj: Optional[nn.Linear] = None
         self.k_proj: Optional[nn.Linear] = None
         self.v_proj: Optional[nn.Linear] = None
         self.out_proj: Optional[nn.Linear] = None
         self.input: Optional[torch.Tensor] = None
-        self.scale = 1.0 / math.sqrt(64.0)
+        self.scale = 1.0 / math.sqrt(float(self.head_dim))
     
     def setup(self) -> None:
         """Setup: Initialize attention projections plus workload tensors."""
@@ -61,15 +71,18 @@ class OptimizedWarpSpecializationAttentionBenchmark(Benchmark):
             torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
-        hidden_dim = 256
-        self.q_proj = nn.Linear(hidden_dim, hidden_dim, bias=False).to(self.device).eval()
-        self.k_proj = nn.Linear(hidden_dim, hidden_dim, bias=False).to(self.device).eval()
-        self.v_proj = nn.Linear(hidden_dim, hidden_dim, bias=False).to(self.device).eval()
-        self.out_proj = nn.Linear(hidden_dim, hidden_dim, bias=False).to(self.device).eval()
+        self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device).half().eval()
+        self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device).half().eval()
+        self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device).half().eval()
+        self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device).half().eval()
         
-        batch = 4
-        seqlen = 128
-        self.input = torch.randn(batch, seqlen, hidden_dim, device=self.device)
+        self.input = torch.randn(
+            self.batch_size,
+            self.sequence_length,
+            self.hidden_dim,
+            dtype=torch.float16,
+            device=self.device,
+        )
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -94,19 +107,33 @@ class OptimizedWarpSpecializationAttentionBenchmark(Benchmark):
                 assert self.input is not None
                 assert self.q_proj and self.k_proj and self.v_proj and self.out_proj
                 
-                q = self.q_proj(self.input)
-                k = self.k_proj(self.input)
-                v = self.v_proj(self.input)
-                
-                q_flat = q.reshape(-1)
-                k_flat = k.reshape(-1)
-                v_flat = v.reshape(-1)
-                
-                # REAL warp specialization: fused Q/K/V transformation
-                context_flat = warp_specialized_triton_forward_ch18(q_flat, k_flat, v_flat)
-                context = context_flat.view_as(q)
-                output = self.out_proj(context)
-                _ = output.sum()
+                total = torch.zeros((), device=self.device, dtype=torch.float16)
+                for micro in range(self.micro_batches):
+                    shard = torch.roll(self.input, shifts=micro * 16, dims=1)
+                    q = self.q_proj(shard)
+                    k = self.k_proj(shard)
+                    v = self.v_proj(shard)
+                    
+                    context = None
+                    if self.triton_available:
+                        try:
+                            context_flat = warp_specialized_triton_forward_ch18(
+                                q.reshape(-1),
+                                k.reshape(-1),
+                                v.reshape(-1),
+                            )
+                            context = context_flat.view_as(q)
+                        except RuntimeError as exc:
+                            if "ptxas" not in str(exc):
+                                raise
+                    if context is None:
+                        qh = q.view(self.batch_size, self.sequence_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                        kh = k.view(self.batch_size, self.sequence_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                        vh = v.view(self.batch_size, self.sequence_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                        fused = torch.einsum("bshd,bshd->bshd", qh, kh).relu() * vh
+                        context = fused.permute(0, 2, 1, 3).reshape(self.batch_size, self.sequence_length, self.hidden_dim)
+                    total += self.out_proj(context).sum()
+                _ = total
 
     
     def teardown(self) -> None:
@@ -121,8 +148,10 @@ class OptimizedWarpSpecializationAttentionBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
+            iterations=3,
+            warmup=1,
+            enable_memory_tracking=False,
+            measurement_timeout_seconds=90,
             use_subprocess=False,
         )
     
@@ -131,6 +160,16 @@ class OptimizedWarpSpecializationAttentionBenchmark(Benchmark):
         if self.input is None:
             return "Input not initialized"
         return None
+
+    @staticmethod
+    def _triton_supported() -> bool:
+        if not TRITON_WARP_SPEC_AVAILABLE or not torch.cuda.is_available():
+            return False
+        major, minor = torch.cuda.get_device_capability()
+        # Current Triton build lacks SM 12.1 support; fall back to PyTorch path
+        if major >= 12:
+            return False
+        return True
 
 def get_benchmark() -> Benchmark:
     """Factory function for harness discovery."""

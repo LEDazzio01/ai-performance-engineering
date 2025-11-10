@@ -71,6 +71,9 @@ class OptimizedGraphBandwidthBenchmark(Benchmark):
         self.src = torch.randn(self.N, dtype=torch.float32, device=self.device)
         self.dst = torch.empty_like(self.src)
         torch.cuda.synchronize()
+        # Dry run so CUDA graph capture / kernel launch overhead happens before timing.
+        self._extension.graph_kernel(self.dst, self.src, 1)
+        torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: CUDA graph kernel."""

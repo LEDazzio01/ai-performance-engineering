@@ -6,16 +6,46 @@
 #include "../common/headers/cuda_helpers.cuh"
 
 constexpr int N = 1 << 20;
+constexpr int INNER_ITERS = 512;
+constexpr int STRIDE = 73;
+constexpr int UNROLL_FACTOR = 8;
+static_assert((INNER_ITERS % UNROLL_FACTOR) == 0, "INNER_ITERS must be divisible by UNROLL_FACTOR");
+
+__device__ __forceinline__ float compute_contribution(float sample, int iteration) {
+  const float weight = 1.0001f + 0.0002f * static_cast<float>(iteration & 7);
+  const float phase = static_cast<float>(iteration) * 0.0005f;
+  const float s = __sinf(sample * 0.05f + phase);
+  const float c = __cosf(sample * 0.025f - phase);
+  return fmaf(sample * weight, s * 0.1f + 0.9f, c * 0.05f);
+}
 
 __global__ void kernel_unrolled(const float* in, float* out, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
-    float val = in[idx];
-#pragma unroll 4
-    for (int i = 0; i < 16; ++i) {
-      val = val * 1.001f + 0.001f;
+    float partial[UNROLL_FACTOR];
+    #pragma unroll
+    for (int lane = 0; lane < UNROLL_FACTOR; ++lane) {
+      partial[lane] = 0.0f;
     }
-    out[idx] = val;
+
+    const int mask = n - 1;
+    int offset = idx;
+
+    for (int base = 0; base < INNER_ITERS; base += UNROLL_FACTOR) {
+      #pragma unroll
+      for (int lane = 0; lane < UNROLL_FACTOR; ++lane) {
+        float sample = in[offset];
+        partial[lane] += compute_contribution(sample, base + lane);
+        offset = (offset + STRIDE) & mask;
+      }
+    }
+
+    float total = 0.0f;
+    #pragma unroll
+    for (int lane = 0; lane < UNROLL_FACTOR; ++lane) {
+      total += partial[lane];
+    }
+    out[idx] = total;
   }
 }
 
@@ -47,7 +77,9 @@ int main() {
   
   float ms;
   CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-  printf("Loop with unroll (optimized): %.3f ms\n", ms / iterations);
+  float avg_ms = ms / iterations;
+  printf("Loop with unroll (optimized): %.3f ms\n", avg_ms);
+  printf("TIME_MS: %.6f\n", avg_ms);
 
   CUDA_CHECK(cudaFree(d_in));
   CUDA_CHECK(cudaFree(d_out));
@@ -57,4 +89,3 @@ int main() {
   CUDA_CHECK(cudaEventDestroy(stop));
   return 0;
 }
-

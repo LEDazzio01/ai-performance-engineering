@@ -25,6 +25,7 @@ class BaselineCooperativePersistentBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=1,
             timeout_seconds=180,
+            time_regex=r"TIME_MS:\s*([0-9.]+)",
         )
 
 
@@ -41,4 +42,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Cooperative Persistent: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

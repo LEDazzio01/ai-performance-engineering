@@ -5,10 +5,11 @@
 
 #include "../common/headers/cuda_helpers.cuh"
 
-constexpr int M = 512;
-constexpr int N = 512;
-constexpr int K = 512;
+constexpr int M = 1024;
+constexpr int N = 1024;
+constexpr int K = 1024;
 constexpr int TILE = 32;
+constexpr int kIterations = 80;
 
 __global__ void matmul_tiled(const float* A, const float* B, float* C, int m, int n, int k) {
   __shared__ float As[TILE][TILE];
@@ -57,15 +58,40 @@ int main() {
   CUDA_CHECK(cudaMemcpy(d_A, h_A, bytesA, cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_B, h_B, bytesB, cudaMemcpyHostToDevice));
 
+  cudaStream_t stream;
+  CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+
   dim3 block(TILE, TILE);
   dim3 grid((N + TILE - 1) / TILE, (M + TILE - 1) / TILE);
-  matmul_tiled<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+  // Warmup
+  matmul_tiled<<<grid, block, 0, stream>>>(d_A, d_B, d_C, M, N, K);
   CUDA_CHECK_LAST_ERROR();
-  CUDA_CHECK(cudaDeviceSynchronize());
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+
+  CUDA_CHECK(cudaEventRecord(start, stream));
+  for (int iter = 0; iter < kIterations; ++iter) {
+    matmul_tiled<<<grid, block, 0, stream>>>(d_A, d_B, d_C, M, N, K);
+    CUDA_CHECK_LAST_ERROR();
+  }
+  CUDA_CHECK(cudaEventRecord(stop, stream));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+
+  float total_ms = 0.0f;
+  CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
+  const float avg_ms = total_ms / kIterations;
 
   CUDA_CHECK(cudaMemcpy(h_C, d_C, bytesC, cudaMemcpyDeviceToHost));
+  printf("Tiled resident matmul (optimized): %.3f ms\n", avg_ms);
+  printf("TIME_MS: %.6f\n", avg_ms);
   printf("C[0]=%.1f\n", h_C[0]);
 
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(stop));
+  CUDA_CHECK(cudaStreamDestroy(stream));
   CUDA_CHECK(cudaFree(d_A));
   CUDA_CHECK(cudaFree(d_B));
   CUDA_CHECK(cudaFree(d_C));

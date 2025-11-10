@@ -1,4 +1,4 @@
-"""Python harness wrapper for baseline_threshold.cu."""
+"""Branch-heavy threshold benchmark baseline."""
 
 from __future__ import annotations
 
@@ -9,36 +9,42 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-from common.python.cuda_binary_benchmark import CudaBinaryBenchmark
+from ch8.threshold_benchmark_base import ThresholdBenchmarkBase
 
 
-class BaselineThresholdBenchmark(CudaBinaryBenchmark):
-    """Wraps the naïve threshold kernel."""
+class BaselineThresholdBenchmark(ThresholdBenchmarkBase):
+    nvtx_label = "baseline_threshold"
 
-    def __init__(self) -> None:
-        chapter_dir = Path(__file__).parent
-        super().__init__(
-            chapter_dir=chapter_dir,
-            binary_name="baseline_threshold",
-            friendly_name="Baseline Threshold",
-            iterations=5,
-            warmup=1,
-            timeout_seconds=90,
-        )
+    def _invoke_kernel(self) -> None:
+        assert self.extension is not None
+        assert self.host_inputs is not None
+        assert self.inputs is not None
+        assert self.outputs is not None
+        # Naive implementation streams data from host memory each iteration before running on the GPU.
+        self.inputs.copy_(self.host_inputs, non_blocking=False)
+        self.extension.threshold_baseline(self.inputs, self.outputs, self.threshold)
 
 
-def get_benchmark() -> BaselineThresholdBenchmark:
-    """Factory for discover_benchmarks()."""
+def get_benchmark() -> ThresholdBenchmarkBase:
     return BaselineThresholdBenchmark()
 
 
-if __name__ == "__main__":
-    benchmark = get_benchmark()
+def main() -> None:
+    from common.python.benchmark_harness import BenchmarkConfig, BenchmarkHarness, BenchmarkMode
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=benchmark.get_config(),
+        config=BenchmarkConfig(iterations=20, warmup=5),
     )
+    benchmark = BaselineThresholdBenchmark()
     result = harness.benchmark(benchmark)
-    print(f"\nBaseline Threshold: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print("=" * 70)
+    print("Baseline Threshold (branch divergence)")
+    print("=" * 70)
+    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
+    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
 
+
+if __name__ == "__main__":
+    main()

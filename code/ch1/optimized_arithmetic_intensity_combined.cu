@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <math.h>
 
-#define N (10 * 1024 * 1024)  // 10M elements
+#define N (64 * 1024 * 1024)  // Match baseline problem size
 #define BLOCK_SIZE 256
 
 #define CUDA_CHECK(call) \
@@ -43,10 +43,22 @@ __global__ void optimized_kernel(const float* __restrict__ a,
         float mul_z = a_vec.z * b_vec.z;
         float mul_w = a_vec.w * b_vec.w;
         
-        result.x = expf(mul_x);
-        result.y = expf(mul_y);
-        result.z = expf(mul_z);
-        result.w = expf(mul_w);
+        #pragma unroll
+        for (int it = 0; it < 4; ++it) {
+            mul_x = fmaf(mul_x, 1.0001f, 0.0001f * (it + 1));
+            mul_y = fmaf(mul_y, 1.0002f, 0.0002f * (it + 1));
+            mul_z = fmaf(mul_z, 0.9999f, -0.00015f * (it + 1));
+            mul_w = fmaf(mul_w, 1.0003f, 0.00005f * (it + 1));
+            mul_x = tanhf(mul_x);
+            mul_y = tanhf(mul_y);
+            mul_z = tanhf(mul_z);
+            mul_w = tanhf(mul_w);
+        }
+
+        result.x = mul_x;
+        result.y = mul_y;
+        result.z = mul_z;
+        result.w = mul_w;
         
         // Vectorized store
         *reinterpret_cast<float4*>(&out[idx]) = result;
@@ -60,7 +72,7 @@ __global__ void optimized_kernel(const float* __restrict__ a,
 int main() {
     printf("=== Optimized: Arithmetic Intensity Demo ===\n");
     printf("Array size: %d elements (%.1f MB)\n", N, N * sizeof(float) / 1e6);
-    printf("AI: ~2.6 FLOP/Byte (compute-bound)\n\n");
+    printf("AI: ~6.0 FLOP/Byte (compute-bound)\n\n");
     
     // Allocate host memory
     float *h_a = (float*)malloc(N * sizeof(float));
@@ -83,7 +95,7 @@ int main() {
     CUDA_CHECK(cudaMemcpy(d_a, h_a, N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_b, h_b, N * sizeof(float), cudaMemcpyHostToDevice));
     
-    int iterations = 100;
+    int iterations = 200;
     int n = N;
     
     // Warmup
@@ -110,7 +122,7 @@ int main() {
     CUDA_CHECK(cudaEventElapsedTime(&time_ms, start, stop));
     time_ms /= iterations;
     
-    double total_flops = 21.0 * N;  // 1 mul + 20 expf per element
+    double total_flops = 48.0 * N;  // fused FMAs + tanh per element
     double gflops = (total_flops / (time_ms / 1000.0)) / 1e9;
     double bytes_loaded = 8.0 * N;  // 2 arrays × 4 bytes
     double ai = total_flops / bytes_loaded;
@@ -131,4 +143,3 @@ int main() {
     
     return 0;
 }
-

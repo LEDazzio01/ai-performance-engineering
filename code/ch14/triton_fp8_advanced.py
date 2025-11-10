@@ -31,11 +31,8 @@ from pathlib import Path
 
 import os
 
-# Add parent directory to path to import arch_config
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-
 os.environ.setdefault("TRITON_ALLOW_NON_CONSTEXPR_GLOBALS", "1")  # TODO(cfregly): drop once kernels stop relying on globals
+from common.python import triton_compat  # noqa: F401
 
 import torch
 import triton

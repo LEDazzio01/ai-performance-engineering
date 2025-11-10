@@ -40,23 +40,37 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
-        self.A = None
-        self.B = None
-        self.C = None
-        self.size = 10_000_000  # Large size to show memory-bound behavior
+        self.A: torch.Tensor | None = None
+        self.B: torch.Tensor | None = None
+        self.C: torch.Tensor | None = None
+        self.M = 2048
+        self.K = 2048
+        self.N = 2048
+        self.block_k = 128  # Small tiles -> repeated memory traffic
     
     def setup(self) -> None:
         """Setup: Initialize large tensors."""
         torch.manual_seed(42)
         
-        # Large tensors for memory-bound operation
-        self.A = torch.randn(self.size, device=self.device, dtype=torch.float32)
-        self.B = torch.randn(self.size, device=self.device, dtype=torch.float32)
-        self.C = torch.empty_like(self.A)
-        
-        # Warmup
-        self.C = self.A + self.B
+        # Allocate matrices for chunked matmul accumulation.
+        self.A = torch.randn(self.M, self.K, device=self.device, dtype=torch.float32)
+        self.B = torch.randn(self.K, self.N, device=self.device, dtype=torch.float32)
+        self.C = torch.zeros(self.M, self.N, device=self.device, dtype=torch.float32)
+
+        # Warm up chunked kernel launches.
+        self._chunked_matmul()
         torch.cuda.synchronize()
+
+    def _chunked_matmul(self) -> None:
+        """Compute C = A @ B using small K-tiles."""
+        assert self.A is not None and self.B is not None and self.C is not None
+        self.C.zero_()
+        for k in range(0, self.K, self.block_k):
+            k_end = min(k + self.block_k, self.K)
+            a_slice = self.A[:, k:k_end]
+            b_slice = self.B[k:k_end, :]
+            # Smaller matmuls yield low arithmetic intensity due to repeated reads/writes.
+            self.C.addmm_(a_slice, b_slice, beta=1.0, alpha=1.0)
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - low arithmetic intensity (memory-bound)."""
@@ -70,13 +84,10 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_arithmetic_intensity", enable=enable_nvtx):
-            # Low arithmetic intensity: simple element-wise operations
-            # Many memory operations, few compute operations
-            self.C = self.A + self.B  # Memory-bound: read A, read B, write C
-            self.C = self.C * 1.5  # Another memory operation
-            self.C = self.C - 0.5  # Another memory operation
-            # Only 3 arithmetic operations for 3 memory reads + 3 writes
-            # Arithmetic Intensity = 3 ops / (3*4 bytes read + 3*4 bytes write) = 3/24 = 0.125
+            if self.A is None or self.B is None or self.C is None:
+                raise RuntimeError("Benchmark not initialized")
+            self._chunked_matmul()
+            torch.cuda.synchronize(self.device)
 
     
     def teardown(self) -> None:
@@ -87,16 +98,16 @@ class BaselineArithmeticIntensityBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=100,
-            warmup=10,
+            iterations=25,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
         )
     
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.A is None:
-            return "A not initialized"
+        if self.A is None or self.B is None or self.C is None:
+            return "Matrices not initialized"
         return None
 
 
@@ -113,4 +124,3 @@ if __name__ == "__main__":
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline Arithmetic Intensity: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-

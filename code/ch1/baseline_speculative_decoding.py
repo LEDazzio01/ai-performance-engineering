@@ -29,6 +29,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -45,16 +46,20 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
         self.device = resolve_device()
         self.model = None
         self.embedding = None
-        self.input_ids = None
-        self.max_length = 20
+        self.decode_tokens = None
+        self.memory = None
+        self.workload = WORKLOAD
+        self.batch_size = self.workload.batch_size
+        self.tokens_per_step = self.workload.tokens_per_step
+        self.decode_steps = self.workload.decode_steps
+        self.vocab_size = 1000
     
     def setup(self) -> None:
         """Setup: Initialize model and input."""
         # Simple decoder model with embedding layer
         # TransformerDecoder expects embedded inputs, not raw token IDs
-        vocab_size = 1000
         d_model = 256
-        self.embedding = nn.Embedding(vocab_size, d_model).to(self.device)
+        self.embedding = nn.Embedding(self.vocab_size, d_model).to(self.device)
         self.model = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(d_model=d_model, nhead=8, batch_first=True),
             num_layers=2
@@ -63,10 +68,20 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
         
         # Baseline: Standard decoding - generate tokens one at a time
         # No speculative decoding - cannot generate multiple tokens in parallel
-        batch_size = 4
-        seq_len = 10
-        self.input_ids = torch.randint(0, 1000, (batch_size, seq_len), device=self.device)
-        torch.cuda.synchronize()
+        # Pre-generate the decode stream so every iteration replays the same workload.
+        torch.manual_seed(42)
+        decode = torch.randint(
+            0,
+            self.vocab_size,
+            (self.decode_steps, self.batch_size, self.tokens_per_step),
+            device=self.device,
+        )
+        self.decode_tokens = decode
+        self.memory = torch.randn(
+            self.batch_size, self.tokens_per_step, d_model, device=self.device
+        )
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Standard autoregressive decoding."""
@@ -81,16 +96,14 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
 
         with nvtx_range("baseline_speculative_decoding", enable=enable_nvtx):
             with torch.no_grad():
-                # Baseline: Standard autoregressive decoding
-                # Generate tokens sequentially, one at a time
-                # No speculative execution - cannot parallelize token generation
-                # Embed input tokens (TransformerDecoder expects embedded inputs)
-                embedded_input = self.embedding(self.input_ids)
-                # Create memory tensor (simulating encoder output in decoder-only scenario)
-                memory = torch.randn(self.input_ids.size(0), self.input_ids.size(1), 256, device=self.device)
-                output = self.model(embedded_input, memory)
-                # Baseline: sequential processing without speculation
-                _ = output.sum()
+                for step in range(self.decode_steps):
+                    tokens = self.decode_tokens[step]
+                    embedded = self.embedding(tokens)
+                    memory = self.memory.expand(self.batch_size, self.tokens_per_step, -1)
+                    output = self.model(embedded, memory)
+                    _ = output.sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
 
     
     def teardown(self) -> None:
@@ -103,8 +116,8 @@ class BaselineSpeculativeDecodingBenchmark(Benchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
+            iterations=5,
+            warmup=2,
         )
     
     def validate_result(self) -> Optional[str]:
@@ -134,4 +147,3 @@ if __name__ == '__main__':
     else:
         print("\nBaseline Speculative Decoding (Standard): No timing data available")
     print("NOTE: Standard autoregressive decoding - tokens generated sequentially, no speculation")
-

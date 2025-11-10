@@ -6,6 +6,8 @@
 #include "profiling_helpers.cuh"
 
 #define SHARED_SIZE 1024
+#define CONFLICT_STRIDE 32
+#define CONFLICT_ITERS 64
 
 // Baseline: Bank conflicts occur when threads access same bank
 __global__ void bank_conflicts_kernel(float* output, const float* input, int N) {
@@ -21,10 +23,13 @@ __global__ void bank_conflicts_kernel(float* output, const float* input, int N) 
     __syncthreads();
     
     // Access pattern that causes bank conflicts
-    int stride = 8;
-    if (tid < SHARED_SIZE / stride && idx < N) {
-        float val = shared_data[tid * stride];
-        output[idx] = val * 2.0f;
+    if (tid < SHARED_SIZE / CONFLICT_STRIDE && idx < N) {
+        float acc = 0.0f;
+#pragma unroll
+        for (int iter = 0; iter < CONFLICT_ITERS; ++iter) {
+            acc += shared_data[(tid * CONFLICT_STRIDE) & (SHARED_SIZE - 1)];
+        }
+        output[idx] = acc;
     }
 }
 
@@ -41,11 +46,15 @@ __global__ void bank_conflicts_padded_kernel(float* output, const float* input, 
     }
     __syncthreads();
     
-    // Same access pattern, but padding eliminates bank conflicts
-    int stride = 8;
-    if (tid < SHARED_SIZE / stride && idx < N) {
-        float val = shared_data[tid * stride];
-        output[idx] = val * 2.0f;
+    // Same access pattern, but padding offsets each row to unique bank
+    if (tid < SHARED_SIZE / CONFLICT_STRIDE && idx < N) {
+        float acc = 0.0f;
+#pragma unroll
+        for (int iter = 0; iter < CONFLICT_ITERS; ++iter) {
+            int padded_idx = tid * (CONFLICT_STRIDE + 1);
+            acc += shared_data[padded_idx];
+        }
+        output[idx] = acc;
     }
 }
 
@@ -119,4 +128,3 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("bank_conflicts", &bank_conflicts, "Bank conflicts kernel (baseline)");
     m.def("bank_conflicts_padded", &bank_conflicts_padded, "Bank conflicts kernel with padding (optimized)");
 }
-

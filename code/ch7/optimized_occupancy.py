@@ -41,11 +41,10 @@ class OptimizedOccupancyBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        # Optimization: Compile model for kernel fusion and optimization
-
-        # Optimization: Compile model for kernel fusion and optimization
-
-        self.input = None
+        self.requests = None
+        self.num_requests = 512
+        self.batch_size = 128
+        self.feature_dim = 1024
     
     def setup(self) -> None:
         """Setup: Initialize model with large input (high occupancy)."""
@@ -60,13 +59,12 @@ class OptimizedOccupancyBenchmark(Benchmark):
         # This baseline uses large input causing high occupancy
         
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(self.feature_dim, 2048),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
+            nn.Linear(2048, self.feature_dim),
         ).to(self.device).eval()
         
-        # Large input (high occupancy)
-        self.input = torch.randn(256, 1024, device=self.device)  # Large batch
+        self.requests = torch.randn(self.num_requests, self.feature_dim, device=self.device)
         torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
@@ -84,14 +82,10 @@ class OptimizedOccupancyBenchmark(Benchmark):
                 # Optimization: High occupancy
                 # Large input provides sufficient work per kernel
                 # Occupancy: high GPU utilization due to large batch size
-                output = self.model(self.input)
-                
-                # Optimization: High occupancy benefits
-                # - Large batch size maximizes GPU utilization
-                # - Sufficient work to keep GPU busy
-                # - Better performance through high occupancy
-                # - Improved GPU resource utilization
-                _ = output.sum()
+                for start in range(0, self.num_requests, self.batch_size):
+                    batch = self.requests[start:start + self.batch_size]
+                    output = self.model(batch)
+                    _ = output.sum()
 
     
     def teardown(self) -> None:
@@ -111,8 +105,8 @@ class OptimizedOccupancyBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.requests is None:
+            return "Requests not initialized"
         return None
 
 def get_benchmark() -> Benchmark:

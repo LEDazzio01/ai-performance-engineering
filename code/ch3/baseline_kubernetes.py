@@ -1,15 +1,10 @@
-"""baseline_kubernetes.py - Baseline without Kubernetes orchestration in infrastructure/OS tuning context.
-
-Demonstrates operations without Kubernetes orchestration.
-Kubernetes: This baseline does not use Kubernetes for container orchestration.
-Uses standard execution without Kubernetes pod scheduling.
-Implements Benchmark protocol for harness integration.
-"""
+"""Kubernetes baseline: per-iteration CPU orchestration with new tensors."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -18,121 +13,66 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional
-
-from common.python.benchmark_harness import (
-    Benchmark,
-    BenchmarkConfig,
-)
+from common.python.benchmark_harness import Benchmark, BenchmarkConfig
 
 
 def resolve_device() -> torch.device:
-    """Return CUDA device if available."""
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA required for ch3")
+        raise RuntimeError("CUDA required for ch3 kubernetes example")
     return torch.device("cuda")
 
 
 class BaselineKubernetesBenchmark(Benchmark):
-    """Baseline: Standard execution without Kubernetes.
-    
-    Kubernetes: This baseline does not use Kubernetes for container orchestration.
-    Uses standard execution without Kubernetes pod scheduling.
-    """
-    
+    """Allocates new tensors + launches multiple kernels every iteration."""
+
     def __init__(self):
         self.device = resolve_device()
-        self.model = None
-        self.input = None
-    
-    def setup(self) -> None:
-        """Setup: Initialize model without Kubernetes orchestration."""
-        torch.manual_seed(42)
-        # Baseline: Standard execution (no Kubernetes)
-        # Kubernetes provides container orchestration and scheduling
-        # This baseline runs without Kubernetes orchestration
-        
         self.model = nn.Sequential(
-            nn.Linear(1024, 2048),
+            nn.Linear(1024, 1024),
             nn.ReLU(),
-            nn.Linear(2048, 1024),
-        ).to(self.device).eval()
-        
-        # Standard execution (no Kubernetes)
-        # Kubernetes would provide pod scheduling and resource management
-        self.input = torch.randn(32, 1024, device=self.device)
-        torch.cuda.synchronize()
-    
-    def benchmark_fn(self) -> None:
-        """Benchmark: Operations without Kubernetes."""
-        # Use conditional NVTX ranges - only enabled when profiling
+            nn.Linear(1024, 1024),
+        ).to(self.device)
 
-        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+    def setup(self) -> None:
+        torch.manual_seed(314)
+        torch.cuda.synchronize()
+
+    def benchmark_fn(self) -> None:
+        from common.python.nvtx_helper import get_nvtx_enabled, nvtx_range
 
         config = self.get_config()
-
         enable_nvtx = get_nvtx_enabled(config) if config else False
-
-
         with nvtx_range("baseline_kubernetes", enable=enable_nvtx):
-            with torch.no_grad():
-                # Baseline: Standard execution (no Kubernetes)
-                # Kubernetes provides container orchestration and scheduling
-                # This baseline does not use Kubernetes
-                output = self.model(self.input)
-                
-                # Baseline: No Kubernetes benefits
-                # Standard execution without orchestration
-                # Kubernetes would provide pod scheduling and resource management
-                _ = output.sum()
+            host_data = torch.randn(512, 1024, dtype=torch.float32)
+            host_target = torch.randn(512, 1024, dtype=torch.float32)
+            data = host_data.to(self.device, non_blocking=False)
+            target = host_target.to(self.device, non_blocking=False)
+            torch.cuda.synchronize()
+            out = self.model(data)
+            torch.nn.functional.mse_loss(out, target).backward()
+            for p in self.model.parameters():
+                p.grad = None
 
-    
     def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.model = None
-        self.input = None
         torch.cuda.empty_cache()
-    
+
     def get_config(self) -> BenchmarkConfig:
-        """Return benchmark configuration."""
-        return BenchmarkConfig(
-            iterations=50,
-            warmup=5,
-        )
-    
+        return BenchmarkConfig(iterations=30, warmup=5)
+
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
         return None
 
 
 def get_benchmark() -> Benchmark:
-    """Factory function for harness discovery."""
     return BaselineKubernetesBenchmark()
 
 
-def main() -> None:
-    """Standalone execution (for testing)."""
+if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
-    
+
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=50, warmup=5)
+        config=BenchmarkConfig(iterations=5, warmup=1),
     )
-    benchmark = BaselineKubernetesBenchmark()
-    result = harness.benchmark(benchmark)
-    
-    print("=" * 70)
-    print(f"Baseline: Kubernetes")
-    print("=" * 70)
-    print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
-    print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")
-    print(f"Std: {result.timing.std_ms if result.timing else 0.0:.3f} ms")
-
-
-if __name__ == "__main__":
-    main()
-
+    result = harness.benchmark(get_benchmark())
+    print(f"\nBaseline Kubernetes latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

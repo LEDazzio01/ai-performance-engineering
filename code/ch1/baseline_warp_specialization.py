@@ -23,6 +23,7 @@ from common.python.benchmark_harness import (
     Benchmark,
     BenchmarkConfig,
 )
+from ch1.workload_config import WORKLOAD
 
 
 def resolve_device() -> torch.device:
@@ -42,7 +43,8 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
     def __init__(self):
         self.device = resolve_device()
         self.model = None
-        self.input = None
+        self.inputs = None
+        self.microsteps = WORKLOAD.performance_microbatches // 2
     
     def setup(self) -> None:
         """Setup: Initialize model without warp specialization."""
@@ -57,8 +59,11 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
             nn.Linear(512, 256),
         ).to(self.device).eval()
         
-        self.input = torch.randn(32, 1024, device=self.device)
-        torch.cuda.synchronize()
+        self.inputs = [
+            torch.randn(64, 1024, device=self.device) for _ in range(self.microsteps)
+        ]
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations without warp specialization."""
@@ -72,25 +77,24 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
 
 
         with nvtx_range("baseline_warp_specialization", enable=enable_nvtx):
-            # Baseline: All warps do the same work
-            # Without warp specialization, all warps execute all operations
-            # This does not leverage warp specialization for producer/consumer patterns
-            # Warp specialization uses __activemask to coordinate warp roles
-            # This baseline does not use specialized warp roles
-            
-            # All warps perform same computation (no specialization)
-            output = self.model(self.input)
-            
-            # Baseline: No warp specialization
-            # All warps execute same operations
-            # Cannot leverage producer/consumer patterns
-            _ = output.sum()
+            total = 0.0
+            for microbatch in self.inputs:
+                fragments = microbatch.chunk(8, dim=0)
+                stage_outputs = []
+                for frag in fragments:
+                    hidden = torch.nn.functional.linear(frag, self.model[0].weight, self.model[0].bias)
+                    hidden = torch.relu(hidden)
+                    stage_outputs.append(torch.nn.functional.linear(hidden, self.model[2].weight, self.model[2].bias))
+                total += torch.cat(stage_outputs, dim=0).sum()
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+            self._checksum = total
 
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.input = None
+        self.inputs = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -105,7 +109,7 @@ class BaselineWarpSpecializationBenchmark(Benchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.input is None:
+        if self.inputs is None:
             return "Input not initialized"
         return None
 
