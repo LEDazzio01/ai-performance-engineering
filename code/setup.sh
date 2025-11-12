@@ -839,19 +839,6 @@ fi
 # Clean up other conflicting Lambda Labs packages
 apt autoremove -y 2>/dev/null || true
 
-# Fix hardware info script compatibility
-echo ""
-echo "Fixing hardware info script compatibility..."
-if [ -f "$PROJECT_ROOT/ch2/hardware_info.py" ]; then
-    # Backup original file
-    cp "$PROJECT_ROOT/ch2/hardware_info.py" "$PROJECT_ROOT/ch2/hardware_info.py.backup"
-    
-    # Fix the compatibility issue
-    sed -i 's/"max_threads_per_block": device_props.max_threads_per_block,/"max_threads_per_block": getattr(device_props, '\''max_threads_per_block'\'', 1024),/' "$PROJECT_ROOT/ch2/hardware_info.py"
-    
-    echo "Fixed hardware info script compatibility"
-fi
-
 # Verify installation
 echo ""
 echo "Verifying installation..."

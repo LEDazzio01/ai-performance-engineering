@@ -80,7 +80,7 @@ def get_gpu_info() -> Dict[str, Any]:
         "compute_capability": cap.compute_capability,
         "total_memory_gb": cap.total_memory_gb,
         "memory_bandwidth_gbps": bandwidth_gbps,
-        "max_threads_per_block": cap.max_threads_per_block,
+        "max_threads_per_block": getattr(cap, "max_threads_per_block", 1024),
         "max_threads_per_sm": cap.max_threads_per_sm,
         "num_sms": cap.num_sms,
         "warp_size": cap.warp_size,
