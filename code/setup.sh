@@ -51,7 +51,7 @@
 #   - Run examples: python3 ch1/performance_basics.py
 #   - Drive the benchmark suite: python tools/cli/benchmark_cli.py run
 #   - Capture peak performance: python tools/benchmarking/benchmark_peak.py
-#   - Verify examples: python3 tools/verification/verify_all_benchmarks.py
+#   - Verify examples: python tools/cli/benchmark_cli.py verify
 #
 
 set -e  # Exit on any error
@@ -1193,6 +1193,23 @@ fi
 
 echo ""
 
+echo "Capturing hardware capabilities..."
+if python3 "$PROJECT_ROOT/tools/utilities/probe_hardware_capabilities.py"; then
+    echo "Hardware capabilities recorded at artifacts/hardware_capabilities.json"
+else
+    echo "WARNING: Unable to capture hardware capabilities (continuing anyway)"
+fi
+
+echo ""
+echo "Regenerating CUDA arch detection header..."
+if python3 "$PROJECT_ROOT/tools/utilities/generate_arch_detection_header.py"; then
+    echo "arch_detection.cuh regenerated from live hardware probe"
+else
+    echo "WARNING: Failed to regenerate arch_detection.cuh (continuing with existing header)"
+fi
+
+echo ""
+
 # Test 4: Hardware info script
 echo ""
 echo "Testing hardware detection..."
@@ -1362,6 +1379,6 @@ echo "  export NCCL_P2P_DISABLE=0"
 echo "  export NCCL_IB_DISABLE=1"
 echo "  export NCCL_NVLS_ENABLE=1"
 echo ""
-echo "For more information, see the main README.md file and chapter-specific documentation."
+echo "For more information, see the README.md file and chapter-specific documentation."
 echo ""
 echo "Happy performance engineering!"
