@@ -38,6 +38,7 @@ class OptimizedContextParallelismBenchmark(Benchmark):
     
     def __init__(self):
         self.device = resolve_device()
+        self.num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
         self.models: Optional[List[nn.Module]] = None
         self.sequence_chunks: Optional[List[torch.Tensor]] = None
         self.sequence_length = 8192

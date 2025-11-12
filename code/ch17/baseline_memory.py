@@ -14,6 +14,8 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+import warnings
+
 import torch
 import torch.nn as nn
 from typing import Optional
@@ -48,14 +50,31 @@ class BaselineMemoryBenchmark(Benchmark):
         self.host_batches: list[torch.Tensor] = []
         self._prev_threads: Optional[int] = None
         self._prev_interop_threads: Optional[int] = None
+        self._threads_overridden = False
+        self._interop_overridden = False
+    
+    @staticmethod
+    def _safe_set_thread_fn(setter, value: int, label: str, warn=True) -> bool:
+        """Try to set a torch threading knob without aborting the benchmark."""
+        try:
+            setter(value)
+            return True
+        except RuntimeError as err:
+            if warn:
+                warnings.warn(f"Unable to set {label} (continuing with defaults): {err}")
+            return False
     
     def setup(self) -> None:
         """Setup: Initialize model with standard memory allocation."""
         torch.manual_seed(42)
         self._prev_threads = torch.get_num_threads()
         self._prev_interop_threads = torch.get_num_interop_threads()
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
+        self._threads_overridden = self._safe_set_thread_fn(
+            torch.set_num_threads, 1, "num_threads"
+        )
+        self._interop_overridden = self._safe_set_thread_fn(
+            torch.set_num_interop_threads, 1, "num_interop_threads"
+        )
         # Baseline: Standard GPU memory allocation
         # Memory optimization techniques include custom allocators, memory pooling, etc.
         # This baseline uses standard PyTorch memory allocation
@@ -104,10 +123,17 @@ class BaselineMemoryBenchmark(Benchmark):
         """Teardown: Clean up resources."""
         self.model = None
         self.host_batches = []
-        if self._prev_threads is not None:
-            torch.set_num_threads(self._prev_threads)
-        if self._prev_interop_threads is not None:
-            torch.set_num_interop_threads(self._prev_interop_threads)
+        if self._prev_threads is not None and self._threads_overridden:
+            self._safe_set_thread_fn(
+                torch.set_num_threads, self._prev_threads, "num_threads reset", warn=False
+            )
+        if self._prev_interop_threads is not None and self._interop_overridden:
+            self._safe_set_thread_fn(
+                torch.set_num_interop_threads,
+                self._prev_interop_threads,
+                "num_interop_threads reset",
+                warn=False,
+            )
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
