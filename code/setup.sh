@@ -109,6 +109,7 @@ mkdir -p "${PYTORCH_WHEEL_DIR}"
 TORCH_CUDA_ARCH_LIST_VALUE="10.0;10.3;12.0;12.1+PTX"
 CMAKE_CUDA_ARCH_LIST_VALUE="100;103;120;121"
 TORCH_SM_ARCH_LIST_VALUE="sm_100;sm_103;sm_120;sm_121"
+CUTLASS_NVCC_ARCHS_VALUE="100;103;120;121"
 PYTORCH_BUILD_VERSION="2.9.0a0+${PYTORCH_COMMIT}"
 PYTORCH_BUILD_NUMBER="0"
 echo "Project root: $PROJECT_ROOT"
@@ -771,6 +772,7 @@ else
     export MAX_JOBS="${MAX_JOBS:-$(nproc)}"
     export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST_VALUE}"
     export CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCH_LIST_VALUE}"
+    export CUTLASS_NVCC_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE}"
     export CUDA_HOME="${CUDA_HOME_DIR}"
     export CUDNN_INCLUDE_DIR="/usr/include"
     export CUDNN_LIBRARY_DIR="/usr/lib/x86_64-linux-gnu"
@@ -932,6 +934,7 @@ install_te_from_source() {
     python3 -m pip install --no-input --upgrade --ignore-installed pybind11
     local torch_wheel="${PYTORCH_WHEEL_PATH}"
     if TORCH_CUDA_ARCH_LIST="${TORCH_SM_ARCH_LIST_VALUE}" \
+       CUTLASS_NVCC_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE}" \
        CUDNN_INCLUDE_DIR="${CUDNN_INCLUDE_DIR}" \
        CUDNN_LIBRARY_DIR="${CUDNN_LIBRARY_DIR}" \
        python3 -m pip install --no-input --upgrade --ignore-installed --no-build-isolation \

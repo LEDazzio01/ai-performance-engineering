@@ -12,6 +12,7 @@ DRY_RUN=1
 ASSUME_YES=0
 BACKUP_ENABLED=1
 REBOOT_AFTER=0
+REQUIRE_VERIFY_TOOLS=0
 HOME_DIR="${HOME:-$PWD}"
 AI_REPO="${AI_REPO:-$HOME_DIR/ai-performance-engineering}"
 PPLX_REPO="${PPLX_REPO:-$HOME_DIR/pplx-garden}"
@@ -20,6 +21,8 @@ SHRED_BIN="$(command -v shred || true)"
 FAILURES=0
 TOTAL_SHREDS=0
 TOTAL_DELETES=0
+RG_AVAILABLE=0
+DETECT_AVAILABLE=0
 
 usage() {
   cat <<'EOF'
@@ -32,6 +35,7 @@ Options:
   --reboot              Reboot automatically after cleanup (default: no reboot).
   --ai-root PATH        Override ai-performance-engineering repo path.
   --pplx-root PATH      Override pplx-garden repo path.
+  --require-verify-tools  Exit early if ripgrep/detect-secrets are missing.
   -h, --help            Show this message.
 
 The script is intentionally conservative: it previews all destructive steps
@@ -70,7 +74,7 @@ run_cmd() {
   local code=$?
   log_warn "$desc failed with exit code $code"
   FAILURES=1
-  return 0
+  return "$code"
 }
 
 run_safe_cmd() {
@@ -83,7 +87,7 @@ run_safe_cmd() {
   local code=$?
   log_warn "$desc failed with exit code $code"
   FAILURES=1
-  return 0
+  return "$code"
 }
 
 maybe_sudo() {
@@ -181,6 +185,41 @@ remove_dirs_matching() {
       remove_path "$dir"
     done < <(find "$root" -type d -name "$name" -print0 2>/dev/null)
   done
+}
+
+have_tool() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+check_verification_tools() {
+  local warn="${1:-1}"
+  local context="${2:-preflight}"
+  local missing=0
+
+  if have_tool rg; then
+    RG_AVAILABLE=1
+  else
+    RG_AVAILABLE=0
+    if [[ $warn -eq 1 ]]; then
+      log_warn "[$context] ripgrep (rg) not found. Install via: sudo apt install ripgrep"
+    fi
+    missing=1
+  fi
+
+  if have_tool detect-secrets; then
+    DETECT_AVAILABLE=1
+  else
+    DETECT_AVAILABLE=0
+    if [[ $warn -eq 1 ]]; then
+      log_warn "[$context] detect-secrets not found. Install via: pip install detect-secrets --break-system-packages"
+    fi
+    missing=1
+  fi
+
+  if [[ $missing -eq 1 && $REQUIRE_VERIFY_TOOLS -eq 1 ]]; then
+    log_error "Verification tools are required but missing. Install ripgrep/detect-secrets or rerun without --require-verify-tools."
+    exit 1
+  fi
 }
 
 manual_preflight() {
@@ -282,7 +321,6 @@ cleanup_credentials() {
 
   remove_path \
     "$HOME_DIR/Desktop/dgx-spark-developer-site.desktop" \
-    "$HOME_DIR/.local/share/applications/spark.desktop" \
     "$HOME_DIR/.config/autostart/spark.desktop"
 }
 
@@ -372,8 +410,6 @@ cleanup_repositories() {
 cleanup_caches_toolchains() {
   log_section "Caches & toolchains"
   remove_path \
-    "$HOME_DIR/.local/lib/python3.11" \
-    "$HOME_DIR/.local/bin" \
     "$HOME_DIR/.cache/pip" \
     "$HOME_DIR/.cache/torch_extensions" \
     "$HOME_DIR/.cache/torch_extensions/py311_cu130" \
@@ -394,8 +430,6 @@ cleanup_caches_toolchains() {
   shred_file "$HOME_DIR/.cargo/env"
 
   remove_path \
-    "$HOME_DIR/.local/state/wireplumber" \
-    "$HOME_DIR/.local/share/applications" \
     "$HOME_DIR/.config/autostart" \
     "$HOME_DIR/.cache/matplotlib" \
     "$HOME_DIR/.cache/Microsoft" \
@@ -432,8 +466,8 @@ cleanup_temp_and_logs() {
 docker_cleanup() {
   log_section "Docker & GPU artifacts"
   if command -v docker >/dev/null 2>&1; then
-    run_cmd "docker system prune -af" docker system prune -af
-    run_cmd "docker builder prune -af" docker builder prune -af
+    maybe_sudo "docker system prune -af" docker system prune -af
+    maybe_sudo "docker builder prune -af" docker builder prune -af
   else
     log_info "docker not installed; skipping daemon prune"
   fi
@@ -442,21 +476,34 @@ docker_cleanup() {
 
 verification_scans() {
   log_section "Verification sweeps"
-  if command -v rg >/dev/null 2>&1; then
+  check_verification_tools 0 "verification"
+  if [[ $RG_AVAILABLE -eq 1 ]]; then
     run_safe_cmd "ripgrep potential secrets" \
       rg -n --hidden --no-messages "(password|secret|token|key)" "$HOME_DIR"
   else
-    log_warn "rg not available; skipping regex scan"
+    log_warn "Skipping ripgrep scan (rg unavailable)."
   fi
 
   run_safe_cmd "Listing *.pem/.key/.env files" \
     find "$HOME_DIR" \( -name '*.pem' -o -name '*.key' -o -name '.env*' \) -print
 
-  if command -v detect-secrets >/dev/null 2>&1; then
+  if [[ $DETECT_AVAILABLE -eq 1 ]]; then
     run_safe_cmd "detect-secrets scan" detect-secrets scan "$HOME_DIR"
   else
-    log_warn "detect-secrets not installed; skipping plugin scan"
+    log_warn "Skipping detect-secrets scan (tool unavailable)."
   fi
+}
+
+
+
+
+cleanup_local_tree_final() {
+  log_section "Final .local cleanup"
+  remove_path \
+    "$HOME_DIR/.local/lib/python3.11" \
+    "$HOME_DIR/.local/bin" \
+    "$HOME_DIR/.local/state/wireplumber" \
+    "$HOME_DIR/.local/share/applications"
 }
 
 print_summary() {
@@ -483,6 +530,12 @@ print_summary() {
     else
       log_info "Manual reboot recommended after you verify everything."
     fi
+  fi
+  if [[ $RG_AVAILABLE -eq 0 ]]; then
+    log_warn "ripgrep unavailable -> pattern scan skipped. Install via: sudo apt install ripgrep"
+  fi
+  if [[ $DETECT_AVAILABLE -eq 0 ]]; then
+    log_warn "detect-secrets unavailable -> plugin scan skipped. Install via: pip install detect-secrets --break-system-packages"
   fi
 }
 
@@ -511,6 +564,9 @@ parse_args() {
         [[ $# -gt 0 ]] || { log_error "--pplx-root requires a path"; exit 1; }
         PPLX_REPO="$1"
         ;;
+      --require-verify-tools)
+        REQUIRE_VERIFY_TOOLS=1
+        ;;
       -h|--help)
         usage
         exit 0
@@ -533,6 +589,7 @@ main() {
   parse_args "$@"
   setup_backup_root
   manual_preflight
+  check_verification_tools 1 "preflight"
   cleanup_credentials
   cleanup_repositories
   cleanup_caches_toolchains
@@ -540,6 +597,7 @@ main() {
   cleanup_temp_and_logs
   docker_cleanup
   verification_scans
+  cleanup_local_tree_final
   print_summary
 }
 
