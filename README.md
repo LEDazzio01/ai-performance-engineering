@@ -34,7 +34,7 @@ Using a hands‑on, empirical methodology with case studies, profiling data, thi
 
 * Adopt AI‑assisted optimization—let AI help synthesize and tune kernels as systems outgrow manual tweaking
  
-* Ship with confidence—apply the 175+ item checklist to reproduce wins and prevent regressions across teams.
+* Ship with confidence—apply the 200+ item [checklist](docs/appendix.md) to reproduce wins and prevent regressions across teams.
 
 ### Author Bio
 
@@ -44,9 +44,9 @@ Chris is the author of two other O’Reilly books: Data Science on AWS and Gener
 
 His work spans kernel‑level tuning, compiler‑driven acceleration, distributed training, and high‑throughput inference. Chris hosts a monthly meetup called [AI Performance Engineering](https://www.meetup.com/ai-performance-engineering).
 
-### 175+ Item Performance Checklist
+### 200+ Item Performance [checklist](docs/appendix.md)
 
-The book ships with a **175+ item performance checklist** that captures field‑tested optimizations covering the entire lifecycle. You can apply these immediately:
+The book ships with a **200+ item performance [checklist](docs/appendix.md)** that captures field‑tested optimizations covering the entire lifecycle. You can apply these immediately:
 
 - ✅ Performance tuning mindset and cost optimization
 - ✅ Reproducibility and documentation best practices
