@@ -13,12 +13,14 @@ LAB_NAMES = {
     "blackwell_matmul",
     "moe_cuda",
     "flexattention",
+    "train_distributed",
 }
 LAB_ALIASES: Dict[str, str] = {
     "lab_fullstack_cluster": "labs/fullstack_cluster",
     "lab_blackwell_matmul": "labs/blackwell_matmul",
     "lab_moe_cuda": "labs/moe_cuda",
     "lab_flexattention": "labs/flexattention",
+    "lab_train_distributed": "labs/train_distributed",
     "capstone": "labs/fullstack_cluster",
     "capstone2": "labs/blackwell_matmul",
     "capstone3": "labs/moe_cuda",

@@ -59,6 +59,16 @@ class OptimizedGuidedDecodingBenchmark(BaseBenchmark):
             torch.backends.cudnn.deterministic = False
             # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
+            # On GB10 (sm_12x) flash SDP routes to sm80-only kernels; force math SDP for stability.
+            major, _ = torch.cuda.get_device_capability(self.device)
+            if major >= 12:
+                try:
+                    torch.backends.cuda.enable_flash_sdp(False)
+                    torch.backends.cuda.enable_mem_efficient_sdp(False)
+                    torch.backends.cuda.enable_math_sdp(True)
+                    torch.backends.cuda.enable_cudnn_sdp(False)
+                except Exception:
+                    pass
         
         torch.manual_seed(42)
         # Optimization: Guided decoding

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import sys
 import time
 import warnings
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 try:
     import typer
@@ -97,6 +98,17 @@ def _validate_profile_type(profile: str) -> str:
         raise ValueError(message)
     return normalized
 
+
+def _parse_target_extra_args(entries: Optional[List[str]]) -> Dict[str, List[str]]:
+    """Parse --target-extra-arg entries of the form target=\"--flag value\"."""
+    parsed: Dict[str, List[str]] = {}
+    for entry in entries or []:
+        target, sep, args = entry.partition("=")
+        if not sep or not target or not args:
+            continue
+        parsed[target.strip()] = shlex.split(args)
+    return parsed
+
 # Import architecture optimizations early
 try:
     import arch_config  # noqa: F401
@@ -180,6 +192,13 @@ def _execute_benchmarks(
     accept_regressions: bool = False,
     update_expectations: bool = False,
     ncu_metric_set: str = "auto",
+    launch_via: str = "python",
+    nproc_per_node: Optional[int] = None,
+    nnodes: Optional[str] = None,
+    rdzv_backend: Optional[str] = None,
+    rdzv_endpoint: Optional[str] = None,
+    torchrun_env: Optional[List[str]] = None,
+    target_extra_args: Optional[List[str]] = None,
 ):
     _execute_benchmarks_impl(
         targets=targets,
@@ -198,6 +217,13 @@ def _execute_benchmarks(
         accept_regressions=accept_regressions,
         update_expectations=update_expectations,
         ncu_metric_set=ncu_metric_set,
+        launch_via=launch_via,
+        nproc_per_node=nproc_per_node,
+        nnodes=nnodes,
+        rdzv_backend=rdzv_backend,
+        rdzv_endpoint=rdzv_endpoint,
+        torchrun_env=torchrun_env,
+        target_extra_args=target_extra_args,
     )
 
 
@@ -218,8 +244,16 @@ def _execute_benchmarks_impl(
     accept_regressions: bool = False,
     update_expectations: bool = False,
     ncu_metric_set: str = "auto",
+    launch_via: str = "python",
+    nproc_per_node: Optional[int] = None,
+    nnodes: Optional[str] = None,
+    rdzv_backend: Optional[str] = None,
+    rdzv_endpoint: Optional[str] = None,
+    torchrun_env: Optional[List[str]] = None,
+    target_extra_args: Optional[List[str]] = None,
 ):
     """Shared function to execute benchmarks."""
+    parsed_extra_args = _parse_target_extra_args(target_extra_args)
     # Set force pipeline flag before benchmarks run
     from common.python.cuda_capabilities import set_force_pipeline
     set_force_pipeline(force_pipeline)
@@ -340,6 +374,13 @@ def _execute_benchmarks_impl(
                 only_examples=only_examples,
                 accept_regressions=accept_regressions or update_expectations,
                 ncu_metric_set=ncu_metric_set,
+                launch_via=launch_via,
+                nproc_per_node=nproc_per_node,
+                nnodes=nnodes,
+                rdzv_backend=rdzv_backend,
+                rdzv_endpoint=rdzv_endpoint,
+                env_passthrough=torchrun_env,
+                target_extra_args=parsed_extra_args,
             )
             all_results.append(result)
     except (TimeoutError, KeyboardInterrupt):
@@ -425,6 +466,13 @@ if TYPER_AVAILABLE:
         ncu_metric_set: str = Option("auto", "--ncu-metric-set", help="Nsight Compute metric preset: auto, minimal, deep_dive, or roofline. If auto, the profile type governs metric selection.", callback=_validate_ncu_metric_set),
         accept_regressions: bool = Option(False, "--accept-regressions", help="Update expectation files when improvements are detected instead of flagging regressions.", is_flag=True),
         update_expectations: bool = Option(False, "--update-expectations", help="Force-write observed metrics into expectation files (overrides regressions). Useful for refreshing baselines on new hardware.", is_flag=True),
+        launch_via: str = Option("python", "--launch-via", help="Launcher to use for benchmarks: python or torchrun."),
+        nproc_per_node: Optional[int] = Option(None, "--nproc-per-node", help="torchrun --nproc_per_node value."),
+        nnodes: Optional[str] = Option(None, "--nnodes", help="torchrun --nnodes value."),
+        rdzv_backend: Optional[str] = Option(None, "--rdzv-backend", help="torchrun rendezvous backend (defaults to c10d when nnodes is set)."),
+        rdzv_endpoint: Optional[str] = Option(None, "--rdzv-endpoint", help="torchrun rendezvous endpoint (host:port)."),
+        torchrun_env: Optional[List[str]] = Option(None, "--torchrun-env", help="Environment variables to forward into torchrun launches (repeatable)."),
+        target_extra_args: Optional[List[str]] = Option(None, "--target-extra-arg", help="Per-target extra args, format: target=\"--flag value\". Repeatable."),
     ):
         """Run benchmarks - discover, run, and summarize results.
         
@@ -435,20 +483,27 @@ if TYPER_AVAILABLE:
             targets=list(targets) if targets else None,
             output_format=output_format,
             profile_type=profile_type,
-        suite_timeout=suite_timeout,
-        timeout_multiplier=timeout_multiplier,
-        reproducible=reproducible,
-        cold_start=cold_start,
-        iterations=iterations,
-        warmup=warmup,
-        force_pipeline=force_pipeline,
-        artifacts_dir=artifacts_dir,
-        log_level=log_level,
-        log_file=log_file,
-        accept_regressions=accept_regressions,
-        update_expectations=update_expectations,
-        ncu_metric_set=ncu_metric_set,
-    )
+            suite_timeout=suite_timeout,
+            timeout_multiplier=timeout_multiplier,
+            reproducible=reproducible,
+            cold_start=cold_start,
+            iterations=iterations,
+            warmup=warmup,
+            force_pipeline=force_pipeline,
+            artifacts_dir=artifacts_dir,
+            log_level=log_level,
+            log_file=log_file,
+            accept_regressions=accept_regressions,
+            update_expectations=update_expectations,
+            ncu_metric_set=ncu_metric_set,
+            launch_via=launch_via,
+            nproc_per_node=nproc_per_node,
+            nnodes=nnodes,
+            rdzv_backend=rdzv_backend,
+            rdzv_endpoint=rdzv_endpoint,
+            torchrun_env=torchrun_env,
+            target_extra_args=target_extra_args,
+        )
 
     @app.command()
     def verify(

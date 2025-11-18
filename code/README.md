@@ -148,6 +148,18 @@ python tools/cli/benchmark_cli.py run --targets labs/moe_cuda:kv_transfer_graphs
 python tools/cli/benchmark_cli.py run --targets labs/moe_cuda:router labs/moe_cuda:router_vectorized  # two independent comparisons
 ```
 
+### Distributed Training Lab (DDP / FSDP / ZeRO)
+- Source: `labs/train_distributed` (targets: `ddp`, `fsdp`, `zero1`, `zero2`, `zero3`).
+- Quick syntax check: `python -m compileall labs/train_distributed`.
+- Harness launch (rank0-only parsing, world size recorded, auto-skip when `--nproc-per-node 1`):  
+  `PYTHONPATH=. python tools/cli/benchmark_cli.py run --targets labs/train_distributed:ddp --launch-via torchrun --nproc-per-node 2 --target-extra-arg 'labs/train_distributed:ddp=--compile'`  
+  Available flags: `--nnodes`, `--rdzv-backend/--rdzv-endpoint`, `--torchrun-env CUDA_VISIBLE_DEVICES=...`, and per-target overrides via `--target-extra-arg target="--flag value"`.
+- Direct torchrun examples:
+  - DDP: `torchrun --nproc_per_node 2 labs/train_distributed/ddp.py --mode optimized --compile` (uses DeBERTa v3; errors if process group missing).
+  - FSDP: `torchrun --nproc_per_node 2 labs/train_distributed/train_fsdp.py --mode optimized --float8 --sequence-length 512 --steps 2` (uses Llama-3.2-1B; fails fast if world_size < 2 or if FSDP cannot shard).
+  - ZeRO optimized variants are tagged multi-GPU and will skip when world_size < 2 during harness runs: `torchrun --nproc_per_node 2 labs/train_distributed/zero2.py --mode optimized --steps 3 --hidden-size 2048 --batch-size 4`. Baseline scripts emit a warning when run single-GPU because sharding benefits won’t appear.
+- Next steps: gather tokens/s + peak memory for baseline vs optimized variants on your GPUs and choose the default knobs for future labs; if your stack lacks required kernels for these models, rebuild or switch them (DDP uses DeBERTa v3; FSDP uses Llama-3.2-1B).
+
 ### Legacy Runner / Targeted Examples
 `tools/testing/run_all_benchmarks.py` discovers every `baseline_*.py` file, pairs it with the matching optimized implementation, and emits PoB-friendly summaries.
 ```bash

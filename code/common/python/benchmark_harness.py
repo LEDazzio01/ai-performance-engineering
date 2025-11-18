@@ -17,6 +17,7 @@ import random
 import re
 import shutil
 import statistics
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -180,6 +181,12 @@ class ExecutionMode(str, Enum):
     THREAD = "thread"
 
 
+class LaunchVia(str, Enum):
+    """Which launcher to use for running a benchmark."""
+    PYTHON = "python"
+    TORCHRUN = "torchrun"
+
+
 # Import BenchmarkDefaults to use as source of truth for defaults
 try:
     from common.python.benchmark_defaults import BenchmarkDefaults, get_defaults
@@ -238,6 +245,15 @@ class BenchmarkConfig:
     enable_cleanup: bool = field(default_factory=lambda: _get_default_value("enable_cleanup", False))
     use_subprocess: bool = field(default_factory=lambda: _get_default_value("use_subprocess", True))
     execution_mode: Union[ExecutionMode, str, None] = field(default_factory=lambda: _get_default_value("execution_mode", None))
+    launch_via: Union[LaunchVia, str] = field(default_factory=lambda: _get_default_value("launch_via", "python"))
+    nproc_per_node: Optional[int] = field(default_factory=lambda: _get_default_value("nproc_per_node", None))
+    nnodes: Optional[str] = field(default_factory=lambda: _get_default_value("nnodes", None))
+    rdzv_backend: Optional[str] = field(default_factory=lambda: _get_default_value("rdzv_backend", None))
+    rdzv_endpoint: Optional[str] = field(default_factory=lambda: _get_default_value("rdzv_endpoint", None))
+    env_passthrough: List[str] = field(default_factory=lambda: (_get_default_value("env_passthrough", ["CUDA_VISIBLE_DEVICES"]) or []).copy())
+    target_extra_args: Dict[str, List[str]] = field(default_factory=lambda: (_get_default_value("target_extra_args", {}) or {}).copy())
+    multi_gpu_required: bool = field(default_factory=lambda: bool(_get_default_value("multi_gpu_required", False)))
+    target_label: Optional[str] = None
     _execution_mode_overridden: bool = field(init=False, repr=False, default=False)
     
     # Per-stage timeouts (in seconds)
@@ -267,6 +283,10 @@ class BenchmarkConfig:
         # CRITICAL: Ensure percentiles is always a list, never None (fixes comparison errors)
         if self.percentiles is None:
             self.percentiles = [25, 50, 75, 99]
+        if self.env_passthrough is None:
+            self.env_passthrough = []
+        if self.target_extra_args is None:
+            self.target_extra_args = {}
         
         if self.enable_nvtx is None:
             # Auto-enable NVTX whenever profiling is requested (for nsys traces)
@@ -304,6 +324,7 @@ class BenchmarkConfig:
 
         self._execution_mode_overridden = self.execution_mode is not None
         self._sync_execution_mode()
+        self._sync_launch_via()
 
     def _sync_execution_mode(self) -> None:
         """Ensure execution_mode and use_subprocess remain consistent."""
@@ -323,8 +344,24 @@ class BenchmarkConfig:
                 raise TypeError(
                     f"execution_mode must be a string or ExecutionMode, got {type(mode).__name__}"
                 )
-            self.use_subprocess = (mode == ExecutionMode.SUBPROCESS)
+        self.use_subprocess = (mode == ExecutionMode.SUBPROCESS)
         self.execution_mode = mode
+
+    def _sync_launch_via(self) -> None:
+        """Normalize launch_via to LaunchVia enum."""
+        mode = self.launch_via
+        if isinstance(mode, str):
+            try:
+                mode = LaunchVia(mode.lower())
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid launch_via '{mode}'. Expected 'python' or 'torchrun'."
+                ) from exc
+        elif not isinstance(mode, LaunchVia):
+            raise TypeError(
+                f"launch_via must be a string or LaunchVia, got {type(mode).__name__}"
+            )
+        self.launch_via = mode
 
     def set_execution_mode(self, mode: Union[ExecutionMode, str]) -> None:
         """Explicitly set execution mode and mark it as user-overridden."""
@@ -369,6 +406,19 @@ class WorkloadMetadata:
     custom_units_per_iteration: Optional[float] = None
     custom_unit_name: Optional[str] = None
     goodput: Optional[float] = None
+
+
+@dataclass
+class TorchrunLaunchSpec:
+    """Declarative description of a torchrun invocation."""
+
+    script_path: Path
+    script_args: List[str] = field(default_factory=list)
+    env: Dict[str, str] = field(default_factory=dict)
+    parse_rank0_only: bool = True
+    multi_gpu_required: bool = False
+    name: Optional[str] = None
+    config_arg_map: Dict[str, str] = field(default_factory=dict)
 
 
 # BenchmarkResult is provided by benchmark_models.py
@@ -451,6 +501,10 @@ class BaseBenchmark:
         Subclasses can override to provide custom configuration.
         Default returns None (uses harness defaults).
         """
+        return None
+
+    def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> Optional[TorchrunLaunchSpec]:
+        """Optional torchrun launch description for multi-GPU benchmarks."""
         return None
     
     def validate_result(self) -> Optional[str]:
@@ -591,6 +645,7 @@ class BenchmarkHarness:
         self.mode = mode
         self.config = config or BenchmarkConfig()
         self.config._sync_execution_mode()
+        self.config._sync_launch_via()
         self.device = self.config.device or torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
@@ -640,6 +695,45 @@ class BenchmarkHarness:
             )
         
         return seed_info
+
+    def _world_size_hint(self, config: BenchmarkConfig) -> Optional[int]:
+        """Best-effort world size estimation from config."""
+        nproc = getattr(config, "nproc_per_node", None)
+        nnodes = getattr(config, "nnodes", None)
+        world_size: Optional[int] = None
+        try:
+            if nproc is not None:
+                world_size = int(nproc)
+        except Exception:
+            world_size = None
+        try:
+            if nnodes is not None:
+                nodes_int = int(str(nnodes).split(":")[0])
+                world_size = (world_size or 1) * nodes_int
+        except Exception:
+            pass
+        if world_size is None:
+            if getattr(config, "launch_via", LaunchVia.PYTHON) == LaunchVia.PYTHON:
+                world_size = 1
+            elif torch.cuda.is_available():
+                world_size = torch.cuda.device_count()
+        return world_size
+
+    def _annotate_launch_metadata(
+        self,
+        result: PydanticBenchmarkResult,
+        config: BenchmarkConfig,
+        *,
+        world_size: Optional[int] = None,
+        multi_gpu_required: Optional[bool] = None,
+    ) -> None:
+        """Attach launch metadata onto a BenchmarkResult in-place."""
+        result.launch_via = getattr(config, "launch_via", None)
+        resolved_world_size = world_size if world_size is not None else self._world_size_hint(config)
+        result.world_size = resolved_world_size
+        requires_multi = getattr(config, "multi_gpu_required", False) if multi_gpu_required is None else multi_gpu_required
+        result.multi_gpu_required = bool(requires_multi)
+        result.multi_gpu = bool(resolved_world_size and resolved_world_size > 1)
     
     def _create_timeout_result(
         self,
@@ -669,7 +763,7 @@ class BenchmarkHarness:
             raw_times_ms=[],
             schemaVersion="1.0",
         )
-        return PydanticBenchmarkResult(
+        result = PydanticBenchmarkResult(
             timing=timeout_timing,
             errors=errors,
             timeout_stage=stage,
@@ -686,6 +780,199 @@ class BenchmarkHarness:
             mode=self.mode.value,
             schemaVersion="1.0",
         )
+        self._annotate_launch_metadata(result, config, world_size=self._world_size_hint(config))
+        return result
+    
+    def _benchmark_with_torchrun(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> PydanticBenchmarkResult:
+        """Launch benchmark via torchrun for multi-GPU targets."""
+        import inspect
+
+        def _filter_logs(lines: List[str], dedupe: bool = True) -> List[str]:
+            filtered: List[str] = []
+            seen: set = set()
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                key = stripped.lower()
+                if dedupe and key in seen:
+                    continue
+                seen.add(key)
+                # Keep messages that either don't mention rank or explicitly mention rank 0
+                if "rank 0" in key or "local_rank: 0" in key or "r0" in key:
+                    filtered.append(stripped)
+                elif "rank" not in key or "world_size" in key:
+                    filtered.append(stripped)
+            return filtered
+
+        def _extract_tokens_per_s(lines: List[str]) -> Optional[float]:
+            pattern = re.compile(r"([0-9][0-9,\\.]+)\\s*(tok(?:ens)?/s|toks/s|tok/s)", re.IGNORECASE)
+            best: Optional[float] = None
+            for line in lines:
+                match = pattern.search(line)
+                if not match:
+                    continue
+                try:
+                    candidate = float(match.group(1).replace(",", ""))
+                    best = candidate if best is None else max(best, candidate)
+                except ValueError:
+                    continue
+            return best
+
+        errors: List[str] = []
+        spec: Optional[TorchrunLaunchSpec] = None
+        try:
+            getter = getattr(benchmark, "get_torchrun_spec", None)
+            if callable(getter):
+                spec = getter(config)
+        except Exception as exc:  # pragma: no cover - defensive
+            errors.append(f"Failed to build torchrun spec: {exc}")
+        if spec is None:
+            # Fallback to module path if provided
+            benchmark_module = inspect.getmodule(benchmark) or inspect.getmodule(benchmark.__class__)
+            module_path = Path(getattr(benchmark_module, "__file__", "")).resolve()
+            spec = TorchrunLaunchSpec(script_path=module_path)
+
+        if not spec or not Path(spec.script_path).exists():
+            raise RuntimeError("SKIPPED: Torchrun launch requested but no valid script_path was provided.")
+
+        world_size_hint = self._world_size_hint(config)
+        multi_gpu_required = bool(spec.multi_gpu_required or getattr(config, "multi_gpu_required", False))
+        if multi_gpu_required and (world_size_hint is not None and world_size_hint < 2):
+            message = "SKIPPED: Multi-GPU benchmark requires nproc_per_node>=2."
+            errors.append(message)
+            raise RuntimeError(message)
+
+        nproc_per_node = getattr(config, "nproc_per_node", None) or 1
+        torchrun_cmd: List[str] = [
+            "torchrun",
+            "--nproc_per_node",
+            str(nproc_per_node),
+        ]
+        if getattr(config, "nnodes", None):
+            torchrun_cmd.extend(["--nnodes", str(config.nnodes)])
+        if getattr(config, "rdzv_backend", None) or getattr(config, "nnodes", None):
+            torchrun_cmd.extend(["--rdzv_backend", getattr(config, "rdzv_backend", None) or "c10d"])
+        if getattr(config, "rdzv_endpoint", None):
+            torchrun_cmd.extend(["--rdzv_endpoint", str(config.rdzv_endpoint)])
+
+        def _config_args_from_map() -> List[str]:
+            args: List[str] = []
+            for key, flag in spec.config_arg_map.items():
+                if not flag or not hasattr(config, key):
+                    continue
+                value = getattr(config, key)
+                if value is None:
+                    continue
+                if isinstance(value, bool):
+                    if value:
+                        args.append(flag)
+                else:
+                    args.extend([flag, str(value)])
+            return args
+
+        extra_args: List[str] = []
+        target_label = getattr(config, "target_label", None)
+        if target_label:
+            target_overrides = (getattr(config, "target_extra_args", {}) or {}).get(target_label)
+            if target_overrides:
+                if isinstance(target_overrides, str):
+                    extra_args.extend(shlex.split(target_overrides))
+                else:
+                    extra_args.extend(list(target_overrides))
+
+        script_args = list(spec.script_args)
+        script_args.extend(_config_args_from_map())
+        script_args.extend(extra_args)
+
+        full_cmd = torchrun_cmd + [str(spec.script_path)] + script_args
+
+        env = os.environ.copy()
+        for key in getattr(config, "env_passthrough", []) or []:
+            if key in os.environ:
+                env[key] = os.environ[key]
+        env.update(spec.env)
+
+        stdout = ""
+        stderr = ""
+        elapsed = 0.0
+        timeout_limit = config.get_effective_timeout("measurement")
+
+        try:
+            process = subprocess.Popen(
+                full_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                preexec_fn=os.setsid,
+                env=env,
+            )
+            start = time.time()
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_limit)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                elapsed = time.time() - start
+                return self._create_timeout_result(
+                    stage="measurement",
+                    duration=elapsed,
+                    limit=timeout_limit,
+                    errors=["Torchrun launch exceeded timeout", *errors],
+                    benchmark_name=spec.name or getattr(benchmark, "name", None) or benchmark.__class__.__name__,
+                    config=config,
+                )
+            elapsed = time.time() - start
+            if process.returncode != 0:
+                preview = stderr.strip().splitlines()[-5:] if stderr else []
+                errors.append(f"torchrun exited with code {process.returncode}")
+                if preview:
+                    errors.append("stderr: " + " | ".join(preview))
+        except FileNotFoundError:
+            raise RuntimeError("SKIPPED: torchrun not found in PATH.")
+
+        stdout_lines = stdout.splitlines() if stdout else []
+        filtered_lines = _filter_logs(stdout_lines, dedupe=spec.parse_rank0_only)
+        tokens_per_s = _extract_tokens_per_s(filtered_lines)
+
+        iterations = getattr(config, "iterations", None) or 1
+        per_iter_ms = (elapsed * 1000.0) / max(iterations, 1)
+        times_ms = [per_iter_ms] * max(iterations, 1)
+        result = self._compute_stats(times_ms, config)
+
+        if tokens_per_s is not None:
+            result.throughput = ThroughputStats(
+                tokens_per_s=tokens_per_s,
+                requests_per_s=None,
+                samples_per_s=None,
+                bytes_per_s=None,
+                custom_unit_per_s=None,
+                custom_unit_name=None,
+                latency_ms=result.timing.mean_ms,
+                goodput=None,
+                schemaVersion="1.0",
+            )
+            result.custom_metrics["tokens_per_s"] = tokens_per_s
+
+        if filtered_lines:
+            tail = "\n".join(filtered_lines[-5:])
+            result.validation_message = tail
+
+        if errors:
+            result.errors.extend(errors)
+        if stderr and not errors:
+            result.errors.append(stderr.strip())
+
+        self._annotate_launch_metadata(
+            result,
+            config,
+            world_size=world_size_hint,
+            multi_gpu_required=multi_gpu_required,
+        )
+        return result
     
     def _ensure_thread_executor(self) -> None:
         """Initialize thread executor for threaded execution mode."""
@@ -756,8 +1043,18 @@ class BenchmarkHarness:
             # Override with benchmark-specific settings
             for key, value in bench_config.__dict__.items():
                 if value is not None:
+                    if key == "target_extra_args":
+                        if value:
+                            config.target_extra_args = {
+                                **(getattr(config, "target_extra_args", {}) or {}),
+                                **value,
+                            }
+                        continue
+                    if key == "env_passthrough" and not value:
+                        continue
                     setattr(config, key, value)
         config._sync_execution_mode()
+        config._sync_launch_via()
         
         # CRITICAL: Ensure percentiles is always a list (never None)
         # This handles cases where benchmark.get_config() returns a config with percentiles=None
@@ -781,6 +1078,8 @@ class BenchmarkHarness:
                 gpu_mem_logger = None
 
         try:
+            if config.launch_via == LaunchVia.TORCHRUN:
+                return self._benchmark_with_torchrun(benchmark, config)
             if config.execution_mode == ExecutionMode.SUBPROCESS:
                 return self._benchmark_with_subprocess(benchmark, config)
             return self._benchmark_with_threading(benchmark, config)
@@ -899,7 +1198,9 @@ class BenchmarkHarness:
                    'timeout_seconds', 'measurement_timeout_seconds', 'setup_timeout_seconds',
                    'warmup_timeout_seconds', 'profiling_timeout_seconds',
                    'nsys_timeout_seconds', 'ncu_timeout_seconds', 'timeout_multiplier',
-                   'execution_mode']:
+                   'execution_mode', 'launch_via', 'nproc_per_node', 'nnodes', 'rdzv_backend',
+                   'rdzv_endpoint', 'env_passthrough', 'target_extra_args', 'multi_gpu_required',
+                   'target_label']:
             value = getattr(config, key, None)
             # For percentiles, CRITICAL: always include it and ensure it's a list (never None)
             if key == 'percentiles':
@@ -910,6 +1211,9 @@ class BenchmarkHarness:
             elif key == 'execution_mode':
                 if value is not None:
                     config_dict[key] = value.value if isinstance(value, ExecutionMode) else value
+            elif key == 'launch_via':
+                if value is not None:
+                    config_dict[key] = value.value if isinstance(value, LaunchVia) else value
             elif value is not None:
                 config_dict[key] = value
         
@@ -1204,6 +1508,7 @@ class BenchmarkHarness:
                 schemaVersion="1.0",
             )
         
+        self._annotate_launch_metadata(result, config)
         return result
     
     def _benchmark_with_threading(self, benchmark: BaseBenchmark, config: BenchmarkConfig) -> PydanticBenchmarkResult:
@@ -1732,6 +2037,7 @@ class BenchmarkHarness:
                 schemaVersion="1.0",
             )
         
+        self._annotate_launch_metadata(result, config)
         return result
     
     def _benchmark_with_profiling(
@@ -2115,7 +2421,7 @@ class BenchmarkHarness:
             device_index = self.device.index if getattr(self.device, "index", None) is not None else torch.cuda.current_device()
         gpu_metrics = query_gpu_telemetry(device_index=device_index)
 
-        return PydanticBenchmarkResult(
+        result = PydanticBenchmarkResult(
             timing=timing,
             inference_timing=None,
             memory=None,
@@ -2133,6 +2439,8 @@ class BenchmarkHarness:
             gpu_metrics=gpu_metrics,
             schemaVersion="1.0",
         )
+        self._annotate_launch_metadata(result, config)
+        return result
 
     def _resolve_workload_metadata(self, benchmark: BaseBenchmark) -> Optional[WorkloadMetadata]:
         """Resolve workload metadata declared by the benchmark (if any)."""

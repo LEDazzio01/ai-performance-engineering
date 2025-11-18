@@ -39,6 +39,14 @@ class BenchmarkDefaults:
     enable_cleanup: bool = False
     use_subprocess: bool = True
     execution_mode: Optional[str] = None
+    launch_via: str = "python"  # python | torchrun
+    nproc_per_node: Optional[int] = None
+    nnodes: Optional[str] = None
+    rdzv_backend: Optional[str] = None
+    rdzv_endpoint: Optional[str] = None
+    env_passthrough: List[str] = field(default_factory=lambda: ["CUDA_VISIBLE_DEVICES"])
+    target_extra_args: dict = field(default_factory=dict)
+    multi_gpu_required: bool = False
     profile_type: str = "minimal"
     nsys_nvtx_include: Optional[List[str]] = None
     
@@ -88,6 +96,14 @@ class BenchmarkDefaults:
             "enable_cleanup": self.enable_cleanup,
             "use_subprocess": self.use_subprocess,
             "execution_mode": self.execution_mode,
+            "launch_via": self.launch_via,
+            "nproc_per_node": self.nproc_per_node,
+            "nnodes": self.nnodes,
+            "rdzv_backend": self.rdzv_backend,
+            "rdzv_endpoint": self.rdzv_endpoint,
+            "env_passthrough": self.env_passthrough,
+            "target_extra_args": self.target_extra_args,
+            "multi_gpu_required": self.multi_gpu_required,
             "profile_type": self.profile_type,
             "nsys_nvtx_include": self.nsys_nvtx_include,
             "deterministic": self.deterministic,

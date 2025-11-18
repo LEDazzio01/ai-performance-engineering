@@ -1,2 +1,2 @@
-// Book-aligned wrapper for dp_host_launched.cu
-#include "baseline_dynamic_parallelism.cu"
+// Book-aligned wrapper for device-launched DP baseline
+#include "helper_baseline_dynamic_parallelism.cu"

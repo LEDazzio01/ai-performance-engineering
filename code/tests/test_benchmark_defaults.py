@@ -11,7 +11,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from common.python.benchmark_defaults import BenchmarkDefaults, get_defaults, set_defaults
-from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, ExecutionMode
+from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, ExecutionMode, LaunchVia
 
 
 class TestBenchmarkDefaults:
@@ -28,6 +28,7 @@ class TestBenchmarkDefaults:
         assert defaults.use_subprocess is True
         assert defaults.measurement_timeout_seconds == 15
         assert defaults.execution_mode is None
+        assert defaults.launch_via == "python"
     
     def test_from_env_returns_defaults(self):
         """Test that from_env() returns default values (env vars no longer supported)."""
@@ -56,6 +57,7 @@ class TestBenchmarkConfigDefaults:
         assert config.enable_ncu is True, "enable_ncu should default to True"
         assert config.use_subprocess is True, "use_subprocess should default to True"
         assert config.execution_mode == ExecutionMode.SUBPROCESS
+        assert config.launch_via == LaunchVia.PYTHON
     
 
 

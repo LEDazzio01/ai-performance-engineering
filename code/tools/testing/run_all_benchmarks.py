@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 import json
 import argparse
+import shlex
 from typing import Dict, List, Any, Optional, Set, Tuple
 from datetime import datetime
 from collections import defaultdict
@@ -1506,6 +1507,13 @@ def _test_chapter_impl(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     ncu_metric_set: str = "auto",
+    launch_via: str = "python",
+    nproc_per_node: Optional[int] = None,
+    nnodes: Optional[str] = None,
+    rdzv_backend: Optional[str] = None,
+    rdzv_endpoint: Optional[str] = None,
+    env_passthrough: Optional[List[str]] = None,
+    target_extra_args: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, Any]:
     """Test all benchmarks in a chapter and return results.
     
@@ -1518,6 +1526,13 @@ def _test_chapter_impl(
         iterations: Number of benchmark iterations (defaults to 20 if not provided)
         warmup: Number of warmup iterations (defaults to 5 if not provided)
         only_examples: List of example names to run (e.g., ['moe', 'cutlass']). If None, runs all examples.
+        launch_via: Launcher to use ('python' or 'torchrun')
+        nproc_per_node: torchrun --nproc_per_node value
+        nnodes: torchrun --nnodes value
+        rdzv_backend: torchrun rendezvous backend
+        rdzv_endpoint: torchrun rendezvous endpoint
+        env_passthrough: Environment variables to pass through to subprocess launches
+        target_extra_args: Optional per-target arg overrides (target -> list of CLI args)
     """
     dump_environment_and_capabilities()
 
@@ -1679,6 +1694,13 @@ def _test_chapter_impl(
         deterministic=reproducible,  # Enable deterministic algorithms for reproducibility
         ncu_metric_set=ncu_metric_set,
         profile_type=profile_type if enable_profiling else "none",
+        launch_via=launch_via,
+        nproc_per_node=nproc_per_node,
+        nnodes=nnodes,
+        rdzv_backend=rdzv_backend,
+        rdzv_endpoint=rdzv_endpoint,
+        env_passthrough=env_passthrough or None,
+        target_extra_args=target_extra_args or {},
     )
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
@@ -1696,14 +1718,26 @@ def _test_chapter_impl(
                 value = getattr(override, field.name, None)
                 if value is None:
                     continue
+                if field.name == "target_extra_args":
+                    if value:
+                        merged.target_extra_args = {
+                            **(getattr(merged, "target_extra_args", {}) or {}),
+                            **value,
+                        }
+                    continue
+                if field.name == "env_passthrough" and not value:
+                    continue
                 if field.name in protected_fields and getattr(base_config, field.name):
                     continue
                 setattr(merged, field.name, copy.deepcopy(value))
         merged._sync_execution_mode()
+        merged._sync_launch_via()
         return merged
 
-    def _run_with_config(benchmark_obj, run_id: str):
+    def _run_with_config(benchmark_obj, run_id: str, target_label: Optional[str] = None):
         merged = _merged_config(benchmark_obj)
+        if target_label and getattr(merged, "target_label", None) is None:
+            merged.target_label = target_label
         local_harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=merged)
         return local_harness.benchmark_with_manifest(benchmark_obj, run_id=run_id)
     
@@ -1799,7 +1833,11 @@ def _test_chapter_impl(
             try:
                 # Use benchmark_with_manifest for reproducibility
                 run_id = f"{chapter_name}_{example_name}_baseline"
-                baseline_run = _run_with_config(baseline_benchmark, run_id=run_id)
+                baseline_run = _run_with_config(
+                    baseline_benchmark,
+                    run_id=run_id,
+                    target_label=f"{chapter_name}:{example_name}",
+                )
                 baseline_result = baseline_run.result
                 baseline_timing = baseline_result.timing
                 baseline_memory = baseline_result.memory
@@ -2006,7 +2044,11 @@ def _test_chapter_impl(
                     
                     # Use benchmark_with_manifest for reproducibility
                     opt_run_id = f"{chapter_name}_{example_name}_optimized_{technique}"
-                    optimized_run = _run_with_config(optimized_benchmark, run_id=opt_run_id)
+                    optimized_run = _run_with_config(
+                        optimized_benchmark,
+                        run_id=opt_run_id,
+                        target_label=f"{chapter_name}:{example_name}",
+                    )
                     optimized_result = optimized_run.result
                     optimized_timing = optimized_result.timing
                     optimized_memory = optimized_result.memory
@@ -2844,6 +2886,13 @@ def test_chapter(
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
     ncu_metric_set: str = "auto",
+    launch_via: str = "python",
+    nproc_per_node: Optional[int] = None,
+    nnodes: Optional[str] = None,
+    rdzv_backend: Optional[str] = None,
+    rdzv_endpoint: Optional[str] = None,
+    env_passthrough: Optional[List[str]] = None,
+    target_extra_args: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, Any]:
     return _test_chapter_impl(
         chapter_dir,
@@ -2857,6 +2906,13 @@ def test_chapter(
         only_examples=only_examples,
         accept_regressions=accept_regressions,
         ncu_metric_set=ncu_metric_set,
+        launch_via=launch_via,
+        nproc_per_node=nproc_per_node,
+        nnodes=nnodes,
+        rdzv_backend=rdzv_backend,
+        rdzv_endpoint=rdzv_endpoint,
+        env_passthrough=env_passthrough,
+        target_extra_args=target_extra_args,
     )
 
 
@@ -3047,6 +3103,48 @@ def main():
         help='Override warmup iteration count for Python benchmarks (default: 5 unless the benchmark defines its own).'
     )
     parser.add_argument(
+        '--launch-via',
+        choices=['python', 'torchrun'],
+        default='python',
+        help='Launcher to use for benchmarks (python or torchrun).'
+    )
+    parser.add_argument(
+        '--nproc-per-node',
+        type=int,
+        default=None,
+        help='torchrun --nproc_per_node value.'
+    )
+    parser.add_argument(
+        '--nnodes',
+        type=str,
+        default=None,
+        help='torchrun --nnodes value.'
+    )
+    parser.add_argument(
+        '--rdzv-backend',
+        type=str,
+        default=None,
+        help='torchrun rendezvous backend (default: c10d when nnodes is set).'
+    )
+    parser.add_argument(
+        '--rdzv-endpoint',
+        type=str,
+        default=None,
+        help='torchrun rendezvous endpoint (host:port).'
+    )
+    parser.add_argument(
+        '--torchrun-env',
+        action='append',
+        default=None,
+        help='Environment variables to forward into torchrun launches (repeatable).'
+    )
+    parser.add_argument(
+        '--target-extra-arg',
+        action='append',
+        default=None,
+        help='Per-target extra args, format: target="--flag value" (repeatable).'
+    )
+    parser.add_argument(
         '--timeout-multiplier',
         type=float,
         default=1.0,
@@ -3060,6 +3158,12 @@ def main():
     )
     
     args = parser.parse_args()
+    extra_arg_map: Dict[str, List[str]] = {}
+    for entry in args.target_extra_arg or []:
+        target, sep, payload = entry.partition("=")
+        if not sep or not target or not payload:
+            continue
+        extra_arg_map[target.strip()] = shlex.split(payload)
     
     logger.info("=" * 80)
     logger.info("TESTING ALL BENCHMARKS")
@@ -3144,6 +3248,13 @@ def main():
             only_examples=only_examples,
             accept_regressions=args.accept_regressions if hasattr(args, "accept_regressions") else False,
             ncu_metric_set=args.ncu_metric_set,
+            launch_via=args.launch_via,
+            nproc_per_node=args.nproc_per_node,
+            nnodes=args.nnodes,
+            rdzv_backend=args.rdzv_backend,
+            rdzv_endpoint=args.rdzv_endpoint,
+            env_passthrough=args.torchrun_env,
+            target_extra_args=extra_arg_map,
         )
         all_results.append(result)
     

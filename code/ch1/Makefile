@@ -7,7 +7,7 @@ NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) --use_fast_math -lineinfo
 NVCC_LIBS = -lcublas -lcublasLt
 SUFFIX = $(TARGET_SUFFIX)
 
-BASE_TARGETS = baseline_gemm optimized_gemm_batched optimized_gemm_strided baseline_arithmetic_intensity optimized_arithmetic_intensity_combined
+BASE_TARGETS = baseline_gemm optimized_gemm_batched optimized_gemm_strided
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
 .PHONY: all clean test compare b200 gb10 b300 gb300
@@ -23,12 +23,6 @@ optimized_gemm_batched$(SUFFIX): optimized_gemm_batched.cu
 	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $<
 
 optimized_gemm_strided$(SUFFIX): optimized_gemm_strided.cu
-	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $<
-
-baseline_arithmetic_intensity$(SUFFIX): baseline_arithmetic_intensity.cu
-	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $<
-
-optimized_arithmetic_intensity_combined$(SUFFIX): optimized_arithmetic_intensity_combined.cu
 	$(NVCC) $(NVCC_FLAGS) $(NVCC_LIBS) -o $@ $<
 
 test: all
@@ -67,6 +61,5 @@ gb300: clean all
 
 clean:
 	rm -f batched_gemm_example_sm100 batched_gemm_example_sm121 *.o *.so *.a
-	rm -f arithmetic_intensity_demo_sm100 arithmetic_intensity_demo_sm121
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
 	@echo "Cleaned ch1 binaries and profiling artifacts"

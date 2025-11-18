@@ -317,6 +317,10 @@ class BenchmarkResult(BaseModel):
     benchmark_name: Optional[str] = Field(None, description="Name of the benchmark")
     device: Optional[str] = Field(None, description="Device used (e.g., 'cuda:0', 'cpu')")
     mode: Optional[str] = Field(None, description="Benchmark mode (e.g., 'triton', 'pytorch', 'custom')")
+    launch_via: Optional[str] = Field(None, description="Launcher used for execution (python or torchrun)")
+    world_size: Optional[int] = Field(None, description="World size used when launching distributed benchmarks")
+    multi_gpu: Optional[bool] = Field(None, description="Whether multiple GPUs were used")
+    multi_gpu_required: Optional[bool] = Field(None, description="Benchmark declared multi-GPU requirement")
     custom_metrics: Dict[str, float] = Field(default_factory=dict, description="Benchmark-specific custom metrics")
     gpu_metrics: Optional[Dict[str, Optional[float | str]]] = Field(
         None,
@@ -354,6 +358,8 @@ class BenchmarkResult(BaseModel):
                 "custom_metrics": {
                     "scenario_total_phase_ms": 123.4
                 },
+                "launch_via": "python",
+                "world_size": 1,
                 "schemaVersion": "1.0"
             }
         }

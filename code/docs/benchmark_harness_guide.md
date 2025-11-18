@@ -92,6 +92,13 @@ Use `--accept-regressions` when you intentionally want to refresh expectation fi
 - ⚠️ Less isolation (shared memory space)
 - ⚠️ Timeout enforcement less reliable
 
+#### Torchrun launch (multi-GPU)
+- Enable with `--launch-via torchrun` plus `--nproc-per-node`, optional `--nnodes/--rdzv-backend/--rdzv-endpoint`.
+- Harness records `world_size`/`launch_via` in results and only parses rank0-style output (duplicate rank logs are deduped).
+- Forward env vars via `--torchrun-env CUDA_VISIBLE_DEVICES=0,1` and per-target overrides with `--target-extra-arg target="--flag value"`.
+- Multi-GPU targets (`multi_gpu_required=True`) return `SKIPPED` instead of hanging when launched with a single process.
+- Example: `PYTHONPATH=. python tools/cli/benchmark_cli.py run --targets labs/train_distributed:ddp --launch-via torchrun --nproc-per-node 2 --target-extra-arg 'labs/train_distributed:ddp=--compile'`.
+
 ---
 
 ### 3. **Comprehensive Timeout Protection**

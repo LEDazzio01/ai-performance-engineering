@@ -36,6 +36,18 @@ class BaselineGuidedDecodingBenchmark(BaseBenchmark):
         torch.manual_seed(42)
         vocab_size = 1000
         hidden_dim = 256
+
+        # On GB10 (sm_12x), flash SDP routes to sm80-only kernels; keep this baseline stable by using math SDP.
+        if torch.cuda.is_available():
+            major, _ = torch.cuda.get_device_capability(self.device)
+            if major >= 12:
+                try:
+                    torch.backends.cuda.enable_flash_sdp(False)
+                    torch.backends.cuda.enable_mem_efficient_sdp(False)
+                    torch.backends.cuda.enable_math_sdp(True)
+                    torch.backends.cuda.enable_cudnn_sdp(False)
+                except Exception:
+                    pass
         
         self.model = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=8, batch_first=True),

@@ -8,9 +8,10 @@ SUFFIX = $(TARGET_SUFFIX)
 
 # Explicit list of CUDA examples
 BASE_TARGETS = baseline_add optimized_add_parallel baseline_add_tensors optimized_add_tensors \
-               baseline_coalescing_uncoalesced optimized_coalescing baseline_bank_conflicts optimized_bank_conflicts \
-               baseline_ilp optimized_ilp optimized_ilp_low_occupancy_vec4 optimized_ilp_extreme_low_occupancy_vec4 \
-               baseline_launch_bounds optimized_launch_bounds cuda13_demo_runner
+               baseline_bank_conflicts optimized_bank_conflicts \
+               optimized_ilp optimized_ilp_low_occupancy_vec4 optimized_ilp_extreme_low_occupancy_vec4 \
+               baseline_launch_bounds optimized_launch_bounds \
+               cuda13_demo_runner
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
 $(TARGETS): $(CUDA_NVTX_DEPS)
@@ -59,10 +60,10 @@ optimized_ilp_low_occupancy_vec4$(SUFFIX): optimized_ilp_low_occupancy_vec4.cu o
 optimized_ilp_extreme_low_occupancy_vec4$(SUFFIX): optimized_ilp_extreme_low_occupancy_vec4.cu optimized_ilp_low_occupancy_vec4_impl.cuh
 	$(NVCC) $(NVCC_FLAGS) -o $@ optimized_ilp_extreme_low_occupancy_vec4.cu $(NVCC_LIBS)
 
-baseline_launch_bounds$(SUFFIX): baseline_launch_bounds.cu
+baseline_launch_bounds$(SUFFIX): baseline_launch_bounds_gmem.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
-optimized_launch_bounds$(SUFFIX): optimized_launch_bounds.cu
+optimized_launch_bounds$(SUFFIX): optimized_launch_bounds_gmem.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
 cuda13_demo_runner$(SUFFIX): cuda13_demo_runner.cu

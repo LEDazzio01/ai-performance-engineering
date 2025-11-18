@@ -146,6 +146,7 @@ def run_benchmark_isolated(
         # Disable subprocess in runner to avoid recursion (runner IS the subprocess)
         config.use_subprocess = False
         config.execution_mode = ExecutionMode.THREAD
+        config._sync_launch_via()
         config._sync_execution_mode()
         
         # Create harness
