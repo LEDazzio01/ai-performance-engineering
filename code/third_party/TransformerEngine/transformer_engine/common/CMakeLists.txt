@@ -25,10 +25,59 @@ if (CUDAToolkit_VERSION VERSION_LESS 12.1)
   message(FATAL_ERROR "CUDA 12.1+ is required, but found CUDA ${CUDAToolkit_VERSION}")
 endif()
 
-# Process GPU architectures: force Blackwell arch-specific FP4 target only.
-set(CMAKE_CUDA_ARCHITECTURES 121f CACHE STRING "CUDA arch list" FORCE)
-set(NVTE_GENERIC_ARCHS "121f")
+# Process GPU architectures
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL 13.0)
+    set(CMAKE_CUDA_ARCHITECTURES 75 80 89 90 100 120)
+  elseif (CUDAToolkit_VERSION VERSION_GREATER_EQUAL 12.8)
+    set(CMAKE_CUDA_ARCHITECTURES 70 80 89 90 100 120)
+  else ()
+    set(CMAKE_CUDA_ARCHITECTURES 70 80 89 90)
+  endif()
+endif()
+
+# Process CMAKE_CUDA_ARCHITECTURES to separate generic and specific architectures
+set(NVTE_GENERIC_ARCHS)
 set(NVTE_SPECIFIC_ARCHS)
+
+# Check for architecture 100
+list(FIND CMAKE_CUDA_ARCHITECTURES "100" arch_100_index)
+if(NOT arch_100_index EQUAL -1)
+  list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES "100")
+  list(APPEND NVTE_GENERIC_ARCHS "100")
+  list(APPEND NVTE_SPECIFIC_ARCHS "100a")
+  if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 12.9)
+    list(APPEND NVTE_SPECIFIC_ARCHS "103a")
+  endif()
+endif()
+
+# Check for architecture 101 (if we see this we are in toolkit <= 12.9)
+list(FIND CMAKE_CUDA_ARCHITECTURES "101" arch_101_index)
+if(NOT arch_101_index EQUAL -1)
+  list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES "101")
+  list(APPEND NVTE_GENERIC_ARCHS "101")
+  list(APPEND NVTE_SPECIFIC_ARCHS "101a")
+endif()
+
+# Check for architecture 110 (if we see this we are in toolkit >= 13.0)
+list(FIND CMAKE_CUDA_ARCHITECTURES "110" arch_110_index)
+if(NOT arch_110_index EQUAL -1)
+  list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES "110")
+  list(APPEND NVTE_GENERIC_ARCHS "110")
+  list(APPEND NVTE_SPECIFIC_ARCHS "110f")
+endif()
+
+# Check for architecture 120
+list(FIND CMAKE_CUDA_ARCHITECTURES "120" arch_120_index)
+if(NOT arch_120_index EQUAL -1)
+  list(REMOVE_ITEM CMAKE_CUDA_ARCHITECTURES "120")
+  list(APPEND NVTE_GENERIC_ARCHS "120")
+  if(CUDAToolkit_VERSION VERSION_GREATER_EQUAL 12.9)
+    list(APPEND NVTE_SPECIFIC_ARCHS "120f")
+  else()
+    list(APPEND NVTE_SPECIFIC_ARCHS "120a")
+  endif()
+endif()
 
 # cuDNN frontend API
 set(CUDNN_FRONTEND_INCLUDE_DIR
@@ -128,27 +177,6 @@ list(APPEND transformer_engine_cuda_arch_specific_sources
      hadamard_transform/hadamard_transform.cu
      hadamard_transform/hadamard_transform_cast_fusion.cu)
 
-# Build FP4/NVFP4 sources in a dedicated object library targeting only sm_121f.
-set(nvfp4_sources
-    activation/gelu.cu
-    activation/relu.cu
-    activation/swiglu.cu
-    transpose/quantize_transpose_vector_blockwise_fp4.cu
-    recipe/nvfp4.cu)
-add_library(transformer_engine_fp4 OBJECT ${nvfp4_sources})
-set_target_properties(transformer_engine_fp4 PROPERTIES CUDA_ARCHITECTURES "121f")
-target_include_directories(transformer_engine_fp4 PRIVATE
-  ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
-  ${CUTLASS_INCLUDE_DIR}
-  ${CUTLASS_TOOLS_INCLUDE_DIR}
-  "${CMAKE_CURRENT_SOURCE_DIR}/include")
-
-# Remove FP4 sources from the main source lists to avoid sm_100 codegen
-foreach(fp4src IN LISTS nvfp4_sources)
-  list(REMOVE_ITEM transformer_engine_cuda_arch_specific_sources ${fp4src})
-  list(REMOVE_ITEM transformer_engine_cuda_sources ${fp4src})
-endforeach()
-
 # Compiling the files with the worst compilation time first to hopefully overlap
 # better with the faster-compiling cpp files
 list(APPEND transformer_engine_SOURCES ${transformer_engine_cuda_arch_specific_sources}
@@ -195,7 +223,6 @@ list(APPEND transformer_engine_SOURCES
 endif()
 
 add_library(transformer_engine SHARED ${transformer_engine_SOURCES})
-target_link_libraries(transformer_engine PRIVATE transformer_engine_fp4)
 target_include_directories(transformer_engine PUBLIC
                            "${CMAKE_CURRENT_SOURCE_DIR}/include")
 

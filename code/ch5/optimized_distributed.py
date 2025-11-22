@@ -49,6 +49,10 @@ class OptimizedDistributedBenchmark(BaseBenchmark):
                 self.is_distributed = True
                 self.rank = rank
                 self.world_size = world_size
+
+        local_rank = int(os.environ.get("LOCAL_RANK", self.rank))
+        self.device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(local_rank)
         
         chunk_size = self.N // max(self.world_size, 1)
         start_idx = self.rank * chunk_size

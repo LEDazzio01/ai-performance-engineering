@@ -49,9 +49,6 @@ class CMakeExtension(setuptools.Extension):
 
         # CMake configure command
         build_type = "Debug" if debug_build_enabled() else "Release"
-        # Force CUDA arch list for Blackwell builds unless explicitly overridden
-        forced_archs = os.getenv("CMAKE_CUDA_ARCHITECTURES", "100;121f")
-        os.environ.setdefault("NVTE_CUDA_ARCHS", "100;121f")
         configure_command = [
             _cmake_bin,
             "-S",
@@ -63,7 +60,6 @@ class CMakeExtension(setuptools.Extension):
             f"-DPython_SITEARCH={sysconfig.get_path('platlib')}",
             f"-DCMAKE_BUILD_TYPE={build_type}",
             f"-DCMAKE_INSTALL_PREFIX={install_dir}",
-            f"-DCMAKE_CUDA_ARCHITECTURES={forced_archs}",
         ]
         configure_command += self.cmake_flags
 
@@ -90,10 +86,6 @@ class CMakeExtension(setuptools.Extension):
         for command in [configure_command, build_command, install_command]:
             print(f"Running command {' '.join(command)}")
             try:
-                # Always start from a clean CMake cache to avoid stale arch lists
-                if command is configure_command and os.path.exists(build_dir):
-                    subprocess.run(["rm", "-rf", build_dir], check=True)
-                    os.makedirs(build_dir, exist_ok=True)
                 subprocess.run(command, cwd=build_dir, check=True)
             except (CalledProcessError, OSError) as e:
                 raise RuntimeError(f"Error when running CMake: {e}")

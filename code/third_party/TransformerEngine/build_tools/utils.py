@@ -257,8 +257,7 @@ def cuda_archs() -> str:
     if archs is None:
         version = cuda_version()
         if version >= (13, 0):
-            # Blackwell/SM121 support; default to SM100 + SM121 family on CUDA 13
-            archs = "75;80;89;90;100;120;121"
+            archs = "75;80;89;90;100;120"
         elif version >= (12, 8):
             archs = "70;80;89;90;100;120"
         else:

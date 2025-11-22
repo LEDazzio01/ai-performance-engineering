@@ -87,10 +87,12 @@ NCCL_SHORT_VERSION="2.28.7"
 CUDA_HOME_DIR="/usr/local/cuda-${CUDA_SHORT_VERSION}"
 THIRD_PARTY_DIR="${PROJECT_ROOT}/third_party"
 mkdir -p "${THIRD_PARTY_DIR}"
-TE_GIT_COMMIT="e4bfa628632e15ef8bc1fae9b2e89686f6a097ea"
-TE_VERSION_TAG="2.10.0.dev0+e4bfa62"
 FLASH_ATTN_TAG="${FLASH_ATTN_TAG:-v2.8.3}"
-FLASH_ATTN_WHEEL_BASENAME="flash_attn-2.8.3-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
+FLASH_ATTN_ARCH="$(uname -m)"
+if [ "${FLASH_ATTN_ARCH}" = "arm64" ]; then
+    FLASH_ATTN_ARCH="aarch64"
+fi
+FLASH_ATTN_WHEEL_BASENAME="flash_attn-2.8.3-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${FLASH_ATTN_ARCH}.whl"
 FLASH_ATTN_EXPECTED_VERSION="${FLASH_ATTN_TAG#v}"
 FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE:-121}"
 VLLM_REPO_URL="${VLLM_REPO_URL:-https://github.com/vllm-project/vllm.git}"
@@ -100,12 +102,18 @@ VLLM_SRC_DIR="${VLLM_SRC_DIR:-${THIRD_PARTY_DIR}/vllm-src}"
 VLLM_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
 VLLM_WHEEL_INFO_PATH="${VLLM_WHEEL_INFO_PATH:-${VLLM_WHEEL_DIR}/vllm-build-info.json}"
 VLLM_WHEEL_ARCH="$(uname -m)"
+VLLM_EXTRA_INDEX_URL="${VLLM_EXTRA_INDEX_URL:-https://wheels.vllm.ai/cu130}"
 if [ "${VLLM_WHEEL_ARCH}" = "arm64" ]; then
     VLLM_WHEEL_ARCH="aarch64"
 fi
 VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${VLLM_WHEEL_ARCH}.whl}"
+TE_REPO_URL="${TE_REPO_URL:-https://github.com/NVIDIA/TransformerEngine.git}"
+TE_GIT_COMMIT="${TE_GIT_COMMIT:-e4bfa628632e15ef8bc1fae9b2e89686f6a097ea}"
+TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine}"
 PIP_ROOT_USER_ACTION="ignore"
-GLUON_PIP_SPEC="git+https://github.com/triton-lang/gluon.git@main#subdirectory=python"
+SOURCE_BUILD_ALLOWED=0
+GPU_COMPUTE_SM_NUM=""
+VLLM_PREBUILT_INSTALLED=0
 export PROJECT_ROOT REQUIRED_DRIVER_VERSION PYTHON_TARGET_VERSION PYTHON_TARGET_MAJOR PYTHON_TARGET_MINOR PYTHON_TARGET_BIN PYTHON_ABI_TAG PYTHON_DIST_PACKAGES PIP_ROOT_USER_ACTION
 
 if command -v git >/dev/null 2>&1; then
@@ -129,112 +137,12 @@ PYTORCH_WHEEL_DIR="${THIRD_PARTY_DIR}/wheels"
 PYTORCH_WHEEL_PATTERN="${PYTORCH_WHEEL_PATTERN:-torch-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-*.whl}"
 mkdir -p "${PYTORCH_WHEEL_DIR}"
 
-build_pytorch_from_source() {
-    echo "Building PyTorch from source (commit: ${PYTORCH_COMMIT})..."
-    apt install -y git build-essential cmake libopenblas-dev libomp-dev ninja-build >/dev/null 2>&1 || true
-
-    mkdir -p "${PYTORCH_SRC_DIR}"
-    if [ ! -d "${PYTORCH_SRC_DIR}/.git" ]; then
-        rm -rf "${PYTORCH_SRC_DIR}"
-        git clone --recursive "${PYTORCH_REPO_URL}" "${PYTORCH_SRC_DIR}"
-    else
-        git -C "${PYTORCH_SRC_DIR}" fetch --all --tags --prune --force
-    fi
-
-    git -C "${PYTORCH_SRC_DIR}" checkout "${PYTORCH_COMMIT}"
-    git -C "${PYTORCH_SRC_DIR}" submodule sync --recursive
-    git -C "${PYTORCH_SRC_DIR}" submodule update --init --recursive
-
-    pip_install --no-cache-dir --upgrade --ignore-installed \
-        setuptools wheel typing_extensions packaging cmake ninja || true
-    if [ -f "${PYTORCH_SRC_DIR}/requirements.txt" ]; then
-        pip_install --no-cache-dir --upgrade --ignore-installed \
-            -r "${PYTORCH_SRC_DIR}/requirements.txt" || true
-    fi
-
-    export USE_CUDA=1
-    export USE_CUDNN=1
-    export USE_NCCL=1
-    export USE_SYSTEM_NCCL=1
-    export USE_SYSTEM_CUDA=1
-    export FORCE_CUDA=1
-    export BUILD_TEST=0
-    export MAX_JOBS="${MAX_JOBS:-$(nproc)}"
-    export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST_VALUE}"
-    export CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCH_LIST_VALUE}"
-    export CUTLASS_NVCC_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE}"
-    export CUDA_HOME="${CUDA_HOME_DIR}"
-    export CUDACXX="${CUDA_HOME_DIR}/bin/nvcc"
-    export CUDNN_INCLUDE_DIR="/usr/include"
-    local cudnn_lib_dir="/usr/lib/x86_64-linux-gnu"
-    if [ -d "/usr/lib/aarch64-linux-gnu" ]; then
-        cudnn_lib_dir="/usr/lib/aarch64-linux-gnu"
-    fi
-    export CUDNN_LIBRARY_DIR="${cudnn_lib_dir}"
-    export CPATH="${CUDA_HOME_DIR}/include:${CPATH:-}"
-    export CPLUS_INCLUDE_PATH="${CUDA_HOME_DIR}/include:${CPLUS_INCLUDE_PATH:-}"
-    # CRITICAL: PyTorch was compiled against cuDNN 9.15.1, but bundles cuDNN 9.13.0
-    # Use system cuDNN 9.15.1 (from ${cudnn_lib_dir}) instead of PyTorch's bundled 9.13.0
-    # Build LD_LIBRARY_PATH with system cuDNN 9.15.1 first, then CUDA, excluding PyTorch's bundled cuDNN
-    PYTORCH_CUDNN_LIB="${PYTHON_DIST_PACKAGES}/nvidia/cudnn/lib"
-    
-    local new_ld_path="${cudnn_lib_dir}:${CUDA_HOME_DIR}/lib64:${CUDA_HOME_DIR}/lib64/stubs"
-    
-    # Filter out PyTorch's bundled cuDNN path from existing LD_LIBRARY_PATH
-    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-        local filtered_path=""
-        IFS=':' read -ra PATHS <<< "${LD_LIBRARY_PATH}"
-        for path in "${PATHS[@]}"; do
-            # Remove PyTorch's bundled cuDNN path (contains 9.13.0)
-            if [[ "${path}" == *"${PYTORCH_CUDNN_LIB}"* ]]; then
-                continue
-            fi
-            # Keep other paths
-            if [ -n "${filtered_path}" ]; then
-                filtered_path="${filtered_path}:${path}"
-            else
-                filtered_path="${path}"
-            fi
-        done
-        if [ -n "${filtered_path}" ]; then
-            new_ld_path="${new_ld_path}:${filtered_path}"
-        fi
-    fi
-    
-    export LD_LIBRARY_PATH="${new_ld_path}"
-    export LIBRARY_PATH="${cudnn_lib_dir}:${CUDA_HOME_DIR}/lib64:${CUDA_HOME_DIR}/lib64/stubs:${LIBRARY_PATH:-}"
-    export LDFLAGS="-L${CUDA_HOME_DIR}/lib64 -L${CUDA_HOME_DIR}/lib64/stubs -L${cudnn_lib_dir} ${LDFLAGS:-}"
-
-    local commit_hash
-    commit_hash="$(git -C "${PYTORCH_SRC_DIR}" rev-parse --short HEAD)"
-    export PYTORCH_BUILD_VERSION="${PYTORCH_BUILD_VERSION:-2.10.0.dev0+gb${commit_hash}}"
-    export PYTORCH_BUILD_NUMBER="${PYTORCH_BUILD_NUMBER:-0}"
-
-    pushd "${PYTORCH_SRC_DIR}" >/dev/null
-    rm -rf build "${PYTORCH_DIST_DIR}"
-    python3 setup.py clean >/dev/null 2>&1 || true
-    python3 setup.py bdist_wheel
-    popd >/dev/null
-
-    produced_wheel=$(find "${PYTORCH_DIST_DIR}" -maxdepth 1 -name "torch-*.whl" | sort | tail -n 1)
-    if [ -z "${produced_wheel}" ]; then
-        echo "ERROR: PyTorch wheel not produced at ${PYTORCH_DIST_DIR}"
-        exit 1
-    fi
-
-    dest_wheel="${PYTORCH_WHEEL_DIR}/$(basename "${produced_wheel}")"
-    cp "${produced_wheel}" "${dest_wheel}"
-    echo "Cached PyTorch wheel saved to ${dest_wheel}"
-
-    if ! compgen -G "${dest_wheel}.part*" >/dev/null; then
-        echo "Splitting PyTorch wheel into <50MB chunks under ${PYTORCH_WHEEL_DIR}"
-        split -b 45m -d -a 2 "${dest_wheel}" "${dest_wheel}.part"
-    fi
-}
 TORCH_CUDA_ARCH_LIST_VALUE="10.0;10.3;12.1+PTX"
 CMAKE_CUDA_ARCH_LIST_VALUE="100;103;121"
 TORCH_SM_ARCH_LIST_VALUE="sm_100;sm_103;sm_121"
-CUTLASS_NVCC_ARCHS_VALUE="100;103;121"
+CUTLASS_NVCC_ARCHS_VALUE_DEFAULT="100;103;121"
+CUTLASS_NVCC_ARCHS_VALUE="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
+PYTORCH_CU130_INDEX="https://download.pytorch.org/whl/cu130"
 echo "Project root: $PROJECT_ROOT"
 cd "$PROJECT_ROOT"
 
@@ -278,25 +186,6 @@ pip_show() {
     pip_cmd show "$@"
 }
 
-install_gluon() {
-    echo "Installing Gluon from: ${GLUON_PIP_SPEC}"
-    if ! GIT_TERMINAL_PROMPT=0 pip_install --no-cache-dir --upgrade --no-deps "${GLUON_PIP_SPEC}"; then
-        echo "ERROR: Gluon installation failed for ${GLUON_PIP_SPEC}"
-        exit 1
-    fi
-
-    echo "Verifying Gluon import..."
-    if ! python3 - <<'PY'; then
-import gluon
-print(f"Gluon version: {getattr(gluon, '__version__', 'unknown')}")
-PY
-        echo "ERROR: Gluon import verification failed"
-        exit 1
-    fi
-
-    echo "✓ Gluon installation and import verification succeeded"
-}
-
 # Reusable function to reassemble split wheels
 reassemble_split_wheel() {
     local wheel_path="$1"
@@ -334,32 +223,8 @@ if not torch.cuda.is_available():
     sys.exit(1)
 PY
     if [ $? -ne 0 ]; then
-        echo "CRITICAL: PyTorch CUDA was overridden during ${context}!"
-        echo "Restoring PyTorch CUDA installation..."
-        
-        # Reassemble PyTorch wheel if split
-        local reassembled_wheel
-        local tmp_dir
-        tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/pytorch-restore.XXXXXX")
-        reassembled_wheel=$(reassemble_split_wheel "${PYTORCH_WHEEL_PATH}" "${tmp_dir}")
-        
-        if [ -z "${reassembled_wheel}" ] || [ ! -f "${reassembled_wheel}" ]; then
-            echo "ERROR: Could not reassemble PyTorch wheel from ${PYTORCH_WHEEL_PATH}"
-            rm -rf "${tmp_dir}"
-            return 1
-        fi
-        
-        pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null 2>&1 || true
-        if pip_install --no-input --force-reinstall --no-deps "${reassembled_wheel}"; then
-            install_torchao_packages
-            echo "✓ PyTorch CUDA restored after ${context}"
-            rm -rf "${tmp_dir}"
-            return 0
-        else
-            echo "ERROR: Failed to restore PyTorch CUDA!"
-            rm -rf "${tmp_dir}"
-            return 1
-        fi
+        echo "CRITICAL: PyTorch CUDA was not available during ${context}!"
+        return 1
     fi
     return 0
 }
@@ -687,7 +552,7 @@ for name, result in status.items():
     else:
         print(f"[setup] ERROR: {name} FP8 smoke test failed: {result['error']}")
 
-if not all(entry["ok"] for entry in status.values()):
+if not status["torchao"]["ok"] and not status["transformer_engine"]["ok"]:
     raise SystemExit(1)
 PY
 }
@@ -751,6 +616,34 @@ if command -v nvidia-smi &> /dev/null; then
 else
     echo "NVIDIA GPU not detected. Please ensure NVIDIA drivers are installed."
     exit 1
+fi
+
+GPU_COMPUTE_CAP_RAW=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '[:space:]')
+GPU_COMPUTE_SM_NUM=$(echo "${GPU_COMPUTE_CAP_RAW}" | tr -d '.')
+if [[ -n "${GPU_COMPUTE_SM_NUM}" ]]; then
+    echo "Detected GPU compute capability: sm_${GPU_COMPUTE_SM_NUM}"
+    SOURCE_BUILD_ALLOWED=0
+    export GPU_COMPUTE_SM_NUM
+else
+    SOURCE_BUILD_ALLOWED=0
+    echo "Could not detect GPU compute capability; defaulting to prebuilt wheels only."
+fi
+
+# Use current arch for CUTLASS build targets (fallback to defaults if unknown)
+if [ -n "${GPU_COMPUTE_SM_NUM}" ]; then
+    CUTLASS_NVCC_ARCHS_VALUE="${GPU_COMPUTE_SM_NUM}"
+else
+    CUTLASS_NVCC_ARCHS_VALUE="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
+fi
+if [ -n "${GPU_COMPUTE_SM_NUM}" ]; then
+    sm_len=${#GPU_COMPUTE_SM_NUM}
+    sm_major="${GPU_COMPUTE_SM_NUM:0:$((sm_len-1))}"
+    sm_minor="${GPU_COMPUTE_SM_NUM: -1}"
+    TE_TORCH_ARCH_LIST="${sm_major}.${sm_minor}"
+    TE_CUTLASS_ARCHS="${GPU_COMPUTE_SM_NUM}"
+else
+    TE_TORCH_ARCH_LIST="10.0"
+    TE_CUTLASS_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
 fi
 
 # Ensure open kernel modules are enabled for Blackwell GPUs
@@ -1116,6 +1009,19 @@ ldconfig 2>/dev/null || true
 echo ""
 echo "Installing NVSHMEM 3.4.5 runtime and headers (CUDA 13)..."
 apt install -y nvshmem-cuda-13 libnvshmem3-cuda-13 libnvshmem3-dev-cuda-13 libnvshmem3-static-cuda-13
+# Fix packaging bug that leaves nvshmem_transport_ibgda.so.3 alternative pointing at a non-existent file
+nvshmem_alt_file="/var/lib/dpkg/alternatives/nvshmem"
+nvshmem_bad_ibgda="/usr/lib/x86_64-linux-gnu/nvshmem/13/.3"
+nvshmem_good_ibgda="/usr/lib/x86_64-linux-gnu/nvshmem/13/nvshmem_transport_ibgda.so.3"
+if [ -f "${nvshmem_alt_file}" ] && grep -q "${nvshmem_bad_ibgda}" "${nvshmem_alt_file}"; then
+    sed -i "s#${nvshmem_bad_ibgda}#${nvshmem_good_ibgda}#" "${nvshmem_alt_file}"
+    if ! update-alternatives --auto nvshmem; then
+        echo "WARNING: update-alternatives failed for nvshmem; nvshmem_transport_ibgda.so.3 may be missing"
+    fi
+fi
+if [ ! -e "/usr/lib/x86_64-linux-gnu/nvshmem_transport_ibgda.so.3" ] && [ -e "${nvshmem_good_ibgda}.0.0" ]; then
+    ln -sf "${nvshmem_good_ibgda}.0.0" "/usr/lib/x86_64-linux-gnu/nvshmem_transport_ibgda.so.3"
+fi
 
 # Install GPUDirect Storage (GDS) for high-performance I/O
 echo ""
@@ -1125,6 +1031,14 @@ if ! dpkg -s gds-tools-13-0 >/dev/null 2>&1; then
     echo "GDS tools installed"
 else
     echo "GDS tools already installed"
+fi
+
+# Ensure the nvidia-fs kernel module package is present so modprobe succeeds
+if ! dpkg -s nvidia-fs >/dev/null 2>&1 && ! dpkg -s nvidia-fs-dkms >/dev/null 2>&1; then
+    echo "Installing nvidia-fs-dkms (GDS kernel module)..."
+    apt install -y nvidia-fs-dkms
+else
+    echo "nvidia-fs package already installed"
 fi
 
 # Load nvidia-fs kernel module for GDS
@@ -1139,6 +1053,25 @@ else
     echo "nvidia-fs module already loaded"
 fi
 
+# Persist nvidia-fs so it loads on boot (avoids manual modprobe after reboot)
+echo "Configuring nvidia-fs to load on boot..."
+modules_load_conf="/etc/modules-load.d/nvidia-fs.conf"
+if [ -f "${modules_load_conf}" ]; then
+    if grep -Fxq "nvidia-fs" "${modules_load_conf}"; then
+        echo "nvidia-fs already listed in ${modules_load_conf}"
+    else
+        echo "nvidia-fs" >> "${modules_load_conf}"
+        echo "Added nvidia-fs to ${modules_load_conf}"
+    fi
+else
+    cat <<'EOF' > "${modules_load_conf}"
+# Load NVIDIA GPUDirect Storage kernel module at boot
+nvidia-fs
+EOF
+    echo "Created ${modules_load_conf} for boot-time nvidia-fs loading"
+fi
+echo "GDS requires a supported storage backend (NVMe, BeeGFS, NFS, WekaFS, etc.). Configure storage and rerun /usr/local/cuda/gds/tools/gdscheck -p to confirm."
+
 # Install kvikio Python library for GDS (required for Ch5 examples)
 echo ""
 echo "Installing kvikio Python library for GPUDirect Storage..."
@@ -1148,8 +1081,6 @@ else
     echo "kvikio installation failed, but continuing..."
     echo "   Install manually with: pip install kvikio-cu13==25.10.0"
 fi
-
-install_torchao_packages
 
 # Install CUDA sanitizers and debugging tools (compute-sanitizer, cuda-memcheck, etc.)
 echo ""
@@ -1420,37 +1351,24 @@ pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null
 rm -rf /usr/local/lib/python3.12/dist-packages/torch* /usr/local/lib/python3.12/dist-packages/torchvision* /usr/local/lib/python3.12/dist-packages/torchdata* /usr/local/lib/python3.12/dist-packages/functorch* /usr/local/lib/python3.12/dist-packages/pytorch_triton* 2>/dev/null || true
 rm -rf /home/*/.local/lib/python3.12/site-packages/torch* /home/*/.local/lib/python3.12/site-packages/torchvision* 2>/dev/null || true
 
+# Ensure critical harness dependencies are present in the base (non-venv) environment
+echo ""
+echo "Installing pinned harness deps (pydantic/typer/typing_extensions) into system Python..."
+pip_install --no-cache-dir --upgrade --ignore-installed \
+    click==8.2.1 \
+    pydantic==2.9.0 \
+    pydantic-core==2.23.2 \
+    typing-extensions==4.15.0 \
+    typer==0.12.0 \
+    typer-slim[standard]==0.12.0
+
 # Build or reuse PyTorch wheel (SM100/103/121)
 echo ""
 find "${PYTORCH_WHEEL_DIR}" -maxdepth 1 -name "torch-*-manylinux*.whl" -delete 2>/dev/null || true
 PYTORCH_WHEEL_GLOB="${PYTORCH_WHEEL_DIR}/${PYTORCH_WHEEL_PATTERN}"
-PYTORCH_WHEEL_PATH=""
-if compgen -G "${PYTORCH_WHEEL_GLOB}" >/dev/null; then
-    PYTORCH_WHEEL_PATH=$(ls ${PYTORCH_WHEEL_GLOB} | sort | tail -n 1)
-    echo "Using cached PyTorch wheel at ${PYTORCH_WHEEL_PATH}"
-else
-    build_pytorch_from_source
-    PYTORCH_WHEEL_PATH=$(ls ${PYTORCH_WHEEL_GLOB} | sort | tail -n 1 2>/dev/null)
-fi
-
-if [ -z "${PYTORCH_WHEEL_PATH}" ] || [ ! -f "${PYTORCH_WHEEL_PATH}" ]; then
-    echo "ERROR: PyTorch wheel not available in ${PYTORCH_WHEEL_DIR}"
-    exit 1
-fi
-
-export PYTORCH_WHEEL_PATH
-PYTORCH_WHEEL_BASENAME="$(basename "${PYTORCH_WHEEL_PATH}")"
-PYTORCH_BUILD_VERSION="$(echo "${PYTORCH_WHEEL_BASENAME}" | sed -n 's/^torch-\(.*\)-cp.*/\1/p')"
-export PYTORCH_BUILD_VERSION
-
-if ! compgen -G "${PYTORCH_WHEEL_PATH}.part*" >/dev/null; then
-    echo "Splitting PyTorch wheel into <50MB chunks under ${PYTORCH_WHEEL_DIR}"
-    split -b 45m -d -a 2 "${PYTORCH_WHEEL_PATH}" "${PYTORCH_WHEEL_PATH}.part"
-fi
-
 echo ""
-echo "NOTE: PyTorch CUDA wheel will be installed AFTER all requirements"
-echo "      to prevent dependencies from overriding it with CPU version"
+echo "NOTE: PyTorch CUDA wheels will be installed AFTER core requirements"
+echo "      to prevent dependencies from overriding them with CPU versions"
 echo ""
 
 # Install project dependencies
@@ -1482,6 +1400,7 @@ if [ -f "$TEMP_REQUIREMENTS" ]; then
             nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
             numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
             matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
+            click==8.2.1 \
             jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 pytest==8.3.4 typer==0.12.0 rich==13.7.0 \
             transformers==4.40.2 datasets==2.18.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
             onnx==1.19.0 \
@@ -1498,6 +1417,7 @@ else
         nvidia-ml-py3 nvidia-ml-py==12.560.30 psutil==7.1.0 GPUtil==1.4.0 py-cpuinfo==9.0.0 \
         numpy==2.1.2 pandas==2.3.2 scikit-learn==1.7.2 pillow==11.3.0 \
         matplotlib==3.10.6 seaborn==0.13.2 tensorboard==2.20.0 wandb==0.22.0 plotly==6.3.0 bokeh==3.8.0 dash==3.2.0 \
+        click==8.2.1 \
         jupyter==1.1.1 ipykernel==6.30.1 black==25.9.0 flake8==7.3.0 mypy==1.18.2 pytest==8.3.4 typer==0.12.0 rich==13.7.0 \
         transformers==4.40.2 datasets==2.18.0 sentencepiece==0.2.0 tokenizers==0.19.1 \
         onnx==1.19.0 \
@@ -1507,78 +1427,73 @@ else
         "fsspec[http]==2024.6.1"
 fi
 
-# NOW install PyTorch CUDA wheel to override any CPU version installed by dependencies
+# Install PyTorch CUDA 13 stack (binary wheels only, no source builds)
 echo ""
 echo "============================================================================"
-echo "Installing PyTorch CUDA wheel (overriding any CPU version from dependencies)"
+echo "Installing PyTorch 2.9.1 cu13 stack (binary wheels only)"
 echo "============================================================================"
 echo ""
 
-# First, completely remove any existing PyTorch installation (CPU or CUDA)
 echo "Removing any existing PyTorch installations..."
 pip_uninstall -y torch torchvision torchdata functorch pytorch-triton >/dev/null 2>&1 || true
 
-# Install the CUDA-enabled PyTorch wheel (handle split wheels)
-echo "Installing CUDA-enabled PyTorch from ${PYTORCH_WHEEL_PATH}..."
-pytorch_wheel_to_install=""
-tmp_pytorch_dir=$(mktemp -d "${TMPDIR:-/tmp}/pytorch-install.XXXXXX")
-pytorch_wheel_to_install=$(reassemble_split_wheel "${PYTORCH_WHEEL_PATH}" "${tmp_pytorch_dir}")
-
-if [ -z "${pytorch_wheel_to_install}" ] || [ ! -f "${pytorch_wheel_to_install}" ]; then
-    echo "ERROR: PyTorch wheel not found (neither full wheel nor split parts) at ${PYTORCH_WHEEL_PATH}"
-    rm -rf "${tmp_pytorch_dir}"
+echo "Installing torch 2.9.1 + torchvision + torchdata + torchao (cu13) from cu130 index..."
+if ! pip_install --no-cache-dir --upgrade --ignore-installed \
+    --index-url "${PYTORCH_CU130_INDEX}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    torch==2.9.1 torchvision torchdata torchao; then
+    echo "ERROR: PyTorch stack installation failed from cu130 index"
     exit 1
 fi
 
-if ! pip_install --no-cache-dir --force-reinstall --upgrade --no-deps "${pytorch_wheel_to_install}"; then
-    echo "ERROR: PyTorch CUDA wheel installation failed!"
-    rm -rf "${tmp_pytorch_dir}"
-    exit 1
-fi
-rm -rf "${tmp_pytorch_dir}"
-
-# Verify the correct torch is installed and CUDA is available
-echo ""
-echo "Verifying PyTorch CUDA installation..."
-if ! python3 <<'PY'; then
+if ! python3 - <<'PY'
 import sys
 import torch
 
-print("PyTorch wheel installed from source build")
+cuda_ver = getattr(torch.version, "cuda", None) or ""
+if not cuda_ver.startswith("13."):
+    print(f"ERROR: Expected cu13 torch wheel, got torch.version.cuda={cuda_ver!r}")
+    sys.exit(1)
+print(f"[setup] torch cu13 confirmed: {torch.__version__} (cuda {cuda_ver})")
+PY
+then
+    echo "ERROR: cu130 torch install did not deliver a cu13 build."
+    exit 1
+fi
+
+echo ""
+echo "Verifying PyTorch CUDA installation..."
+if ! python3 <<'PY'; then
+import os
+import sys
+import torch
+
+print("PyTorch CUDA wheel installed")
 print(f"  version: {torch.__version__}")
 print(f"  location: {torch.__file__}")
 
-# Check CUDA availability
 if not hasattr(torch.version, "cuda") or torch.version.cuda is None:
     print("ERROR: torch.version.cuda is None - CUDA not enabled in this build")
     sys.exit(1)
 
 print(f"  cuda: {torch.version.cuda}")
+if not str(torch.version.cuda).startswith("13."):
+    print(f"ERROR: Expected torch.version.cuda to start with '13.' but got {torch.version.cuda!r}")
+    sys.exit(1)
 
 if not torch.cuda.is_available():
-    print("ERROR: torch.cuda.is_available() is False after build")
-    print("  This may indicate:")
-    print("    1. NVIDIA driver is not loaded or too old")
-    print("    2. Wrong torch installation is being imported")
-    print("    3. CUDA libraries are not in LD_LIBRARY_PATH")
+    print("ERROR: torch.cuda.is_available() is False after install")
     sys.exit(1)
 
 arch_list = torch.cuda.get_arch_list()
 print(f"  arch list: {arch_list}")
-expected_arches = {"sm_100", "sm_103", "sm_121"}
-allowed_extra = {"compute_121"}
-arch_set = set(arch_list)
-missing_arches = sorted(expected_arches - arch_set)
-disallowed = sorted(arch_set - expected_arches - allowed_extra)
-if missing_arches or disallowed:
-    detail = []
-    if missing_arches:
-        detail.append(f"missing {missing_arches}")
-    if disallowed:
-        detail.append(f"unexpected {disallowed}")
-    print(f"ERROR: Expected PyTorch arch list to match {sorted(expected_arches)}, ")
-    print(f"but got {arch_list} ({'; '.join(detail)})")
-    sys.exit(1)
+required_sm = os.environ.get("GPU_COMPUTE_SM_NUM")
+if required_sm:
+    target = f"sm_{required_sm}"
+    if target not in arch_list:
+        print(f"ERROR: Expected PyTorch arch list to include {target}, got {arch_list}")
+        sys.exit(1)
 
 print("✓ PyTorch CUDA build verified successfully")
 print(f"✓ GPU count: {torch.cuda.device_count()}")
@@ -1613,12 +1528,12 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
     TORCHTITAN_VERSION=$(grep "^torchtitan==" "$REQUIREMENTS_FILE" | cut -d= -f3 || echo "0.2.0")
     
     echo "  Installing accelerate==${ACCELERATE_VERSION}..."
-    pip_install --no-input --ignore-installed "accelerate==${ACCELERATE_VERSION}" || {
+    pip_install --no-input --no-deps "accelerate==${ACCELERATE_VERSION}" || {
         echo "  Warning: accelerate installation failed, but continuing..."
     }
     
     echo "  Installing torchtitan==${TORCHTITAN_VERSION}..."
-    pip_install --no-input --ignore-installed "torchtitan==${TORCHTITAN_VERSION}" || {
+    pip_install --no-input --no-deps "torchtitan==${TORCHTITAN_VERSION}" || {
         echo "  Warning: torchtitan installation failed, but continuing..."
     }
     
@@ -1633,370 +1548,109 @@ if [ -f "$REQUIREMENTS_FILE" ]; then
     echo "✓ accelerate and torchtitan installed (PyTorch CUDA verified)"
 fi
 
+# Re-pin dependencies that may have been pulled by downstream installs
+pip_install --no-cache-dir --upgrade --ignore-installed --no-deps "fsspec[http]==2024.6.1" || {
+    echo "Warning: failed to pin fsspec[http]==2024.6.1"
+}
+echo "Re-pinning torch cu13 dependency wheels (force-reinstall, cu130 index only)..."
+pip_uninstall -y nvidia-cuda-nvrtc nvidia-cuda-runtime nvidia-cusolver nvidia-cusparse nvidia-nvjitlink nvidia-nvtx triton >/dev/null 2>&1 || true
+for pkg in \
+    "nvidia-cuda-nvrtc==13.0.48" \
+    "nvidia-cuda-runtime==13.0.48" \
+    "nvidia-cusolver==12.0.3.29" \
+    "nvidia-cusparse==12.6.2.49" \
+    "nvidia-nvjitlink==13.0.39" \
+    "nvidia-nvtx==13.0.39" \
+    "triton==3.5.1"; do
+    if ! pip_install --no-cache-dir --force-reinstall --ignore-installed --no-deps \
+        --index-url "${PYTORCH_CU130_INDEX}" \
+        "${pkg}"; then
+        echo "Warning: failed to pin ${pkg} from cu130 index"
+    fi
+done
+echo "Re-pinning HF deps for transformers compatibility..."
+pip_uninstall -y tokenizers huggingface-hub >/dev/null 2>&1 || true
+pip_install --no-cache-dir --upgrade --ignore-installed --no-deps tokenizers==0.19.1 || {
+    echo "Warning: failed to pin tokenizers==0.19.1"
+}
+pip_install --no-cache-dir --upgrade --ignore-installed --no-deps huggingface-hub==0.23.2 || {
+    echo "Warning: failed to pin huggingface-hub==0.23.2"
+}
+
 # Ensure triton is available (required by Transformer Engine and other PyTorch extensions)
 # Triton should be bundled with PyTorch, but install it explicitly to ensure it's available
 echo "Verifying triton availability (required by Transformer Engine)..."
 if ! python3 -c "import triton" 2>/dev/null; then
-    echo "  Triton not found. Installing triton (with --no-deps to prevent torch override)..."
-    # Install triton with --no-deps to prevent it from pulling in torch CPU
-    pip_install --no-cache-dir --upgrade --no-deps triton==3.5.0 || {
+    echo "  Triton not found. Installing triton from cu130 index (with --no-deps to prevent torch override)..."
+    pip_install --no-cache-dir --upgrade --no-deps \
+        --index-url "${PYTORCH_CU130_INDEX}" \
+        --extra-index-url "https://pypi.org/simple" \
+        triton || {
         echo "  Warning: Failed to install triton. Transformer Engine may not work."
     }
 else
     TRITON_VERSION=$(python3 -c "import triton; print(triton.__version__)" 2>/dev/null || echo "unknown")
     echo "  ✓ Triton version: ${TRITON_VERSION}"
-    # Verify triton version matches requirements (3.5.0)
-    if [ "${TRITON_VERSION}" != "3.5.0" ]; then
-        echo "  Warning: Triton version ${TRITON_VERSION} doesn't match required 3.5.0"
-        echo "  Reinstalling triton 3.5.0 with --no-deps..."
-        pip_install --no-cache-dir --upgrade --no-deps triton==3.5.0 || {
-        echo "  Warning: Failed to reinstall triton 3.5.0"
-        }
-    fi
-    
-    # Verify PyTorch CUDA wasn't overridden by triton installation
-    if ! verify_and_restore_pytorch_cuda "triton installation"; then
-        echo "  ERROR: Failed to restore PyTorch CUDA after triton!"
-        exit 1
-    fi
 fi
 
-# Install Gluon (warp-specialized Triton mid-layer)
+# Install torchvision from cu130 binaries (no source builds)
 echo ""
-echo "Installing Gluon..."
-install_gluon
-echo "  Gluon installed."
-
-# Install torchvision separately with --no-deps to prevent torch override
-echo ""
-echo "Installing torchvision from git (with --no-deps to protect PyTorch)..."
-pip_install --no-input --no-deps "git+https://github.com/pytorch/vision.git@main" || {
-    echo "Warning: torchvision installation failed. Continuing without it."
+echo "Installing torchvision (cu13 wheel, no-build)..."
+pip_install --no-input --no-deps \
+    --index-url "${PYTORCH_CU130_INDEX}" \
+    --extra-index-url "https://pypi.org/simple" \
+    --only-binary=":all:" \
+    torchvision || {
+    echo "Warning: torchvision cu13 install failed. Continuing without it."
 }
 
-# Verify PyTorch CUDA wasn't overridden by torchvision installation (shouldn't happen with --no-deps, but check anyway)
+# Verify PyTorch CUDA wasn't overridden by torchvision installation
 if ! verify_and_restore_pytorch_cuda "torchvision installation"; then
-    echo "ERROR: Failed to restore PyTorch CUDA after torchvision!"
+    echo "ERROR: PyTorch CUDA missing after torchvision!"
     exit 1
 fi
 
-# Sync CUTLASS headers for tcgen05 kernels
 echo ""
-echo "Syncing CUTLASS (tcgen05) headers..."
-CUTLASS_REF_VALUE="${CUTLASS_REF:-v4.2.1}"
-CUTLASS_REPO_URL="${CUTLASS_REPO:-https://github.com/NVIDIA/cutlass.git}"
-if [ -x "${PROJECT_ROOT}/scripts/install_cutlass.sh" ]; then
-    CUTLASS_REPO="${CUTLASS_REPO_URL}" "${PROJECT_ROOT}/scripts/install_cutlass.sh" "${CUTLASS_REF_VALUE}"
-else
-    echo "WARNING: scripts/install_cutlass.sh not found; skipping CUTLASS installation"
-fi
-
-# Attempt to build tcgen05 probe to capture PTXAS errors on SM121 (for visibility)
-run_tcgen05_probe() {
-    echo ""
-    echo "Running tcgen05 CUTLASS probe (expected to fail on SM121 without multicast/DSMEM)..."
-    local log_path="${PROJECT_ROOT}/artifacts/tcgen05_probe_build.log"
-    mkdir -p "$(dirname "${log_path}")"
-    local probe_src="${PROJECT_ROOT}/tools/tcgen05_probe.cu"
-    if [ ! -f "${probe_src}" ]; then
-        echo "tcgen05 probe source not found at ${probe_src}; skipping."
-        return
-    fi
-    local nvcc_cmd=(
-        nvcc
-        -std=c++17
-        -O2
-        -arch=sm_121
-        -DCUTE_ENABLE_SYCLOG=0
-        -I"${PROJECT_ROOT}/third_party/cutlass/include"
-        -I"${PROJECT_ROOT}/third_party/cutlass/tools/util/include"
-        -I"${PROJECT_ROOT}/third_party/cutlass/examples/common"
-        "${probe_src}"
-        -o /tmp/tcgen05_probe_cutlass
-    )
-    {
-        echo "Command: ${nvcc_cmd[*]}"
-        "${nvcc_cmd[@]}"
-    } >"${log_path}" 2>&1 || true
-    echo "tcgen05 probe build log: ${log_path}"
-}
-run_tcgen05_probe
-
-# Build CUTLASS profiler (cutlass_profiler) once and keep the binary in-tree for labs
-build_cutlass_profiler() {
-    echo ""
-    echo "Building CUTLASS profiler (cutlass_profiler)..."
-
-    local cutlass_dir="${PROJECT_ROOT}/third_party/cutlass"
-    if [ ! -d "${cutlass_dir}" ]; then
-        echo "  CUTLASS source not found at ${cutlass_dir}; skipping profiler build."
-        return
-    fi
-
-    local sm
-    sm=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '.' | xargs)
-    if [ -z "${sm}" ]; then
-        sm="90"
-    fi
-    local archs="${CUTLASS_NVCC_ARCHS:-${sm}}"
-    # Build in a user-writable location to avoid permission issues with root-owned sources
-    local build_dir="${PROJECT_ROOT}/build/cutlass_profiler"
-    local log_path="${PROJECT_ROOT}/artifacts/cutlass_profiler_build.log"
-    mkdir -p "${build_dir}" "$(dirname "${log_path}")"
-
-    echo "  Using CUTLASS_NVCC_ARCHS=${archs}"
-    {
-        echo "Configure:"
-        cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCUTLASS_ENABLE_EXAMPLES=OFF \
-            -DCUTLASS_ENABLE_TESTS=OFF \
-            -DCUTLASS_ENABLE_TOOLS=ON \
-            -DCUTLASS_ENABLE_PROFILER=ON \
-            -DCUTLASS_NVCC_ARCHS="${archs}" \
-            -DCUDA_TOOLKIT_ROOT_DIR="${CUDA_HOME_DIR}" \
-            -S "${cutlass_dir}" \
-            -B "${build_dir}"
-
-        echo ""
-        echo "Build:"
-        cmake --build "${build_dir}" -j"$(nproc --ignore=1 2>/dev/null || nproc)" --target cutlass_profiler
-    } >"${log_path}" 2>&1 || {
-        echo "  WARNING: cutlass_profiler build failed. See ${log_path}"
-        return
-    }
-
-    local profiler_bin="${build_dir}/tools/profiler/cutlass_profiler"
-    if [ -x "${profiler_bin}" ]; then
-        echo "  CUTLASS profiler ready: ${profiler_bin}"
-        export CUTLASS_PROFILER_BIN="${profiler_bin}"
-        mkdir -p "${PROJECT_ROOT}/artifacts"
-        echo "export CUTLASS_PROFILER_BIN=${profiler_bin}" > "${PROJECT_ROOT}/artifacts/cutlass_profiler_env.sh"
-        echo "  Exported CUTLASS_PROFILER_BIN and saved to artifacts/cutlass_profiler_env.sh"
-    else
-        echo "  WARNING: cutlass_profiler build completed but binary not found at ${profiler_bin}"
-    fi
-    echo "  Build log: ${log_path}"
-}
-build_cutlass_profiler
+echo "Skipping CUTLASS source installs and builds (cu13 binaries only)."
 
 # Ensure monitoring/runtime dependencies are available even if requirements were cached
 echo ""
 echo "Ensuring monitoring/runtime packages (Prometheus, Transformer Engine)..."
 
-# Transformer Engine build requires CUDNN headers shipped with the Python wheel.
-CUDA_ROOT="${CUDA_HOME_DIR}"
-# Transformer Engine build needs cuDNN headers from PyTorch's bundled package
-CUDNN_INCLUDE_DIR="${PYTHON_DIST_PACKAGES}/nvidia/cudnn/include"
-CUDNN_LIBRARY_DIR="${PYTHON_DIST_PACKAGES}/nvidia/cudnn/lib"
-export CPATH="${CUDNN_INCLUDE_DIR}:${CPATH:-}"
-# For build-time: Use PyTorch's cuDNN headers, but runtime will use system cuDNN 9.15.1
-# LIBRARY_PATH is for linking, LD_LIBRARY_PATH (set above) uses system cuDNN 9.15.1 for runtime
-if [ -d "${CUDNN_INCLUDE_DIR}" ]; then
-    # Headers are needed for compilation
-    export LIBRARY_PATH="${CUDNN_LIBRARY_DIR}:${LIBRARY_PATH:-}"
-fi
-# NOTE: LD_LIBRARY_PATH is already set above to use system cuDNN 9.15.1 for runtime
-
-# Remove conflicting binary wheels before installing the source build.
+# Remove conflicting binary wheels before installing from source.
 pip_uninstall -y transformer_engine transformer-engine transformer_engine_cu12 transformer-engine-cu12 transformer-engine-cu13 transformer_engine_torch >/dev/null 2>&1 || true
 
-TE_WHEEL_BASE="transformer_engine-${TE_VERSION_TAG}-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
-TE_CU12_WHEEL_BASE="transformer_engine_cu12-${TE_VERSION_TAG}-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
-# The transformer_engine_torch wheel stays under Git's 50MB limit, so we cache the raw .whl (no split parts).
-TE_TORCH_WHEEL_BASE="transformer_engine_torch-${TE_VERSION_TAG}-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
-
-install_wheel_from_cache() {
-    local wheel_name="$1"
-    local full_path="${THIRD_PARTY_DIR}/wheels/${wheel_name}"
-    local parts_prefix="${full_path}.part"
-
-    if [ -f "$full_path" ]; then
-        ensure_wheel_root_pure "$full_path"
-        pip_install --no-input --ignore-installed --no-deps "$full_path"
-        return $?
-    fi
-
-    if compgen -G "${parts_prefix}*" >/dev/null; then
-        local tmp_dir
-        tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/te-wheel.XXXXXX")
-        local combined="${tmp_dir}/${wheel_name}"
-        mapfile -t PARTS < <(ls "${parts_prefix}"* | sort -V)
-        if cat "${PARTS[@]}" > "${combined}" && \
-           ensure_wheel_root_pure "${combined}" && \
-           pip_install --no-input --ignore-installed --no-deps "${combined}"; then
-            rm -rf "${tmp_dir}"
-            return 0
-        fi
-        rm -rf "${tmp_dir}"
-    fi
-    return 1
-}
-
-install_te_from_source() {
-    pip_install --no-input --upgrade --ignore-installed pybind11
-    local torch_wheel="${PYTORCH_WHEEL_PATH:-}"
-    local wheel_cache="${PYTORCH_WHEEL_DIR}"
-    local target_wheel="${wheel_cache}/${TE_WHEEL_BASE}"
-    local target_cu12_wheel="${wheel_cache}/${TE_CU12_WHEEL_BASE}"
-    local target_torch_wheel="${wheel_cache}/${TE_TORCH_WHEEL_BASE}"
-
-    mkdir -p "${wheel_cache}"
-
-    # Check if all 3 wheels are cached (cu12 and torch might be split)
-    local cu12_exists=false
-    if [ -f "${target_cu12_wheel}" ] || compgen -G "${target_cu12_wheel}.part*" >/dev/null 2>&1; then
-        cu12_exists=true
-    fi
-    
-    local main_wheel_exists=false
-    local torch_wheel_exists=false
-    if [ -f "${target_wheel}" ]; then
-        main_wheel_exists=true
-    fi
-    # Check for torch wheel (might be split into parts like cu12)
-    if [ -f "${target_torch_wheel}" ] || compgen -G "${target_torch_wheel}.part*" >/dev/null 2>&1; then
-        torch_wheel_exists=true
-    fi
-    
-    if [ "${main_wheel_exists}" = "false" ] || [ "${cu12_exists}" = "false" ] || [ "${torch_wheel_exists}" = "false" ]; then
-        echo "Building Transformer Engine ${TE_VERSION_TAG} from source (this takes 5-10 minutes)..."
-        echo "  Missing wheels: main=${main_wheel_exists} cu12=${cu12_exists} torch=${torch_wheel_exists}"
-        local tmp_wheel_dir
-        tmp_wheel_dir=$(mktemp -d "${TMPDIR:-/tmp}/te-wheel-build.XXXXXX")
-        if TORCH_CUDA_ARCH_LIST="${TORCH_SM_ARCH_LIST_VALUE}" \
-           CUTLASS_NVCC_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE}" \
-           CUDNN_INCLUDE_DIR="${CUDNN_INCLUDE_DIR}" \
-           CUDNN_LIBRARY_DIR="${CUDNN_LIBRARY_DIR}" \
-           pip_wheel \
-               --no-deps \
-               --no-build-isolation \
-               --wheel-dir "${tmp_wheel_dir}" \
-               "git+https://github.com/NVIDIA/TransformerEngine.git@${TE_GIT_COMMIT}"; then
-            
-            # Find and cache all 3 produced wheels
-            local main_wheel cu12_wheel torch_wheel
-            main_wheel=$(find "${tmp_wheel_dir}" -maxdepth 1 -name "transformer_engine-*.whl" -not -name "*cu12*" -not -name "*torch*" | head -n 1)
-            cu12_wheel=$(find "${tmp_wheel_dir}" -maxdepth 1 -name "transformer_engine_cu12-*.whl" | head -n 1)
-            torch_wheel=$(find "${tmp_wheel_dir}" -maxdepth 1 -name "transformer_engine_torch-*.whl" | head -n 1)
-            
-            if [ -n "${main_wheel}" ]; then
-                mv "${main_wheel}" "${target_wheel}"
-                echo "✓ Cached transformer_engine wheel: ${target_wheel}"
-            fi
-            if [ -n "${cu12_wheel}" ]; then
-                mv "${cu12_wheel}" "${target_cu12_wheel}"
-                echo "✓ Cached transformer_engine_cu12 wheel: ${target_cu12_wheel}"
-                # Split if >50MB
-                local cu12_size=$(stat -f%z "${target_cu12_wheel}" 2>/dev/null || stat -c%s "${target_cu12_wheel}" 2>/dev/null)
-                if [ -n "${cu12_size}" ] && [ "${cu12_size}" -gt 52428800 ]; then
-                    echo "  Splitting cu12 wheel (${cu12_size} bytes) into <50MB chunks..."
-                    split -b 45m -d -a 2 "${target_cu12_wheel}" "${target_cu12_wheel}.part"
-                    rm "${target_cu12_wheel}"  # Remove unsplit version to save space
-                fi
-            fi
-            if [ -n "${torch_wheel}" ]; then
-                mv "${torch_wheel}" "${target_torch_wheel}"
-                echo "✓ Cached transformer_engine_torch wheel: ${target_torch_wheel}"
-                # Split if >50MB (same as cu12)
-                local torch_size=$(stat -f%z "${target_torch_wheel}" 2>/dev/null || stat -c%s "${target_torch_wheel}" 2>/dev/null)
-                if [ -n "${torch_size}" ] && [ "${torch_size}" -gt 52428800 ]; then
-                    echo "  Splitting torch wheel (${torch_size} bytes) into <50MB chunks..."
-                    split -b 45m -d -a 2 "${target_torch_wheel}" "${target_torch_wheel}.part"
-                    rm "${target_torch_wheel}"  # Remove unsplit version to save space
-                fi
-            fi
-        else
-            echo "Transformer Engine wheel build failed; cleaning up temporary files."
-            rm -rf "${tmp_wheel_dir}"
-            return 1
-        fi
-        rm -rf "${tmp_wheel_dir}"
-    else
-        echo "Using cached Transformer Engine wheels"
-        echo "  Found: main=${main_wheel_exists} cu12=${cu12_exists} torch=${torch_wheel_exists}"
-    fi
-
-    # Ensure PyTorch CUDA is installed before Transformer Engine
-    if [ -n "${PYTORCH_WHEEL_PATH}" ]; then
-        echo "Verifying PyTorch CUDA is installed before Transformer Engine..."
-        if ! verify_and_restore_pytorch_cuda "pre-Transformer Engine check"; then
-            echo "ERROR: Failed to ensure PyTorch CUDA before Transformer Engine"
-            return 1
-        fi
-    fi
-    
-    # Install all 3 Transformer Engine wheels (handle split wheels consistently)
-    local wheels_to_install=()
-    local tmp_te_dir
-    tmp_te_dir=$(mktemp -d "${TMPDIR:-/tmp}/te-wheels.XXXXXX")
-    
-    # Main wheel
-    if [ -f "${target_wheel}" ]; then
-        wheels_to_install+=("${target_wheel}")
-    fi
-    
-    # Torch wheel (reassemble if split)
-    local torch_wheel_reassembled
-    torch_wheel_reassembled=$(reassemble_split_wheel "${target_torch_wheel}" "${tmp_te_dir}")
-    if [ -n "${torch_wheel_reassembled}" ] && [ -f "${torch_wheel_reassembled}" ]; then
-        wheels_to_install+=("${torch_wheel_reassembled}")
-    fi
-    
-    # CU12 wheel (reassemble if split)
-    local cu12_wheel_reassembled
-    cu12_wheel_reassembled=$(reassemble_split_wheel "${target_cu12_wheel}" "${tmp_te_dir}")
-    if [ -n "${cu12_wheel_reassembled}" ] && [ -f "${cu12_wheel_reassembled}" ]; then
-        wheels_to_install+=("${cu12_wheel_reassembled}")
-    fi
-    
-    if [ ${#wheels_to_install[@]} -gt 0 ]; then
-        for wheel in "${wheels_to_install[@]}"; do
-            ensure_wheel_root_pure "${wheel}"
-        done
-        
-        if TORCH_CUDA_ARCH_LIST="${TORCH_SM_ARCH_LIST_VALUE}" \
-           CUTLASS_NVCC_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE}" \
-           CUDNN_INCLUDE_DIR="${CUDNN_INCLUDE_DIR}" \
-           CUDNN_LIBRARY_DIR="${CUDNN_LIBRARY_DIR}" \
-           pip_install --no-input --ignore-installed --no-build-isolation --no-deps "${wheels_to_install[@]}"; then
-            echo "✓ Transformer Engine installed (FP4/FP8 kernels ready where supported)"
-            # Clean up temporary directory
-            rm -rf "${tmp_te_dir}"
-            return 0
-        fi
-    fi
-    
-    # Clean up temporary directory
-    rm -rf "${tmp_te_dir}"
-
-    echo "ERROR: Transformer Engine installation FAILED. Cannot continue."
-    return 1
-}
-
-# Build/install Transformer Engine from source (or use cached wheels if available)
-# This ensures compatibility with the current PyTorch ${PYTORCH_BUILD_VERSION} build
 echo ""
-echo "Installing Transformer Engine (will use cache if available, otherwise build from source)..."
-if ! install_te_from_source; then
-    echo "ERROR: Transformer Engine installation FAILED. Setup cannot continue without Transformer Engine."
-    echo "Transformer Engine is REQUIRED for FP4/FP6/FP8 support."
-    exit 1
+echo "Installing Transformer Engine from source (cu13, arch sm_${GPU_COMPUTE_SM_NUM:-unknown})..."
+mkdir -p "${TE_SRC_DIR}"
+if [ ! -d "${TE_SRC_DIR}/.git" ]; then
+    rm -rf "${TE_SRC_DIR}"
+    git clone --recursive "${TE_REPO_URL}" "${TE_SRC_DIR}"
+fi
+git -C "${TE_SRC_DIR}" fetch --all --tags --prune --force >/dev/null 2>&1 || true
+git -C "${TE_SRC_DIR}" checkout "${TE_GIT_COMMIT}" >/dev/null 2>&1 || true
+git -C "${TE_SRC_DIR}" submodule sync --recursive >/dev/null 2>&1 || true
+git -C "${TE_SRC_DIR}" submodule update --init --recursive >/dev/null 2>&1 || true
+
+pip_install --no-input --upgrade --ignore-installed pybind11
+
+TE_BUILD_ARCH_LIST="${TE_TORCH_ARCH_LIST}"
+TE_BUILD_NVCC_ARCHS="${TE_CUTLASS_ARCHS}"
+if [ -z "${TE_BUILD_ARCH_LIST}" ]; then
+    TE_BUILD_ARCH_LIST="10.0"
+fi
+if [ -z "${TE_BUILD_NVCC_ARCHS}" ]; then
+    TE_BUILD_NVCC_ARCHS="${CUTLASS_NVCC_ARCHS_VALUE_DEFAULT}"
 fi
 
-# Override with prebuilt Transformer Engine sm_121f wheel and runtime deps (system install, no venv)
-echo ""
-echo "Installing prebuilt Transformer Engine (sm_121f) and runtime dependencies..."
-TE_PREBUILT_WHEEL_NAME="transformer_engine-2.10.0.dev0+e4bfa628-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_aarch64.whl"
-TE_PREBUILT_WHEEL="${THIRD_PARTY_DIR}/wheels/${TE_PREBUILT_WHEEL_NAME}"
-pip_install --no-cache-dir --upgrade --ignore-installed \
-  typing_extensions packaging pydantic pydantic_core typing_inspection annotated_types \
-  sympy mpmath onnxscript onnx protobuf ml_dtypes einops
-pip_install --no-cache-dir --upgrade --ignore-installed --no-deps triton==3.5.0 || {
-  echo "Warning: triton 3.5.0 install failed; Transformer Engine may be missing triton."
-}
-if ! install_wheel_from_cache "${TE_PREBUILT_WHEEL_NAME}"; then
-    echo "Warning: Prebuilt Transformer Engine wheel not found (expected ${TE_PREBUILT_WHEEL_NAME}); source-built TE remains in place."
+if ! TORCH_CUDA_ARCH_LIST="${TE_BUILD_ARCH_LIST}" \
+       CUTLASS_NVCC_ARCHS="${TE_BUILD_NVCC_ARCHS}" \
+       CMAKE_CUDA_ARCH_LIST="${TE_BUILD_NVCC_ARCHS}" \
+       NVTE_FRAMEWORK=pytorch \
+       MAX_JOBS="${MAX_JOBS:-$(nproc)}" \
+       pip_install --no-cache-dir --upgrade --ignore-installed --no-build-isolation --no-deps "${TE_SRC_DIR}"; then
+    echo "ERROR: Transformer Engine source installation failed (arch list ${TE_BUILD_ARCH_LIST}, NVCC archs ${TE_BUILD_NVCC_ARCHS})."
+    exit 1
 fi
 
 patch_installed_transformer_engine_metadata
@@ -2123,7 +1777,6 @@ echo ""
 echo "============================================================================"
 echo "Final verification: PyTorch CUDA installation"
 echo "============================================================================"
-EXPECTED_TORCH_VERSION="${PYTORCH_BUILD_VERSION}"
 
 if ! verify_and_restore_pytorch_cuda "final verification (after all installations)"; then
     echo "ERROR: Failed to restore PyTorch CUDA during final verification!"
@@ -2285,15 +1938,12 @@ PY
 }
 
 install_flash_attention() {
-    local extra_args=()
-    if [ -n "${PYTORCH_WHEEL_PATH:-}" ]; then
-        extra_args+=("${PYTORCH_WHEEL_PATH}")
+    echo "Installing FlashAttention (binary wheel only)..."
+    if ! pip_install --no-cache-dir --upgrade --ignore-installed --prefer-binary --only-binary=:all: \
+        flash-attn=="${FLASH_ATTN_EXPECTED_VERSION}"; then
+        echo "ERROR: Failed to install FlashAttention wheel. Provide a wheel at ${FLASH_ATTN_CACHE_PATH} or ${FLASH_ATTN_SPLIT_PREFIX}*."
+        return 1
     fi
-    TORCH_CUDA_ARCH_LIST="12.1" \
-    FLASH_ATTENTION_FORCE_CUDA_SM="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE}" \
-    pip_install --no-cache-dir --upgrade --ignore-installed --no-build-isolation --no-deps \
-        "${extra_args[@]}" \
-        "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}"
 }
 
 install_flash_attention_from_parts() {
@@ -2309,7 +1959,6 @@ install_flash_attention_from_parts() {
         return 1
     fi
     if cat "${PARTS[@]}" > "${combined}"; then
-        TORCH_CUDA_ARCH_LIST="12.1" \
         pip_install --no-cache-dir --upgrade --ignore-installed --no-deps "${combined}"
         status=$?
     else
@@ -2328,18 +1977,8 @@ cache_flash_attention_wheel() {
 }
 
 rebuild_flash_attention_cache() {
-    if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
-       TORCH_CUDA_ARCH_LIST="12.1" \
-       FLASH_ATTENTION_FORCE_CUDA_SM="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE}" \
-       pip_wheel \
-           --no-deps \
-           --no-build-isolation \
-           --wheel-dir "${THIRD_PARTY_DIR}/wheels" \
-           "flash-attn @ git+https://github.com/Dao-AILab/flash-attention.git@${FLASH_ATTN_TAG}" >/dev/null 2>&1; then
-        cache_flash_attention_wheel
-    else
-        echo "Warning: Failed to build FlashAttention wheel for cache."
-    fi
+    echo "Skipping FlashAttention wheel rebuild; binary-only mode."
+    return 0
 }
 
 current_flash_attn_version="$(pip_show flash-attn 2>/dev/null | awk '/Version/ {print $2}' || true)"
@@ -2361,51 +2000,10 @@ detect_gpu_sm() {
     return 1
 }
 
-GPU_COMPUTE_SM=$(detect_gpu_sm || true)
-if [[ -n "${GPU_COMPUTE_SM}" && "${GPU_COMPUTE_SM}" -ge 120 ]]; then
-    echo "Detected SM ${GPU_COMPUTE_SM}; forcing FlashAttention rebuild for this arch."
-    FLASH_ATTENTION_FORCE_CUDA_SM_VALUE="${GPU_COMPUTE_SM}"
-    pip_uninstall -y flash-attn >/dev/null 2>&1 || true
-    rm -f "${FLASH_ATTN_CACHE_PATH}" "${FLASH_ATTN_SPLIT_PREFIX}"* 2>/dev/null || true
-    current_flash_attn_version=""
-fi
-
-if [ -z "${current_flash_attn_version}" ]; then
-    if [ -f "${FLASH_ATTN_CACHE_PATH}" ]; then
-        echo "Installing FlashAttention from cached wheel ${FLASH_ATTN_CACHE_PATH}..."
-        if ensure_wheel_root_pure "${FLASH_ATTN_CACHE_PATH}" && \
-           TORCH_CUDA_ARCH_LIST="12.1" \
-           FLASH_ATTENTION_FORCE_CUDA_SM="${FLASH_ATTENTION_FORCE_CUDA_SM_VALUE}" \
-           pip_install --no-cache-dir --upgrade --ignore-installed --no-deps "${FLASH_ATTN_CACHE_PATH}"; then
-            cache_flash_attention_wheel
-        else
-            echo "Cached FlashAttention wheel install failed; rebuilding from source..."
-            if install_flash_attention; then
-                rebuild_flash_attention_cache
-            fi
-        fi
-    elif compgen -G "${FLASH_ATTN_SPLIT_PREFIX}*" >/dev/null; then
-        echo "Installing FlashAttention from cached split wheel shards..."
-        if ! install_flash_attention_from_parts; then
-            echo "Split FlashAttention wheel install failed; rebuilding from source..."
-            if install_flash_attention; then
-                rebuild_flash_attention_cache
-            fi
-        fi
-    else
-        if install_flash_attention; then
-            rebuild_flash_attention_cache
-        fi
-    fi
-
-    if compgen -G "${FLASH_ATTN_SPLIT_PREFIX}*" >/dev/null; then
-        echo "FlashAttention wheel cached as split parts (${FLASH_ATTN_SPLIT_PREFIX}*)."
-    fi
-
-    if ! pip_show flash-attn >/dev/null; then
-        echo "ERROR: FlashAttention installation FAILED. Setup cannot continue without FlashAttention."
-        exit 1
-    fi
+echo "Installing FlashAttention (binary wheels only)..."
+if ! install_flash_attention; then
+    echo "ERROR: FlashAttention installation FAILED (binary-only path)."
+    exit 1
 fi
 
 # Filter FlashAttention warnings, if present
@@ -2431,134 +2029,52 @@ if [ -n "${GPU_COMPUTE_SM:-}" ]; then
     fi
 fi
 
-echo "  Syncing vLLM source from ${VLLM_REPO_URL} (${VLLM_GIT_REF})..."
-mkdir -p "${VLLM_SRC_DIR}"
-if [ ! -d "${VLLM_SRC_DIR}/.git" ]; then
-    rm -rf "${VLLM_SRC_DIR}"
-    git clone --recursive "${VLLM_REPO_URL}" "${VLLM_SRC_DIR}"
-else
-    git -C "${VLLM_SRC_DIR}" fetch --all --tags --prune --force
-fi
-git -C "${VLLM_SRC_DIR}" checkout "${VLLM_GIT_REF}"
-git -C "${VLLM_SRC_DIR}" pull --ff-only origin "${VLLM_GIT_REF}" >/dev/null 2>&1 || \
-    echo "  Warning: Unable to fast-forward vLLM repository; proceeding with local ${VLLM_GIT_REF}"
-git -C "${VLLM_SRC_DIR}" submodule sync --recursive
-git -C "${VLLM_SRC_DIR}" submodule update --init --recursive
-VLLM_TARGET_SHA="$(git -C "${VLLM_SRC_DIR}" rev-parse --short HEAD)"
-
+# Binary-only mode: skip vLLM source sync/caching
 VLLM_WHEEL_PATH=""
-if [ -f "${VLLM_WHEEL_INFO_PATH}" ]; then
-    VLLM_WHEEL_PATH="$(python3 <<PY || true
-import json
-import pathlib
-
-info_path = pathlib.Path("${VLLM_WHEEL_INFO_PATH}")
-if not info_path.exists():
-    raise SystemExit(0)
-
-try:
-    data = json.loads(info_path.read_text())
-except Exception:
-    raise SystemExit(0)
-
-if data.get("commit") != "${VLLM_TARGET_SHA}":
-    raise SystemExit(0)
-
-wheel_name = data.get("wheel")
-if not wheel_name:
-    raise SystemExit(0)
-
-candidate = pathlib.Path("${VLLM_WHEEL_DIR}") / wheel_name
-if candidate.exists():
-    print(candidate)
-PY
-)"
-fi
-
 VLLM_WHEEL_HAS_PARTS=0
-if [ -n "${VLLM_WHEEL_PATH}" ] && compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
-    VLLM_WHEEL_HAS_PARTS=1
+
+echo "Installing vLLM from cu13 wheels (binary only)..."
+if ! pip_install --no-cache-dir --upgrade --ignore-installed --prefer-binary --only-binary=:all: \
+    ${VLLM_EXTRA_INDEX_URL:+--extra-index-url "${VLLM_EXTRA_INDEX_URL}"} \
+    vllm; then
+    echo "ERROR: Failed to install prebuilt vLLM wheel from index ${VLLM_EXTRA_INDEX_URL:-PyPI}."
+    exit 1
 fi
+VLLM_WHEEL_PATH=""
+VLLM_WHEEL_HAS_PARTS=0
+VLLM_PREBUILT_INSTALLED=1
 
-vllm_build_needed=0
-if [ -z "${VLLM_WHEEL_PATH}" ]; then
-    vllm_build_needed=1
-elif [ ! -f "${VLLM_WHEEL_PATH}" ] && [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ]; then
-    vllm_build_needed=1
-fi
-
-if [ "${vllm_build_needed}" -eq 1 ]; then
-    echo "  Building vLLM wheel from ${VLLM_GIT_REF}@${VLLM_TARGET_SHA}..."
-    tmp_vllm_wheel_dir=$(mktemp -d "${TMPDIR:-/tmp}/vllm-wheel-build.XXXXXX")
-    pip_uninstall -y vllm >/dev/null 2>&1 || true
-    TORCH_CUDA_ARCH_LIST="${VLLM_ARCH_LIST}" \
-    VLLM_TARGET_DEVICE="cuda" \
-    CUDA_HOME="${CUDA_HOME_DIR}" \
-    CUDACXX="${CUDA_HOME_DIR}/bin/nvcc" \
-    MAX_JOBS="${MAX_JOBS:-$(nproc)}" \
-    pip_wheel --no-deps --no-build-isolation --wheel-dir "${tmp_vllm_wheel_dir}" "${VLLM_SRC_DIR}"
-
-    VLLM_WHEEL_SOURCE="$(find "${tmp_vllm_wheel_dir}" -maxdepth 1 -name "vllm-*.whl" -type f | sort | tail -n 1)"
-    if [ -z "${VLLM_WHEEL_SOURCE}" ] || [ ! -f "${VLLM_WHEEL_SOURCE}" ]; then
-        echo "ERROR: vLLM wheel build failed (no wheel found in ${tmp_vllm_wheel_dir})"
-        rm -rf "${tmp_vllm_wheel_dir}"
+if [ "${VLLM_PREBUILT_INSTALLED}" -ne 1 ]; then
+    if [ -z "${VLLM_WHEEL_PATH}" ] || { [ ! -f "${VLLM_WHEEL_PATH}" ] && [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ]; }; then
+        echo "ERROR: vLLM wheel is missing (expected under ${VLLM_WHEEL_DIR})"
         exit 1
     fi
 
-    VLLM_WHEEL_BASENAME="$(basename "${VLLM_WHEEL_SOURCE}")"
-    mkdir -p "${VLLM_WHEEL_DIR}"
-    VLLM_WHEEL_PATH="${VLLM_WHEEL_DIR}/${VLLM_WHEEL_BASENAME}"
-    cp "${VLLM_WHEEL_SOURCE}" "${VLLM_WHEEL_PATH}"
-    rm -rf "${VLLM_WHEEL_PATH}.part"* 2>/dev/null || true
-    VLLM_WHEEL_HAS_PARTS=0
+    if [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ] && ! compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
+        echo "Splitting vLLM wheel into <50MB chunks under ${VLLM_WHEEL_DIR}"
+        split -b 45m -d -a 2 "${VLLM_WHEEL_PATH}" "${VLLM_WHEEL_PATH}.part"
+    fi
+    if compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
+        VLLM_WHEEL_HAS_PARTS=1
+    fi
 
-    python3 <<PY
-import json
-import pathlib
+    tmp_vllm_install_dir=$(mktemp -d "${TMPDIR:-/tmp}/vllm-wheel-install.XXXXXX")
+    vllm_wheel_to_install=$(reassemble_split_wheel "${VLLM_WHEEL_PATH}" "${tmp_vllm_install_dir}")
 
-wheel_path = pathlib.Path("${VLLM_WHEEL_PATH}")
-info_path = pathlib.Path("${VLLM_WHEEL_INFO_PATH}")
-info = {
-    "wheel": wheel_path.name,
-    "git_ref": "${VLLM_GIT_REF}",
-    "commit": "${VLLM_TARGET_SHA}",
-    "arch_list": "${VLLM_ARCH_LIST}",
-}
-info_path.write_text(json.dumps(info, indent=2))
-print(f"[setup] Cached vLLM wheel metadata at {info_path}")
-PY
-    rm -rf "${tmp_vllm_wheel_dir}"
-else
-    echo "  Using cached vLLM wheel for commit ${VLLM_TARGET_SHA}: ${VLLM_WHEEL_PATH}"
-fi
+    if [ -z "${vllm_wheel_to_install}" ] || [ ! -f "${vllm_wheel_to_install}" ]; then
+        echo "ERROR: Could not reassemble vLLM wheel from ${VLLM_WHEEL_PATH}"
+        rm -rf "${tmp_vllm_install_dir}"
+        exit 1
+    fi
 
-if [ -z "${VLLM_WHEEL_PATH}" ] || { [ ! -f "${VLLM_WHEEL_PATH}" ] && [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ]; }; then
-    echo "ERROR: vLLM wheel is missing (expected under ${VLLM_WHEEL_DIR})"
-    exit 1
-fi
-
-if [ "${VLLM_WHEEL_HAS_PARTS}" -eq 0 ] && ! compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
-    echo "Splitting vLLM wheel into <50MB chunks under ${VLLM_WHEEL_DIR}"
-    split -b 45m -d -a 2 "${VLLM_WHEEL_PATH}" "${VLLM_WHEEL_PATH}.part"
-fi
-if compgen -G "${VLLM_WHEEL_PATH}.part*" >/dev/null; then
-    VLLM_WHEEL_HAS_PARTS=1
-fi
-
-tmp_vllm_install_dir=$(mktemp -d "${TMPDIR:-/tmp}/vllm-wheel-install.XXXXXX")
-vllm_wheel_to_install=$(reassemble_split_wheel "${VLLM_WHEEL_PATH}" "${tmp_vllm_install_dir}")
-
-if [ -z "${vllm_wheel_to_install}" ] || [ ! -f "${vllm_wheel_to_install}" ]; then
-    echo "ERROR: Could not reassemble vLLM wheel from ${VLLM_WHEEL_PATH}"
+    pip_uninstall -y vllm >/dev/null 2>&1 || true
+    TORCH_CUDA_ARCH_LIST="${VLLM_ARCH_LIST}" \
+    VLLM_TARGET_DEVICE="cuda" \
+    pip_install --no-cache-dir --force-reinstall --upgrade --no-deps "${vllm_wheel_to_install}"
     rm -rf "${tmp_vllm_install_dir}"
-    exit 1
+else
+    echo "vLLM prebuilt wheel installed from ${VLLM_EXTRA_INDEX_URL:-PyPI}; skipping local wheel cache handling."
 fi
-
-pip_uninstall -y vllm >/dev/null 2>&1 || true
-TORCH_CUDA_ARCH_LIST="${VLLM_ARCH_LIST}" \
-VLLM_TARGET_DEVICE="cuda" \
-pip_install --no-cache-dir --force-reinstall --upgrade --no-deps "${vllm_wheel_to_install}"
-rm -rf "${tmp_vllm_install_dir}"
 
 python3 <<'PY'
 try:
@@ -3275,6 +2791,7 @@ if python3 tools/verification/verify_gds.py; then
 else
     echo "GDS verification had issues (may need to load nvidia-fs module)"
     echo "   Load module with: sudo modprobe nvidia-fs"
+    echo "   Ensure a supported storage backend (NVMe, BeeGFS, NFS, WekaFS, etc.) is configured and rerun /usr/local/cuda/gds/tools/gdscheck -p"
 fi
 
 echo ""
@@ -3307,7 +2824,7 @@ echo "  • PyTorch source build (${PYTORCH_BUILD_VERSION:-custom}) with NVIDIA 
 echo "  • CUDA ${CUDA_FULL_VERSION} toolchain and development tools"
 echo "  • NCCL ${NCCL_SHORT_VERSION} (Blackwell-optimized with NVLS support)"
 echo "  • NVSHMEM 3.4.5 runtime and headers (CUDA 13)"
-echo "  • GPUDirect Storage (GDS) tools, drivers, and kvikio library"
+echo "  • GPUDirect Storage (GDS) tools, drivers, kvikio library, and boot-time nvidia-fs load config"
 echo "  • NVIDIA Nsight Systems (latest available)"
 echo "  • NVIDIA Nsight Compute (latest available)"
 echo "  • All project dependencies"
@@ -3323,6 +2840,7 @@ echo "Post-Run Checklist:"
 echo "  • Verify Python runtime:          python --version  (expect 3.12.x)"
 echo "  • Verify CUDA compiler:           nvcc --version    (expect release 13.0.88 / Update 2)"
 echo "  • Verify driver & GPU status:     nvidia-smi        (expect driver ${REQUIRED_DRIVER_VERSION})"
+echo "  • Storage: Configure GDS-supported storage (NVMe, BeeGFS, NFS, WekaFS, etc.) and validate with /usr/local/cuda/gds/tools/gdscheck -p"
 echo "  • Verify PyTorch arch coverage:   python - <<'PY'"
 echo "                                      import torch"
 echo "                                      print(torch.cuda.get_arch_list())"

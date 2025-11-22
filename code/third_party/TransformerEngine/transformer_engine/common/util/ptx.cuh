@@ -24,10 +24,6 @@ namespace transformer_engine {
 
 namespace ptx {
 
-// Temporarily disable arch/family static asserts so we can target newer arches (e.g., SM121)
-// even if CUDA headers don't yet expose the corresponding feature macros.
-#define NVTE_DISABLE_ARCH_STATIC_ASSERT 1
-
 template <int N>
 struct ArchSpecific {
   constexpr static int id = N * 10;
@@ -35,12 +31,10 @@ struct ArchSpecific {
   template <int CurrentArch, int ArchSpecific, int FamilySpecific>
   constexpr static bool compatible() {
     if constexpr (CurrentArch == id) {
-#if !defined(NVTE_DISABLE_ARCH_STATIC_ASSERT)
       static_assert(ArchSpecific == CurrentArch,
                     "Compiled for the generic architecture, while utilizing arch-specific "
                     "features. Please compile for smXXXa architecture instead of smXXX "
                     "architecture.");
-#endif
       return true;
     } else {
       return false;
@@ -55,12 +49,10 @@ struct FamilySpecific {
   template <int CurrentArch, int ArchSpecific, int FamilySpecific>
   constexpr static bool compatible() {
     if constexpr ((CurrentArch / 100) == (id / 100)) {
-#if !defined(NVTE_DISABLE_ARCH_STATIC_ASSERT)
       static_assert(FamilySpecific == CurrentArch,
                     "Compiled for the generic architecture, while utilizing family-specific "
                     "features. Please compile for smXXXf architecture instead of smXXX "
                     "architecture.");
-#endif
       return true;
     } else {
       return false;
