@@ -1,0 +1,67 @@
+{
+  "examples": {
+    "memory_cuda": {
+      "example": "memory",
+      "metadata": {
+        "best_optimization": "transfer_zero_copy",
+        "best_optimization_file": "optimized_memory_transfer_zero_copy.cu",
+        "best_optimization_speedup": 4.64307698473319,
+        "best_optimization_time_ms": 2015.0348839997605,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:15.220045"
+      },
+      "metrics": {
+        "baseline_p75_ms": 9443.373588001123,
+        "baseline_p90_ms": 9443.373588001123,
+        "baseline_time_ms": 9355.962093333801,
+        "best_optimized_p75_ms": 1986.975957002869,
+        "best_optimized_p90_ms": 1986.975957002869,
+        "best_optimized_speedup": 4.64307698473319,
+        "best_optimized_time_ms": 2015.0348839997605,
+        "best_speedup": 4.64307698473319
+      },
+      "type": "cuda"
+    },
+    "memory_transfer": {
+      "example": "memory_transfer",
+      "metadata": {
+        "best_optimization": "optimized_memory_transfer",
+        "best_optimization_file": "optimized_memory_transfer.py",
+        "best_optimization_speedup": 1.006388298653907,
+        "best_optimization_time_ms": 0.7523756790161132,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:40.609584"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.7555519938468933,
+        "baseline_time_ms": 0.7571820795536042,
+        "best_optimized_p75_ms": 0.7568640112876892,
+        "best_optimized_speedup": 1.006388298653907,
+        "best_optimized_time_ms": 0.7523756790161132,
+        "best_speedup": 1.006388298653907
+      },
+      "type": "python"
+    },
+    "uma_memory_reporting": {
+      "example": "uma_memory_reporting",
+      "metadata": {
+        "best_optimization": "optimized_uma_memory_reporting",
+        "best_optimization_file": "optimized_uma_memory_reporting.py",
+        "best_optimization_speedup": 0.47334744292349984,
+        "best_optimization_time_ms": 0.12702720016241073,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:40.986616"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.0435199998319149,
+        "baseline_time_ms": 0.0601280003786087,
+        "best_optimized_p75_ms": 0.12227199971675873,
+        "best_optimized_speedup": 0.47334744292349984,
+        "best_optimized_time_ms": 0.12702720016241073,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

@@ -5,20 +5,20 @@
       "metadata": {
         "best_optimization": "graph_full",
         "best_optimization_file": "optimized_fast_nanochat_graph_full.py",
-        "best_optimization_speedup": 4.280539595577595,
-        "best_optimization_time_ms": 9.996448040008545,
-        "git_commit": "4b54602288ae53d2f7e59eb7272be6ba8e236199",
-        "updated_at": "2025-11-22T18:04:14.298510"
+        "best_optimization_speedup": 8.365417997893251,
+        "best_optimization_time_ms": 10.338556170463562,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:18:28.871536"
       },
       "metrics": {
         "baseline_p75_ms": 0.0,
-        "baseline_p90_ms": 42.32294464111328,
-        "baseline_time_ms": 42.790191650390625,
+        "baseline_p90_ms": 58.80972671508789,
+        "baseline_time_ms": 57.06902742385864,
         "best_optimized_p75_ms": 0.0,
-        "best_optimized_p90_ms": 9.892352104187012,
-        "best_optimized_speedup": 5.5377352793867995,
-        "best_optimized_time_ms": 9.996448040008545,
-        "best_speedup": 5.5377352793867995
+        "best_optimized_p90_ms": 10.327136039733887,
+        "best_optimized_speedup": 15.472138121030783,
+        "best_optimized_time_ms": 10.338556170463562,
+        "best_speedup": 15.472138121030783
       },
       "type": "python"
     },
@@ -40,6 +40,28 @@
         "best_optimized_p90_ms": 3065.692138671875,
         "best_optimized_speedup": 0.021557619146282667,
         "best_optimized_time_ms": 2609.628125,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    },
+    "fast_nanochat_fp4": {
+      "example": "fast_nanochat_fp4",
+      "metadata": {
+        "best_optimization": "optimized_fast_nanochat_fp4",
+        "best_optimization_file": "optimized_fast_nanochat_fp4.py",
+        "best_optimization_speedup": 0.10082148433084924,
+        "best_optimization_time_ms": 836.171817779541,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:19:01.450489"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.0,
+        "baseline_p90_ms": 86.57174682617188,
+        "baseline_time_ms": 84.30408382415771,
+        "best_optimized_p75_ms": 0.0,
+        "best_optimized_p90_ms": 1114.0748291015625,
+        "best_optimized_speedup": 0.10082148433084924,
+        "best_optimized_time_ms": 836.171817779541,
         "best_speedup": 1.0
       },
       "type": "python"

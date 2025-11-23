@@ -110,6 +110,10 @@ VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_
 TE_REPO_URL="${TE_REPO_URL:-https://github.com/NVIDIA/TransformerEngine.git}"
 TE_GIT_COMMIT="${TE_GIT_COMMIT:-f8cb598c9f3af2bc512a051abec75590b25f54c4}"
 TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine}"
+CUTLASS_REPO_URL="${CUTLASS_REPO_URL:-https://github.com/NVIDIA/cutlass.git}"
+CUTLASS_REF="${CUTLASS_REF:-v4.2.1}"
+CUTLASS_TARGET_VERSION="${CUTLASS_REF#v}"
+CUTLASS_SRC_DIR="${CUTLASS_SRC_DIR:-${THIRD_PARTY_DIR}/cutlass}"
 PIP_ROOT_USER_ACTION="ignore"
 SOURCE_BUILD_ALLOWED=0
 GPU_COMPUTE_SM_NUM=""
@@ -340,55 +344,6 @@ for dist_name in ("transformer_engine", "transformer_engine_torch", "transformer
 PY
 }
 
-patch_cutlass_synclog_guards() {
-    python3 <<'PY'
-import re
-from pathlib import Path
-
-TARGET_FILES = [
-    Path("third_party/cutlass/include/cute/arch/copy_sm90_tma.hpp"),
-]
-
-def patch_file(path: Path) -> bool:
-    if not path.exists():
-        return False
-    text = path.read_text()
-    include_marker = "#include \"cutlass/arch/synclog.hpp\"\n\n"
-    macro_block = (
-        "#if !defined(CUTE_CALL_SYNCLOG)\n"
-        "#if defined(CUTLASS_ENABLE_SYNCLOG)\n"
-        "#define CUTE_CALL_SYNCLOG(expr) expr\n"
-        "#else\n"
-        "#define CUTE_CALL_SYNCLOG(expr) ((void)0)\n"
-        "#endif\n"
-        "#endif\n\n"
-    )
-    changed = False
-    if include_marker in text and "CUTE_CALL_SYNCLOG" not in text:
-        text = text.replace(include_marker, include_marker + macro_block, 1)
-        changed = True
-    pattern = re.compile(r"(cutlass::arch::synclog_emit_[A-Za-z0-9_]+\([^;]+?\))\s*;")
-    def repl(match):
-        return f"CUTE_CALL_SYNCLOG({match.group(1)});"
-    new_text, count = pattern.subn(repl, text)
-    if count > 0:
-        text = new_text
-        changed = True
-    if changed:
-        path.write_text(text)
-    return changed
-
-patched = False
-for file_path in TARGET_FILES:
-    if patch_file(file_path):
-        print(f"[setup] Patched CUTLASS synclog guards in {file_path}")
-        patched = True
-
-if not patched:
-    print("[setup] CUTLASS synclog guard patch skipped (already applied or file missing)")
-PY
-}
-
 patch_transformer_engine_loader() {
     python3 <<'PY'
 from importlib.metadata import PackageNotFoundError, distribution
@@ -531,7 +486,6 @@ if not patched_any:
 PY
 }
 
-patch_cutlass_synclog_guards
 patch_transformer_engine_loader
 install_proton_cli_stub
 remove_conflicting_user_triton
@@ -1715,7 +1669,40 @@ if ! verify_and_restore_pytorch_cuda "torchvision installation"; then
 fi
 
 echo ""
-echo "Skipping CUTLASS source installs and builds (cu13 binaries only)."
+echo "Refreshing CUTLASS source tree (${CUTLASS_REF}) for local CUDA builds..."
+CURRENT_CUTLASS_VERSION=$(CUTLASS_SRC_DIR="${CUTLASS_SRC_DIR}" python3 <<'PY' | tr -d '\n'
+from pathlib import Path
+import os
+import re
+root = Path(os.environ.get("CUTLASS_SRC_DIR", ""))
+version_path = root / "include" / "cutlass" / "version.h"
+if not version_path.exists():
+    print("")
+    raise SystemExit(0)
+text = version_path.read_text()
+def grab(name: str) -> str:
+    match = re.search(r"#define\\s+%s\\s+([0-9]+)" % name, text)
+    return match.group(1) if match else ""
+parts = [grab("CUTLASS_MAJOR"), grab("CUTLASS_MINOR"), grab("CUTLASS_PATCH")]
+if "" in parts:
+    print("")
+else:
+    print(".".join(parts))
+PY
+)
+
+if [ ! -d "${CUTLASS_SRC_DIR}" ] || [ -z "${CURRENT_CUTLASS_VERSION}" ]; then
+    echo "  CUTLASS source missing or unreadable; installing ${CUTLASS_REF}..."
+    CUTLASS_REPO="${CUTLASS_REPO_URL}" CUTLASS_REF="${CUTLASS_REF}" "${PROJECT_ROOT}/scripts/install_cutlass.sh"
+    CURRENT_CUTLASS_VERSION="${CUTLASS_TARGET_VERSION}"
+elif [ "${CURRENT_CUTLASS_VERSION}" != "${CUTLASS_TARGET_VERSION}" ]; then
+    echo "  CUTLASS source is ${CURRENT_CUTLASS_VERSION} (target ${CUTLASS_TARGET_VERSION}); reinstalling..."
+    CUTLASS_REPO="${CUTLASS_REPO_URL}" CUTLASS_REF="${CUTLASS_REF}" "${PROJECT_ROOT}/scripts/install_cutlass.sh"
+    CURRENT_CUTLASS_VERSION="${CUTLASS_TARGET_VERSION}"
+else
+    echo "  CUTLASS source tree already at ${CURRENT_CUTLASS_VERSION}; keeping."
+fi
+echo "  CUTLASS headers available at ${CUTLASS_SRC_DIR}/include"
 
 # Ensure monitoring/runtime dependencies are available even if requirements were cached
 echo ""

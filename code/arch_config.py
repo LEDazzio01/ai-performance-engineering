@@ -36,11 +36,18 @@ except ImportError:
     _SDPBackend = None  # type: ignore[assignment]
     _NEW_SDPA_API_AVAILABLE = False
 
-_PREFERRED_SDPA_BACKENDS: List[Any] = []
-if _SDPBackend is not None:
-    for _backend_name in ("CUDNN", "FLASH_ATTENTION", "EFFICIENT_ATTENTION"):
-        if hasattr(_SDPBackend, _backend_name):
-            _PREFERRED_SDPA_BACKENDS.append(getattr(_SDPBackend, _backend_name))
+def _default_sdpa_backends() -> List[Any]:
+    if _SDPBackend is None:
+        return []
+    order: List[Any] = []
+    # Prefer TE fused attention on Blackwell/GB200 where available, then Flash, then other fused paths.
+    for name in ("TRANSFORMER_ENGINE", "FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN"):
+        if hasattr(_SDPBackend, name):
+            order.append(getattr(_SDPBackend, name))
+    return order
+
+
+_PREFERRED_SDPA_BACKENDS: List[Any] = _default_sdpa_backends()
 
 
 def prefer_sdpa_backends(order: Optional[List[Any]] = None):
@@ -286,11 +293,11 @@ class ArchitectureConfig:
                 triton_cfg = cfg.triton
                 if hasattr(triton_cfg, "unique_kernel_names"):
                     triton_cfg.unique_kernel_names = True
-                # NEW in PyTorch 2.10: CUDA graph trees for better performance
+                # Avoid automatic cudagraph wrapping to prevent RNG capture issues in setup code.
                 if hasattr(triton_cfg, "cudagraph_trees"):
-                    triton_cfg.cudagraph_trees = True
+                    triton_cfg.cudagraph_trees = False
                 if hasattr(triton_cfg, "cudagraphs"):
-                    triton_cfg.cudagraphs = True
+                    triton_cfg.cudagraphs = False
             
             # Enable max-autotune GEMM backends (PyTorch 2.10)
             # CUTLASS provides optimized GEMM kernels for NVIDIA GPUs
@@ -608,4 +615,3 @@ def configure_optimizations() -> None:
 
 arch_config = ArchitectureConfig()
 configure_optimizations()
-

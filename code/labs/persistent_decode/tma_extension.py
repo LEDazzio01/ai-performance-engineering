@@ -38,7 +38,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     cuda_src = r"""
 #include <torch/extension.h>
-#include <ATen/cuda/CUDAGuard.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda/pipeline>
 

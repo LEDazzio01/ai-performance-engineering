@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - optional bootstrap
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
 if not _CUTLASS_INCLUDE.exists():
-    _CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "cutlass_patch" / "include"
+    _CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "cutlass" / "include"
 if not _CUTLASS_INCLUDE.exists():
     _CUTLASS_INCLUDE = _REPO_ROOT / "third_party" / "cutlass_latest" / "cutlass-main" / "include"
 _LEGACY_CUTLASS_INCLUDE = _CUTLASS_INCLUDE

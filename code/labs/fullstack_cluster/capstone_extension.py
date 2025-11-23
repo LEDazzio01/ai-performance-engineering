@@ -15,6 +15,8 @@ def load_capstone_module():
 
     extra_cuda_cflags = [
         "-std=c++20",
+        "-gencode=arch=compute_100,code=sm_100",
+        "-gencode=arch=compute_103,code=sm_103",
         "-gencode=arch=compute_121,code=sm_121",
         "-lineinfo",
     ]

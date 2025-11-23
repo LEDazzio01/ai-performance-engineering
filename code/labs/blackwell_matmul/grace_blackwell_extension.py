@@ -11,6 +11,7 @@ def load_grace_blackwell_module():
     """Compile (if needed) and return the CUDA 13 extension."""
     root = Path(__file__).resolve().parent
     src = root / "grace_blackwell_kernels.cu"
+    cutlass_include = root.parents[1] / "third_party" / "cutlass" / "include"
 
     extra_cuda_cflags = [
         "-std=c++20",
@@ -24,6 +25,7 @@ def load_grace_blackwell_module():
         "-gencode=arch=compute_121,code=compute_121",
         "-lineinfo",
         "-Xptxas=-v",
+        f"-I{cutlass_include}",
     ]
     extra_cflags = ["-std=c++20"]
 

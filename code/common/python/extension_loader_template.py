@@ -81,10 +81,16 @@ def load_cuda_extension(
             if common_headers.exists():
                 include_dirs.append(common_headers)
                 break
+        te_cutlass = repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
+        if te_cutlass.exists():
+            include_dirs.append(te_cutlass)
+        cutlass_headers = repo_root / "third_party" / "cutlass" / "include"
+        if cutlass_headers.exists():
+            include_dirs.append(cutlass_headers)
         
         # Default CUDA flags
         if extra_cuda_cflags is None:
-            extra_cuda_cflags = ["-lineinfo"]
+            extra_cuda_cflags = ["-lineinfo", "--expt-relaxed-constexpr", "--expt-extended-lambda"]
         
         # Add include directories to flags
         cuda_flags = extra_cuda_cflags.copy()

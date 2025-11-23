@@ -1,0 +1,45 @@
+{
+  "examples": {
+    "async_prefetch": {
+      "example": "async_prefetch",
+      "metadata": {
+        "best_optimization": "optimized_async_prefetch",
+        "best_optimization_file": "optimized_async_prefetch.py",
+        "best_optimization_speedup": 3.067435134083469,
+        "best_optimization_time_ms": 295.847403666509,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T06:38:12.249642"
+      },
+      "metrics": {
+        "baseline_p75_ms": 894.3314600001031,
+        "baseline_time_ms": 907.4927203340243,
+        "best_optimized_p75_ms": 295.74519299785607,
+        "best_optimized_speedup": 3.067435134083469,
+        "best_optimized_time_ms": 295.847403666509,
+        "best_speedup": 3.067435134083469
+      },
+      "type": "python"
+    },
+    "tma_copy": {
+      "example": "tma_copy",
+      "metadata": {
+        "best_optimization": "optimized_tma_copy",
+        "best_optimization_file": "optimized_tma_copy.py",
+        "best_optimization_speedup": 1.028856067932488,
+        "best_optimization_time_ms": 519.0816030008136,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T04:57:42.170618"
+      },
+      "metrics": {
+        "baseline_p75_ms": 534.0602569995099,
+        "baseline_time_ms": 534.0602569995099,
+        "best_optimized_p75_ms": 519.0816030008136,
+        "best_optimized_speedup": 1.028856067932488,
+        "best_optimized_time_ms": 519.0816030008136,
+        "best_speedup": 1.028856067932488
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

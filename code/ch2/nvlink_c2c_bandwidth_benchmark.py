@@ -40,9 +40,11 @@ def detect_architecture():
     
     props = torch.cuda.get_device_properties(0)
     
-    if props.major == 12:
+    if props.major >= 12:
         return "gb10", props.major, props.minor
-    elif props.major == 10 and props.minor == 0:
+    elif props.major == 10:
+        if props.minor >= 3:
+            return "b300", props.major, props.minor
         return "b200", props.major, props.minor
     else:
         return "other", props.major, props.minor
@@ -199,9 +201,12 @@ def main():
     if arch_type == "gb10":
         print(f"Grace-Blackwell GB10 (SM {major}.{minor})")
         print(f"Interconnect: NVLink-C2C (900 GB/s aggregate, ≈450/dir)")
+    elif arch_type == "b300":
+        print(f"Blackwell B300 (SM {major}.{minor})")
+        print(f"Interconnect: NVLink 5.0 / PCIe 5.0 depending on host wiring")
     elif arch_type == "b200":
         print(f"Blackwell B200 (SM {major}.{minor})")
-        print(f"Interconnect: PCIe 5.0 x16 (~128 GB/s aggregate)")
+        print(f"Interconnect: NVLink 5.0 / PCIe 5.0 depending on host wiring")
     else:
         print(f"Generic GPU (SM {major}.{minor})")
         print(f"Interconnect: Unknown")
@@ -304,6 +309,17 @@ def main():
         print("\nℹ️  Note: GB10 vs B200 comparison:")
         print(f"  • GB10 NVLink-C2C:  ~900 GB/s  ({900/theoretical:.1f}x faster)")
         print(f"  • B200 PCIe 5.0:    ~{theoretical:.0f} GB/s")
+        print(f"  • For CPU-GPU data movement, GB10 has {900/h2d_peak:.1f}x more headroom")
+    elif arch_type == "b300":
+        theoretical = 64.0  # PCIe 5.0
+        print(f"PCIe 5.0 Theoretical:      {theoretical:.0f} GB/s")
+        print(f"H2D Achieved:              {h2d_peak:.2f} GB/s ({(h2d_peak/theoretical)*100:.1f}%)")
+        print(f"D2H Achieved:              {d2h_peak:.2f} GB/s ({(d2h_peak/theoretical)*100:.1f}%)")
+        print(f"Bidirectional:             {bidir_peak:.2f} GB/s ({(bidir_peak/theoretical)*100:.1f}%)")
+        
+        print("\nℹ️  Note: GB10 vs B300 comparison:")
+        print(f"  • GB10 NVLink-C2C:  ~900 GB/s  ({900/theoretical:.1f}x faster)")
+        print(f"  • B300 PCIe 5.0:    ~{theoretical:.0f} GB/s")
         print(f"  • For CPU-GPU data movement, GB10 has {900/h2d_peak:.1f}x more headroom")
     
     print("\n" + "=" * 80)

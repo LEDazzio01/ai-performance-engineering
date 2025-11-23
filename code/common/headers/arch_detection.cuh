@@ -79,16 +79,56 @@ inline constexpr CapabilityData kCapabilityTable[] = {
         128, 128, 64,
         false,
         false
+    },
+    {
+        10, 3,
+        {1024, 128, 128},
+        true,
+        true,
+        8,
+        ArchitectureLimits::TensorCoreGeneration::Blackwell,
+        128, 128, 64,
+        false,
+        false
+    },
+    {
+        12, 0,
+        {256, 64, 32},
+        true,
+        false,
+        8,
+        ArchitectureLimits::TensorCoreGeneration::Blackwell,
+        128, 128, 64,
+        true,
+        true
+    },
+    {
+        12, 1,
+        {256, 64, 32},
+        true,
+        false,
+        8,
+        ArchitectureLimits::TensorCoreGeneration::Blackwell,
+        128, 128, 64,
+        true,
+        true
     }
 };
 
 inline const CapabilityData* find_capability(int major, int minor) {
+    const CapabilityData* major_match = nullptr;
     for (const auto& entry : kCapabilityTable) {
         if (entry.major == major && entry.minor == minor) {
             return &entry;
         }
+        if (entry.major == major) {
+            // Fall back to a same-major entry if the exact minor is missing.
+            if (!major_match || entry.minor <= minor) {
+                major_match = &entry;
+            }
+        }
     }
-    return nullptr;
+    return major_match;
 }
 
 inline TMALimits get_tma_limits() {
@@ -163,7 +203,7 @@ inline const ArchitectureLimits& get_architecture_limits() {
         cached.has_nvlink_c2c = entry->has_nvlink_c2c;
         cached.kernel_parameter_limit = entry->has_grace_coherence ? 32768 : 4096;
     } else {
-        cached.kernel_parameter_limit = (props.major == 12 && props.minor >= 1) ? 32768 : 4096;
+        cached.kernel_parameter_limit = (props.major == 12) ? 32768 : 4096;
         if (props.major >= 10) {
             cached.supports_clusters = true;
             cached.max_cluster_size = 8;
@@ -193,7 +233,7 @@ inline const ArchitectureLimits& get_architecture_limits() {
             cached.tensor_tile_n = 32;
             cached.tensor_tile_k = 16;
         }
-        cached.has_grace_coherence = (props.major == 12 && props.minor >= 1);
+        cached.has_grace_coherence = (props.major == 12);
         cached.has_nvlink_c2c = cached.has_grace_coherence;
     }
 

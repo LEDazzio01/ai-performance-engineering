@@ -43,6 +43,24 @@ except Exception:  # pragma: no cover - safe fallback
     TE_AVAILABLE = False
 
 
+def _te_version_at_least(major: int, minor: int = 0) -> bool:
+    if not TE_AVAILABLE or not hasattr(te, "__version__"):
+        return False
+    try:
+        parts = te.__version__.split(".")
+        return int(parts[0]) > major or (int(parts[0]) == major and int(parts[1]) >= minor)
+    except Exception:
+        return False
+
+
+def _is_blackwell_family() -> bool:
+    if not torch.cuda.is_available():
+        return False
+    cc_major, _ = torch.cuda.get_device_capability()
+    # Treat Blackwell (SM100/SM103) and Grace-Blackwell (SM12x) as Blackwell-class for defaults.
+    return cc_major >= 10
+
+
 @dataclass
 class NanoChatConfig:
     batch_size: int = 4
@@ -415,6 +433,13 @@ class NanoChatBenchmark(BaseBenchmark):
         if torch.isnan(self.state_buffer).any():
             return "NaN detected in decode state"
         return None
+
+    def teardown(self) -> None:
+        # Release model buffers between variants to keep allocator usage low.
+        for attr in ("embedding", "prefill_mlp", "decode_mlp", "lm_head", "host_prompt", "gpu_prompt", "state_buffer", "current_tokens", "next_token_out", "graph_logits", "graph_next_token"):
+            if hasattr(self, attr):
+                setattr(self, attr, None)
+        torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(

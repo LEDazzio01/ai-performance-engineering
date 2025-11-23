@@ -1,0 +1,25 @@
+{
+  "examples": {
+    "cuda_graphs": {
+      "example": "cuda_graphs",
+      "metadata": {
+        "best_optimization": "optimized_cuda_graphs",
+        "best_optimization_file": "optimized_cuda_graphs.py",
+        "best_optimization_speedup": 3.247320549192274,
+        "best_optimization_time_ms": 1.3375487804412842,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:17:21.381785"
+      },
+      "metrics": {
+        "baseline_p75_ms": 4.382976055145264,
+        "baseline_time_ms": 4.343449640274048,
+        "best_optimized_p75_ms": 1.3005119562149048,
+        "best_optimized_speedup": 3.247320549192274,
+        "best_optimized_time_ms": 1.3375487804412842,
+        "best_speedup": 3.247320549192274
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

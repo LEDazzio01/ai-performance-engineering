@@ -458,7 +458,7 @@ def print_grace_system_info() -> None:
         print(f"\nGPUs: {info['gpus']}")
         for i in range(info["gpus"]):
             props = torch.cuda.get_device_properties(i)
-            is_blackwell = props.major == 10 and props.minor == 0
+            is_blackwell = props.major >= 10
             print(f"  GPU {i}: {props.name}")
             if is_blackwell:
                 print(f"    Blackwell B200/B300")

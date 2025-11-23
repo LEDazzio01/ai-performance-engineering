@@ -1,0 +1,25 @@
+{
+  "examples": {
+    "tmem_triple_overlap": {
+      "example": "tmem_triple_overlap",
+      "metadata": {
+        "best_optimization": "optimized_tmem_triple_overlap",
+        "best_optimization_file": "optimized_tmem_triple_overlap.py",
+        "best_optimization_speedup": 0.9501352640486549,
+        "best_optimization_time_ms": 380.29690999974264,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:53.594008"
+      },
+      "metrics": {
+        "baseline_p75_ms": 361.333504999493,
+        "baseline_time_ms": 361.333504999493,
+        "best_optimized_p75_ms": 380.29690999974264,
+        "best_optimized_speedup": 0.9501352640486549,
+        "best_optimized_time_ms": 380.29690999974264,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

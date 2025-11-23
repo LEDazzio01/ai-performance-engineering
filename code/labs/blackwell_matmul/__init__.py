@@ -4,6 +4,15 @@ from __future__ import annotations
 
 from .grace_blackwell_extension import load_grace_blackwell_module
 
+try:
+    from labs.fullstack_cluster import (
+        optimized_matmul_tcgen05,
+        optimized_matmul_tcgen05_cta2,
+    )
+except Exception:  # pragma: no cover - optional dependency
+    optimized_matmul_tcgen05 = None
+    optimized_matmul_tcgen05_cta2 = None
+
 
 def _module():
     return load_grace_blackwell_module()
@@ -44,12 +53,28 @@ def is_tma_supported() -> bool:
     return bool(_module().tma_supported())
 
 
+def optimized_blackwell_matmul_tcgen05(a, b):
+    """Bridge to the full tcgen05 TMEM kernel (SM100 1-CTA path)."""
+    if optimized_matmul_tcgen05 is None:
+        raise RuntimeError("tcgen05 extension unavailable (not built for this environment).")
+    return optimized_matmul_tcgen05(a, b)
+
+
+def optimized_blackwell_matmul_tcgen05_cta2(a, b):
+    """Bridge to the tcgen05 CTA-group::2 kernel (multicast-ready)."""
+    if optimized_matmul_tcgen05_cta2 is None:
+        raise RuntimeError("tcgen05 CTA2 extension unavailable (not built for this environment).")
+    return optimized_matmul_tcgen05_cta2(a, b)
+
+
 __all__ = [
     "baseline_blackwell_matmul",
     "optimized_blackwell_matmul_pseudo",
     "optimized_blackwell_matmul_tma",
     "optimized_blackwell_matmul_pipeline",
     "optimized_blackwell_matmul_cluster",
+    "optimized_blackwell_matmul_tcgen05",
+    "optimized_blackwell_matmul_tcgen05_cta2",
     "is_cluster_launch_supported",
     "is_tma_supported",
 ]

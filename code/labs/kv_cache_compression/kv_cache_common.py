@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Tuple, Type
+from typing import Callable, Iterable, List, Optional, Tuple, Type
+
+import sys
 
 import torch
 import torch.nn as nn
@@ -71,6 +73,8 @@ class KVCacheAttention(nn.Module):
         num_heads: int,
         linear_cls: Type[nn.Module],
         layernorm_cls: Type[nn.Module],
+        enable_tmem_epilogue: bool = False,
+        tmem_copy_fn: Optional[Callable[[torch.Tensor], None]] = None,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
@@ -82,6 +86,8 @@ class KVCacheAttention(nn.Module):
         self.ln = layernorm_cls(hidden_dim)
         self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True)
         self.proj = linear_cls(hidden_dim, hidden_dim, bias=True)
+        self.enable_tmem_epilogue = enable_tmem_epilogue
+        self._tmem_copy_fn = tmem_copy_fn
 
     def forward(self, tokens: torch.Tensor, cache: KVCache, start_offset: int) -> torch.Tensor:
         """Compute attention for tokens and append K/V into cache."""
@@ -96,6 +102,13 @@ class KVCacheAttention(nn.Module):
         # Write into cache
         cache.cache_k[:, start_offset : start_offset + seq_len].copy_(k)
         cache.cache_v[:, start_offset : start_offset + seq_len].copy_(v)
+
+        if self.enable_tmem_epilogue and self._tmem_copy_fn is not None:
+            if cache.cache_k.stride(-1) == self.head_dim and cache.cache_v.stride(-1) == self.head_dim:
+                flat_k = cache.cache_k.view(-1, self.head_dim)
+                flat_v = cache.cache_v.view(-1, self.head_dim)
+                self._tmem_copy_fn(flat_k)
+                self._tmem_copy_fn(flat_v)
 
         # Attention over current cache (prefill + decode-so-far)
         k_ctx = cache.cache_k[:, : start_offset + seq_len]
@@ -117,3 +130,30 @@ def reset_cache(cache: KVCache) -> None:
 def cache_is_finite(cache: KVCache) -> bool:
     """Check for non-finite entries in cache tensors."""
     return torch.isfinite(cache.cache_k).all() and torch.isfinite(cache.cache_v).all()
+
+
+def resolve_tmem_cache_copy(device: torch.device, head_dim: int) -> Optional[Callable[[torch.Tensor], None]]:
+    """Return a TMEM copy callable when hardware and build support are available."""
+    if head_dim != 128:
+        return None
+    if torch.cuda.get_device_capability(device)[0] < 10:
+        return None
+    try:
+        from labs.kv_cache_compression.tmem_cache_extension import load_tmem_cache_module
+    except Exception as exc:  # pragma: no cover - import guarded
+        print(f"[TMEM] Skipping cache epilogue: import failed ({exc})", file=sys.stderr)
+        return None
+
+    try:
+        module = load_tmem_cache_module()
+    except Exception as exc:  # pragma: no cover - build failure is non-fatal
+        print(f"[TMEM] Skipping cache epilogue: extension build failed ({exc})", file=sys.stderr)
+        return None
+
+    def _copy_fn(tensor: torch.Tensor) -> None:
+        if tensor.numel() == 0:
+            return
+        flat = tensor.view(-1, head_dim)
+        module.tmem_cache_copy(flat, flat)
+
+    return _copy_fn

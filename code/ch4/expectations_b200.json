@@ -1,5 +1,105 @@
 {
   "examples": {
+    "dataparallel": {
+      "example": "dataparallel",
+      "metadata": {
+        "best_optimization": "optimized_dataparallel",
+        "best_optimization_file": "optimized_dataparallel.py",
+        "best_optimization_speedup": 1.3363991585090294,
+        "best_optimization_time_ms": 2.291078382730484,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:28.065415"
+      },
+      "metrics": {
+        "baseline_p75_ms": 3.142944097518921,
+        "baseline_time_ms": 3.0617952227592466,
+        "best_optimized_p75_ms": 2.652479887008667,
+        "best_optimized_speedup": 1.3363991585090294,
+        "best_optimized_time_ms": 2.291078382730484,
+        "best_speedup": 1.3363991585090294
+      },
+      "type": "python"
+    },
+    "dataparallel_basic": {
+      "example": "dataparallel_basic",
+      "metadata": {
+        "best_optimization": "optimized_dataparallel_basic",
+        "best_optimization_file": "optimized_dataparallel_basic.py",
+        "best_optimization_speedup": 1.2860489295294302,
+        "best_optimization_time_ms": 2.275163209438324,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:28.583826"
+      },
+      "metrics": {
+        "baseline_p75_ms": 3.0082879066467285,
+        "baseline_time_ms": 2.925971210002899,
+        "best_optimized_p75_ms": 2.3839359283447266,
+        "best_optimized_speedup": 1.2860489295294302,
+        "best_optimized_time_ms": 2.275163209438324,
+        "best_speedup": 1.2860489295294302
+      },
+      "type": "python"
+    },
+    "grace_blackwell_locality": {
+      "example": "grace_blackwell_locality",
+      "metadata": {
+        "best_optimization": "optimized_grace_blackwell_locality",
+        "best_optimization_file": "optimized_grace_blackwell_locality.py",
+        "best_optimization_speedup": 39.573668775003206,
+        "best_optimization_time_ms": 0.12570133234063785,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:29.198212"
+      },
+      "metrics": {
+        "baseline_p75_ms": 4.976960182189941,
+        "baseline_time_ms": 4.974462890625,
+        "best_optimized_p75_ms": 0.12310399860143661,
+        "best_optimized_speedup": 39.573668775003206,
+        "best_optimized_time_ms": 0.12570133234063785,
+        "best_speedup": 39.573668775003206
+      },
+      "type": "python"
+    },
+    "nccl": {
+      "example": "nccl",
+      "metadata": {
+        "best_optimization": "optimized_nccl",
+        "best_optimization_file": "optimized_nccl.py",
+        "best_optimization_speedup": 183.6687276510207,
+        "best_optimization_time_ms": 0.21472512155771256,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:17:27.803303"
+      },
+      "metrics": {
+        "baseline_p75_ms": 39.90742492675781,
+        "baseline_time_ms": 38.35700744628906,
+        "best_optimized_p75_ms": 0.20547200739383698,
+        "best_optimized_speedup": 183.6687276510207,
+        "best_optimized_time_ms": 0.21472512155771256,
+        "best_speedup": 183.6687276510207
+      },
+      "type": "python"
+    },
+    "nvlink": {
+      "example": "nvlink",
+      "metadata": {
+        "best_optimization": "optimized_nvlink",
+        "best_optimization_file": "optimized_nvlink.py",
+        "best_optimization_speedup": 26.372593356636653,
+        "best_optimization_time_ms": 1.4678886365890502,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:35.558835"
+      },
+      "metrics": {
+        "baseline_p75_ms": 39.152000427246094,
+        "baseline_time_ms": 38.71203010559082,
+        "best_optimized_p75_ms": 1.462656021118164,
+        "best_optimized_speedup": 26.372593356636653,
+        "best_optimized_time_ms": 1.4678886365890502,
+        "best_speedup": 26.372593356636653
+      },
+      "type": "python"
+    },
     "nvshmem_ibgda_microbench": {
       "example": "nvshmem_ibgda_microbench",
       "metadata": {

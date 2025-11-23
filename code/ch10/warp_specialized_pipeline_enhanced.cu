@@ -167,12 +167,12 @@ int main() {
   // Detect architecture
   cudaDeviceProp prop;
   CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-  bool is_sm121 = (prop.major == 12);
-  bool is_sm100 = (prop.major == 10 && prop.minor == 0);
+  bool is_sm12x = (prop.major == 12);
+  bool is_sm10x = (prop.major == 10);
   
   std::printf("=== Enhanced Warp-Specialized Pipeline ===\n");
   std::printf("Architecture: %s (SM %d.%d)\n", 
-              is_sm121 ? "Grace-Blackwell GB10" : is_sm100 ? "Blackwell B200" : "Other",
+              is_sm12x ? "Grace-Blackwell GB-series" : is_sm10x ? "Blackwell (SM10x)" : "Other",
               prop.major, prop.minor);
   std::printf("Pipeline depth: %d stages\n", PIPELINE_DEPTH);
   std::printf("Warp configuration: 1 producer + 6 compute + 1 consumer\n");

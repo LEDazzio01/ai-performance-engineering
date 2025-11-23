@@ -23,6 +23,8 @@ _VARIANT_MODULES = {
     "tma": "labs.blackwell_matmul.optimized_blackwell_matmul_tma",
     "pipeline": "labs.blackwell_matmul.optimized_blackwell_matmul_pipeline",
     "cluster": "labs.blackwell_matmul.optimized_blackwell_matmul_cluster",
+    "tcgen05": "labs.blackwell_matmul.optimized_blackwell_matmul_tcgen05",
+    "tcgen05_cta2": "labs.blackwell_matmul.optimized_blackwell_matmul_tcgen05",
 }
 
 _VARIANT_KERNEL_HINTS = {
@@ -30,11 +32,13 @@ _VARIANT_KERNEL_HINTS = {
     "tma": "tma_prefetch_kernel",
     "pipeline": "pipeline_prefetch_kernel",
     "cluster": "cluster_kernel",
+    "tcgen05": "optimized_matmul_tcgen05",
+    "tcgen05_cta2": "optimized_matmul_tcgen05_cta2",
 }
 
 
 def _ensure_cluster_available(requested_variant: str) -> None:
-    if requested_variant != "cluster":
+    if requested_variant not in {"cluster", "tcgen05_cta2"}:
         return
     if is_cluster_launch_supported():
         return
@@ -133,7 +137,12 @@ def main(argv: list[str] | None = None) -> int:
 
     module_name = _VARIANT_MODULES[args.variant]
     module = importlib.import_module(module_name)
-    benchmark = module.get_benchmark(size=args.size)
+    if args.variant.startswith("tcgen05"):
+        benchmark = module.get_benchmark(
+            size=args.size, cta2=(args.variant == "tcgen05_cta2")
+        )
+    else:
+        benchmark = module.get_benchmark(size=args.size)
     config = benchmark.get_config()
     if args.iterations is not None and config is not None:
         config.iterations = args.iterations

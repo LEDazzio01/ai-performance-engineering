@@ -1,0 +1,65 @@
+{
+  "examples": {
+    "ai": {
+      "example": "ai",
+      "metadata": {
+        "best_optimization": "optimized_ai",
+        "best_optimization_file": "optimized_ai.py",
+        "best_optimization_speedup": 1.8414519690076419,
+        "best_optimization_time_ms": 0.19083679988980293,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:39.891081"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.33558401465415955,
+        "baseline_time_ms": 0.3514168009161949,
+        "best_optimized_p75_ms": 0.1958719938993454,
+        "best_optimized_speedup": 1.8414519690076419,
+        "best_optimized_time_ms": 0.19083679988980293,
+        "best_speedup": 1.8414519690076419
+      },
+      "type": "python"
+    },
+    "storage_cpu": {
+      "example": "storage_cpu",
+      "metadata": {
+        "best_optimization": "optimized_storage_cpu",
+        "best_optimization_file": "optimized_storage_cpu.py",
+        "best_optimization_speedup": 2.0055465036138096,
+        "best_optimization_time_ms": 49.932783126831055,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:42.148947"
+      },
+      "metrics": {
+        "baseline_p75_ms": 101.24995422363281,
+        "baseline_time_ms": 100.14251861572265,
+        "best_optimized_p75_ms": 50.16659164428711,
+        "best_optimized_speedup": 2.0055465036138096,
+        "best_optimized_time_ms": 49.932783126831055,
+        "best_speedup": 2.0055465036138096
+      },
+      "type": "python"
+    },
+    "vectorization": {
+      "example": "vectorization",
+      "metadata": {
+        "best_optimization": "optimized_vectorization",
+        "best_optimization_file": "optimized_vectorization.py",
+        "best_optimization_speedup": 188.08374306054392,
+        "best_optimization_time_ms": 0.04055039994418621,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:12:42.977134"
+      },
+      "metrics": {
+        "baseline_p75_ms": 8.377280235290527,
+        "baseline_time_ms": 7.626871004104614,
+        "best_optimized_p75_ms": 0.036959998309612274,
+        "best_optimized_speedup": 188.08374306054392,
+        "best_optimized_time_ms": 0.04055039994418621,
+        "best_speedup": 188.08374306054392
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

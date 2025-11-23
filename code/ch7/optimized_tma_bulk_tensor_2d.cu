@@ -33,10 +33,10 @@ using cuda_tma::make_2d_tensor_map;
 namespace {
 
 constexpr int TILE_M = 128;
-constexpr int TILE_N = 128;
+constexpr int TILE_N = 64;   // Keep shared tile under 48 KB
 constexpr int BLOCK_X = 32;
 constexpr int BLOCK_Y = 4;
-constexpr int ITERATIONS = 50;
+constexpr int ITERATIONS = 20;
 constexpr std::size_t TILE_BYTES =
     static_cast<std::size_t>(TILE_M) * TILE_N * sizeof(float);
 

@@ -17,6 +17,7 @@
 #include <cute/arch/cluster_sm90.hpp>
 #include <cute/arch/mma_sm100_umma.hpp>
 #include <cute/arch/tmem_allocator_sm100.hpp>
+#include <cute/arch/copy_sm100_tma.hpp>
 #include <cute/atom/copy_traits_sm90_tma.hpp>
 #include <cute/numeric/integral_constant.hpp>
 #include <cute/tensor.hpp>

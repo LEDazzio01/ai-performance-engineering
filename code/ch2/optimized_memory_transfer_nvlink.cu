@@ -107,6 +107,8 @@ SystemInfo detect_system_capabilities() {
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
     info.gpu_memory = prop.totalGlobalMem;
+    bool is_blackwell = (prop.major == 10);
+    bool is_grace_blackwell = (prop.major >= 12);
     
     printf("=== System Capabilities ===\n");
     printf("GPU: %s\n", prop.name);
@@ -114,8 +116,8 @@ SystemInfo detect_system_capabilities() {
     printf("GPU Memory: %.2f GB per GPU\n", info.gpu_memory / (1024.0 * 1024.0 * 1024.0));
     printf("Number of GPUs: %d\n", info.num_gpus);
     
-    // Check for 8x B200 configuration
-    if (info.num_gpus == 8 && prop.major == 10 && prop.minor == 0) {
+    // Check for 8x Blackwell/GB configuration
+    if (info.num_gpus == 8 && (is_blackwell || is_grace_blackwell)) {
         float mem_gb = info.gpu_memory / (1024.0 * 1024.0 * 1024.0);
         if (mem_gb > 170.0 && mem_gb < 190.0) {
             info.is_8xb200 = true;
@@ -124,17 +126,30 @@ SystemInfo detect_system_capabilities() {
                    info.num_gpus * mem_gb / 1024.0, mem_gb);
             printf("  Total SMs: %d (148 per GPU)\n", info.num_gpus * 148);
             printf("  NVLink 5.0: 1800 GB/s per GPU pair (bidirectional)\n");
+        } else if (mem_gb >= 270.0 && mem_gb <= 300.0) {
+            info.is_8xb200 = true;
+            printf("✓ 8x B300 GPU configuration detected\n");
+            printf("  Total memory: %.2f TB (%.0f GB per GPU)\n",
+                   info.num_gpus * mem_gb / 1024.0, mem_gb);
+            printf("  Total SMs: %d (148 per GPU)\n", info.num_gpus * 148);
+            printf("  NVLink 5.0: 1800 GB/s per GPU pair (bidirectional)\n");
+        } else if (is_grace_blackwell) {
+            info.is_8xb200 = true;
+            printf("✓ 8x Grace-Blackwell configuration detected\n");
+            printf("  Total memory: %.2f TB (%.0f GB per GPU)\n",
+                   info.num_gpus * mem_gb / 1024.0, mem_gb);
+            printf("  Grace coherence + NVLink-C2C enabled\n");
         }
     }
     
     // Check for Blackwell
-    if (prop.major == 10 && prop.minor == 0) {
-        printf("✓ Blackwell B200/B300 detected\n");
+    if (is_blackwell || is_grace_blackwell) {
+        printf("✓ %s detected\n", is_grace_blackwell ? "Grace-Blackwell (SM 12.x)" : "Blackwell B200/B300");
         
         // Detect Grace CPU
         bool has_grace_cpu = detect_grace_cpu();
         
-        if (has_grace_cpu) {
+        if (has_grace_cpu || is_grace_blackwell) {
             info.has_nvlink_c2c = true;
             info.is_grace_blackwell = true;
             printf("✓ Grace CPU detected (ARM Neoverse)\n");

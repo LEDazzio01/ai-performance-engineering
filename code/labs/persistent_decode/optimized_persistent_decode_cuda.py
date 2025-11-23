@@ -22,10 +22,22 @@ from labs.persistent_decode.persistent_decode_common import (
 def _load_extension() -> object:
     """Compile and return the CUDA extension once per process."""
     ext_path = Path(__file__).with_name("persistent_decode_ext.cu")
+    repo_root = Path(__file__).resolve().parents[2]
+    include_dirs = [
+        # Prefer the TransformerEngine-bundled CUTLASS (stock/upstream) to avoid local patches.
+        repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include",
+        repo_root / "common" / "headers",
+        repo_root / "third_party" / "cutlass" / "include",
+    ]
     return load(
         name="persistent_decode_ext",
         sources=[str(ext_path)],
-        extra_cuda_cflags=["--use_fast_math"],
+        extra_cuda_cflags=[
+            "--use_fast_math",
+            "--expt-relaxed-constexpr",
+            "--expt-extended-lambda",
+        ]
+        + [f"-I{p}" for p in include_dirs],
         verbose=False,
     )
 

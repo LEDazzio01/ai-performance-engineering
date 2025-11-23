@@ -4,7 +4,22 @@
 // Example demonstrating inline PTX for micro-optimizations
 
 #include <cuda_runtime.h>
+#include <cuda/barrier>
+#include <cuda/pipeline>
 #include <stdio.h>
+#include <cmath>
+#include <vector>
+
+#include "../common/headers/tma_helpers.cuh"
+
+static void run_tma_example();
+
+static void checkCuda(cudaError_t err, const char* what) {
+    if (err != cudaSuccess) {
+        printf("CUDA error (%s): %s\n", what, cudaGetErrorString(err));
+        std::exit(1);
+    }
+}
 
 // Example kernel using inline PTX for prefetching
 __global__ void PrefetchExample(const float *in, float *out, int N) {
@@ -15,9 +30,12 @@ __global__ void PrefetchExample(const float *in, float *out, int N) {
         // Prefetch the next cache line (128B) of in[] into L2:
         if (idx + 32 < N) {
             const float *next_ptr = in + idx + 32;
-            asm volatile("cp.async.bulk.prefetch.L2.global [%0], %1;"
-                         :
-                         : "l"(next_ptr), "n"(128));
+            const std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(next_ptr);
+            if ((addr & 0x7F) == 0) {  // issue only when 128B aligned to avoid misaligned traps
+                asm volatile("cp.async.bulk.prefetch.L2.global [%0], %1;"
+                             :
+                             : "l"(next_ptr), "n"(128));
+            }
         }
         
         float x = in[idx];
@@ -123,6 +141,8 @@ int main() {
     
     cudaEventRecord(start);
     PrefetchExample<<<blocks, threads>>>(d_in, d_out, N);
+    cudaDeviceSynchronize();
+    checkCuda(cudaGetLastError(), "PrefetchExample");
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     
@@ -133,6 +153,8 @@ int main() {
     // Test cache control example
     cudaEventRecord(start);
     CacheControlExample<<<blocks, threads>>>(d_in, d_out, N);
+    cudaDeviceSynchronize();
+    checkCuda(cudaGetLastError(), "CacheControlExample");
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     
@@ -141,7 +163,7 @@ int main() {
     
     // Test special register example
     SpecialRegisterExample<<<blocks, threads>>>(d_smid, d_lane);
-    cudaDeviceSynchronize();
+    checkCuda(cudaDeviceSynchronize(), "SpecialRegisterExample");
     
     // Copy results back
     cudaMemcpy(h_smid, d_smid, N * sizeof(int), cudaMemcpyDeviceToHost);
@@ -155,6 +177,8 @@ int main() {
     // Test instruction scheduling example
     cudaEventRecord(start);
     InstructionSchedulingExample<<<blocks, threads>>>(d_in, d_b, d_out, N);
+    cudaDeviceSynchronize();
+    checkCuda(cudaGetLastError(), "InstructionSchedulingExample");
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     
@@ -173,6 +197,9 @@ int main() {
     
     printf("\nTo analyze with Nsight Compute:\n");
     printf("ncu --section MemoryWorkloadAnalysis --section WarpStateStats ./inline_ptx_example\n");
+
+    // Run the TMA example (Blackwell/Hopper+)
+    run_tma_example();
     
     // Cleanup
     delete[] h_in;
@@ -199,11 +226,198 @@ __global__ void stream_ordered_memory_example() {
     // Your kernel code here
 }
 
-// CUDA 13.0 TMA (Tensor Memory Accelerator) Example
-__global__ void tma_example() {
-    // Example of TMA usage for Blackwell B200/B300
-    // This is a placeholder for actual implementation
-    // See ch7/async_prefetch_tma.cu or ch10/tma_2d_pipeline_blackwell.cu for real TMA usage.
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    // Your TMA code here
+#if CUDART_VERSION >= 13000
+namespace cde = cuda::device::experimental;
+
+template <int TILE_SIZE>
+__global__ void tma_example_kernel(const __grid_constant__ CUtensorMap in_desc,
+                                   const __grid_constant__ CUtensorMap out_desc,
+                                   int total_tiles) {
+    constexpr std::size_t BYTES_PER_TILE = static_cast<std::size_t>(TILE_SIZE) * sizeof(float);
+    __shared__ alignas(128) float stage_buffers[2][TILE_SIZE];
+    using block_barrier = cuda::barrier<cuda::thread_scope_block>;
+    __shared__ alignas(block_barrier) unsigned char barrier_storage[2][sizeof(block_barrier)];
+
+    auto init_barrier = [](block_barrier* bar) {
+        init(bar, blockDim.x);
+    };
+
+    if (threadIdx.x == 0) {
+        for (int i = 0; i < 2; ++i) {
+            init_barrier(reinterpret_cast<block_barrier*>(barrier_storage[i]));
+        }
+        cde::fence_proxy_async_shared_cta();
+    }
+    __syncthreads();
+
+    cuda::barrier<cuda::thread_scope_block>::arrival_token tokens[2];
+
+    auto issue_tile = [&](int tile_idx, int local_seq) {
+        if (tile_idx >= total_tiles) {
+            return;
+        }
+        const int stage = local_seq % 2;
+        auto* bar_ptr = reinterpret_cast<block_barrier*>(barrier_storage[stage]);
+        auto& bar = *bar_ptr;
+
+        if (threadIdx.x == 0) {
+            cde::cp_async_bulk_tensor_1d_global_to_shared(
+                &stage_buffers[stage],
+                &in_desc,
+                tile_idx * TILE_SIZE,
+                bar);
+            tokens[stage] = cuda::device::barrier_arrive_tx(
+                bar,
+                1,
+                BYTES_PER_TILE);
+        } else {
+            tokens[stage] = bar.arrive();
+        }
+    };
+
+    const int base_tile = static_cast<int>(blockIdx.x);
+    const int stride_tiles = static_cast<int>(gridDim.x);
+    const int tiles_this_block = (total_tiles <= base_tile)
+                                     ? 0
+                                     : (total_tiles - base_tile + stride_tiles - 1) / stride_tiles;
+
+    const int preload = min(tiles_this_block, 2);
+    for (int t = 0; t < preload; ++t) {
+        issue_tile(base_tile + t * stride_tiles, t);
+    }
+
+    for (int local_seq = 0; local_seq < tiles_this_block; ++local_seq) {
+        const int stage = local_seq % 2;
+        auto* bar_ptr = reinterpret_cast<block_barrier*>(barrier_storage[stage]);
+        auto& bar = *bar_ptr;
+
+        bar.wait(std::move(tokens[stage]));
+        __syncthreads();
+
+        float* tile_ptr = stage_buffers[stage];
+        for (int i = threadIdx.x; i < TILE_SIZE; i += blockDim.x) {
+            tile_ptr[i] = tile_ptr[i] * 1.5f + 1.0f;
+        }
+        cde::fence_proxy_async_shared_cta();
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+            const int global_tile = base_tile + local_seq * stride_tiles;
+            cde::cp_async_bulk_tensor_1d_shared_to_global(
+                &out_desc,
+                global_tile * TILE_SIZE,
+                &stage_buffers[stage]);
+            cde::cp_async_bulk_commit_group();
+            cde::cp_async_bulk_wait_group_read<0>();
+        }
+        __syncthreads();
+
+        const int next_seq = local_seq + 2;
+        if (next_seq < tiles_this_block) {
+            const int next_global = base_tile + next_seq * stride_tiles;
+            issue_tile(next_global, next_seq);
+        }
+    }
 }
+
+static void run_tma_example() {
+    if (!cuda_tma::device_supports_tma()) {
+        printf("TMA example: SKIPPED (no Blackwell/Hopper-class TMA support)\n");
+        return;
+    }
+
+    constexpr int TILE = 256;
+    constexpr int ELEMS = 1 << 22;  // ~4M elems to better saturate TMA path
+    constexpr int THREADS = 256;
+    const auto limits = cuda_arch::get_tma_limits();
+    if (TILE > static_cast<int>(limits.max_1d_box_size)) {
+        printf("TMA example: SKIPPED (tile=%d exceeds 1D box limit=%u)\n",
+               TILE,
+               static_cast<unsigned int>(limits.max_1d_box_size));
+        return;
+    }
+
+    std::vector<float> h_in(ELEMS);
+    for (int i = 0; i < ELEMS; ++i) {
+        h_in[i] = static_cast<float>((i % 512) - 256) * 0.25f;
+    }
+    std::vector<float> h_out(ELEMS, 0.0f);
+
+    float* d_in = nullptr;
+    float* d_out = nullptr;
+    cudaGetLastError();  // clear any lingering errors from earlier kernels
+    checkCuda(cudaMalloc(&d_in, ELEMS * sizeof(float)), "cudaMalloc d_in");
+    checkCuda(cudaMalloc(&d_out, ELEMS * sizeof(float)), "cudaMalloc d_out");
+    checkCuda(cudaMemcpy(d_in, h_in.data(), ELEMS * sizeof(float), cudaMemcpyHostToDevice), "copy h_in");
+    checkCuda(cudaMemset(d_out, 0, ELEMS * sizeof(float)), "memset d_out");
+
+    CUtensorMap in_desc{};
+    CUtensorMap out_desc{};
+    auto encode = cuda_tma::load_cuTensorMapEncodeTiled();
+    if (!encode) {
+        printf("TMA example: SKIPPED (cuTensorMapEncodeTiled unavailable)\n");
+        cudaFree(d_in);
+        cudaFree(d_out);
+        return;
+    }
+    if (!cuda_tma::make_1d_tensor_map(in_desc, encode, d_in, ELEMS, TILE) ||
+        !cuda_tma::make_1d_tensor_map(out_desc, encode, d_out, ELEMS, TILE)) {
+        printf("TMA example: SKIPPED (descriptor creation failed)\n");
+        cudaFree(d_in);
+        cudaFree(d_out);
+        return;
+    }
+
+    const int total_tiles = (ELEMS + TILE - 1) / TILE;
+    int device = 0;
+    cudaDeviceProp prop{};
+    checkCuda(cudaGetDevice(&device), "get device");
+    checkCuda(cudaGetDeviceProperties(&prop, device), "get device props");
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    const int max_blocks = max(1, prop.multiProcessorCount * 16);
+    const int blocks = min(total_tiles, max_blocks);
+
+    tma_example_kernel<TILE><<<blocks, THREADS>>>(in_desc, out_desc, total_tiles);
+    cudaDeviceSynchronize();
+
+    constexpr int kIters = 10;
+    cudaEventRecord(start);
+    for (int i = 0; i < kIters; ++i) {
+        tma_example_kernel<TILE><<<1, THREADS>>>(in_desc, out_desc, total_tiles);
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float elapsed_ms = 0.0f;
+    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    const float avg_ms = elapsed_ms / static_cast<float>(kIters);
+
+    cudaMemcpy(h_out.data(), d_out, ELEMS * sizeof(float), cudaMemcpyDeviceToHost);
+
+    bool ok = true;
+    for (int i = 0; i < ELEMS; ++i) {
+        const float expected = h_in[i] * 1.5f + 1.0f;
+        if (std::abs(h_out[i] - expected) > 1e-3f) {
+            printf("TMA example mismatch at %d: got %f expected %f\n", i, h_out[i], expected);
+            ok = false;
+            break;
+        }
+    }
+
+    printf("TMA example: %.4f ms (avg over %d iters) [%s]\n",
+           avg_ms, kIters, ok ? "OK" : "FAIL");
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+    cudaFree(d_in);
+    cudaFree(d_out);
+}
+#else
+static void run_tma_example() {
+    printf("TMA example: SKIPPED (requires CUDA 13+).\n");
+}
+#endif

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import torch
 import torch.nn as nn
@@ -16,6 +16,7 @@ from labs.kv_cache_compression.kv_cache_common import (
     cache_is_finite,
     reset_cache,
     resolve_device,
+    resolve_tmem_cache_copy,
 )
 
 try:  # Transformer Engine is optional; fail fast in setup when missing.
@@ -55,6 +56,8 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
         )
         self.runtime_recipe = self.fp8_recipe
         self._fallback_recipe = self.fp8_recipe
+        self.enable_tmem_epilogue = True
+        self._tmem_copy_fn: Optional[Callable[[torch.Tensor], None]] = None
 
     def setup(self) -> None:
         self._setup_with_recipe(self.fp8_recipe)
@@ -64,12 +67,18 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
             raise RuntimeError(f"Transformer Engine not available: {TE_IMPORT_ERROR}")
 
         torch.manual_seed(42)
+        self._tmem_copy_fn = None
         with quantized_model_init(enabled=True, recipe=recipe):
+            head_dim = self.hidden_dim // self.num_heads
+            if self.enable_tmem_epilogue:
+                self._tmem_copy_fn = resolve_tmem_cache_copy(self.device, head_dim)
             self.model = KVCacheAttention(
                 hidden_dim=self.hidden_dim,
                 num_heads=self.num_heads,
                 linear_cls=TELinear,
                 layernorm_cls=TELayerNorm,
+                enable_tmem_epilogue=self._tmem_copy_fn is not None,
+                tmem_copy_fn=self._tmem_copy_fn,
             ).to(self.device, dtype=self.tensor_dtype)
 
         self.prefill_inputs, self.decode_inputs = build_token_batches(
@@ -129,6 +138,7 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
         self.decode_inputs = []
         self.cache = None
         self.model = None
+        self._tmem_copy_fn = None
         torch.cuda.empty_cache()
 
     def validate_result(self) -> Optional[str]:

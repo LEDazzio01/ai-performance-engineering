@@ -1,0 +1,45 @@
+{
+  "examples": {
+    "blackwell_matmul_cluster": {
+      "example": "blackwell_matmul_cluster",
+      "metadata": {
+        "best_optimization": "optimized_blackwell_matmul_cluster",
+        "best_optimization_file": "optimized_blackwell_matmul_cluster.py",
+        "best_optimization_speedup": 2.5773450958157116,
+        "best_optimization_time_ms": 236.66195678710938,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:21:42.513236"
+      },
+      "metrics": {
+        "baseline_p75_ms": 609.9595336914062,
+        "baseline_time_ms": 609.9595336914062,
+        "best_optimized_p75_ms": 236.66195678710938,
+        "best_optimized_speedup": 2.5773450958157116,
+        "best_optimized_time_ms": 236.66195678710938,
+        "best_speedup": 2.5773450958157116
+      },
+      "type": "python"
+    },
+    "blackwell_matmul_tma": {
+      "example": "blackwell_matmul_tma",
+      "metadata": {
+        "best_optimization": "optimized_blackwell_matmul_tma",
+        "best_optimization_file": "optimized_blackwell_matmul_tma.py",
+        "best_optimization_speedup": 1.264864643581901,
+        "best_optimization_time_ms": 2.837446403503418,
+        "git_commit": "89035bc7e75db4b37330a6140131c8108f744f45",
+        "updated_at": "2025-11-23T02:58:17.777577"
+      },
+      "metrics": {
+        "baseline_p75_ms": 3.5785279273986816,
+        "baseline_time_ms": 3.615891170501709,
+        "best_optimized_p75_ms": 2.6231679916381836,
+        "best_optimized_speedup": 39863.98508247864,
+        "best_optimized_time_ms": 2.6231679916381836,
+        "best_speedup": 39863.98508247864
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

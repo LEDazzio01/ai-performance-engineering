@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from enum import Enum
 import os
+from pathlib import Path
 
 import torch
 
@@ -22,6 +23,21 @@ from labs.persistent_decode.persistent_decode_common import (
     tokens_per_iteration,
 )
 from common.python.blackwell_requirements import ensure_blackwell_tma_supported
+
+
+def _enable_blackwell_compiler_defaults() -> None:
+    """Turn on Blackwell-friendly defaults for torch.compile/Inductor."""
+    torch.set_float32_matmul_precision("high")
+    try:
+        from torch._inductor import config as triton_cfg  # type: ignore
+
+        if hasattr(triton_cfg, "tma_support"):
+            triton_cfg.tma_support = True
+        if hasattr(triton_cfg.cuda, "enable_tma"):
+            triton_cfg.cuda.enable_tma = True
+    except Exception:
+        # Inductor may be unavailable in stripped-down builds; fail soft.
+        pass
 
 
 class GraphMode(Enum):
@@ -42,17 +58,221 @@ class TmaBurstConfig:
     """Simple config holder for burst shaping knobs."""
 
     def __init__(self, chunk_k: int = 128, max_in_flight: int = 2, tma_sleep_cycles: int = 50_000) -> None:
-        self.chunk_k = chunk_k
+        self.chunk_k = chunk_k  # tile size (elements) for each cp.async bulk transfer
         self.max_in_flight = max_in_flight
         # torch.cuda._sleep argument is in cycles; keep high enough to visualize overlap.
         self.tma_sleep_cycles = tma_sleep_cycles
 
 
+_TMA_CP_ASYNC_EXT: object | None = None
+
+
+def _load_cp_async_tma_ext() -> object:
+    """Compile and return a tiny extension that issues cp.async.bulk.tensor 1D copies."""
+    global _TMA_CP_ASYNC_EXT
+    if _TMA_CP_ASYNC_EXT is not None:
+        return _TMA_CP_ASYNC_EXT
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    include_dir = repo_root / "common" / "headers"
+
+    cpp_src = r"""
+#include <torch/extension.h>
+void tma_copy_tile(torch::Tensor src, torch::Tensor dst, int64_t tile_elems);
+"""
+
+    cuda_src = r"""
+#include <torch/extension.h>
+#include <c10/cuda/CUDAGuard.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <cuda/barrier>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <algorithm>
+#include <utility>
+
+#include "tma_helpers.cuh"
+
+#if CUDART_VERSION < 13000
+void tma_copy_tile(torch::Tensor /*src*/, torch::Tensor /*dst*/, int64_t /*tile_elems*/) {
+    TORCH_CHECK(false, "tma_copy_tile: CUDA 13.0+ required for cp.async.bulk.tensor");
+}
+#else
+
+namespace {
+namespace cde = cuda::device::experimental;
+constexpr int THREADS = 256;
+#define PIPELINE_STAGES 2
+
+template <int TILE>
+__global__ void tma_copy_kernel(const __grid_constant__ CUtensorMap in_desc,
+                                const __grid_constant__ CUtensorMap out_desc,
+                                int total_tiles) {
+    constexpr std::size_t BYTES_PER_TILE = static_cast<std::size_t>(TILE) * sizeof(float);
+    __shared__ alignas(128) float stage_buffers[PIPELINE_STAGES][TILE];
+    using block_barrier = cuda::barrier<cuda::thread_scope_block>;
+    __shared__ alignas(block_barrier) unsigned char barrier_storage[PIPELINE_STAGES][sizeof(block_barrier)];
+
+    if (threadIdx.x == 0) {
+        for (int stage = 0; stage < PIPELINE_STAGES; ++stage) {
+            init(reinterpret_cast<block_barrier*>(barrier_storage[stage]), blockDim.x);
+        }
+        cde::fence_proxy_async_shared_cta();
+    }
+    __syncthreads();
+
+    cuda::barrier<cuda::thread_scope_block>::arrival_token tokens[PIPELINE_STAGES];
+
+    auto issue = [&](int tile_idx) {
+        if (tile_idx >= total_tiles) {
+            return;
+        }
+        const int stage = tile_idx % PIPELINE_STAGES;
+        auto* bar_ptr = reinterpret_cast<block_barrier*>(barrier_storage[stage]);
+        auto& bar = *bar_ptr;
+
+        if (threadIdx.x == 0) {
+            cde::cp_async_bulk_tensor_1d_global_to_shared(
+                &stage_buffers[stage],
+                &in_desc,
+                tile_idx * TILE,
+                bar);
+            tokens[stage] = cuda::device::barrier_arrive_tx(bar, 1, BYTES_PER_TILE);
+        } else {
+            tokens[stage] = bar.arrive();
+        }
+    };
+
+    const int preload = std::min(total_tiles, PIPELINE_STAGES);
+    for (int t = 0; t < preload; ++t) {
+        issue(t);
+    }
+
+    for (int tile = 0; tile < total_tiles; ++tile) {
+        const int stage = tile % PIPELINE_STAGES;
+        auto* bar_ptr = reinterpret_cast<block_barrier*>(barrier_storage[stage]);
+        auto& bar = *bar_ptr;
+
+        bar.wait(std::move(tokens[stage]));
+        __syncthreads();
+
+        // Optional math hook (prefill is a straight copy so this is a no-op).
+        float* tile_ptr = stage_buffers[stage];
+        for (int i = threadIdx.x; i < TILE; i += blockDim.x) {
+            tile_ptr[i] = tile_ptr[i];
+        }
+        cde::fence_proxy_async_shared_cta();
+        __syncthreads();
+
+        if (threadIdx.x == 0) {
+            cde::cp_async_bulk_tensor_1d_shared_to_global(
+                &out_desc,
+                tile * TILE,
+                &stage_buffers[stage]);
+            cde::cp_async_bulk_commit_group();
+            cde::cp_async_bulk_wait_group_read<0>();
+        }
+        __syncthreads();
+
+        const int next = tile + PIPELINE_STAGES;
+        if (next < total_tiles) {
+            issue(next);
+        }
+    }
+}
+
+template <int TILE>
+void launch_kernel(const CUtensorMap& in_desc, const CUtensorMap& out_desc, int total_tiles, cudaStream_t stream) {
+    tma_copy_kernel<TILE><<<1, THREADS, 0, stream>>>(in_desc, out_desc, total_tiles);
+}
+
+}  // namespace
+
+void tma_copy_tile(torch::Tensor src, torch::Tensor dst, int64_t tile_elems) {
+    TORCH_CHECK(src.is_cuda() && dst.is_cuda(), "tma_copy_tile: src/dst must be CUDA");
+    TORCH_CHECK(src.scalar_type() == torch::kFloat && dst.scalar_type() == torch::kFloat,
+                "tma_copy_tile: only float32 supported");
+    TORCH_CHECK(src.is_contiguous() && dst.is_contiguous(),
+                "tma_copy_tile: tensors must be contiguous");
+    TORCH_CHECK(src.numel() == dst.numel(), "tma_copy_tile: size mismatch");
+    TORCH_CHECK(tile_elems > 0, "tma_copy_tile: tile_elems must be positive");
+
+    if (!cuda_tma::device_supports_tma()) {
+        TORCH_CHECK(false, "tma_copy_tile: device lacks TMA support");
+    }
+
+    const int elems = static_cast<int>(src.numel());
+    int tile = static_cast<int>(tile_elems);
+    const auto limits = cuda_arch::get_tma_limits();
+    tile = std::min(tile, static_cast<int>(limits.max_1d_box_size));
+    TORCH_CHECK(tile > 0, "tma_copy_tile: invalid tile size after clamp");
+
+    c10::cuda::CUDAGuard guard(src.get_device());
+    auto encode = cuda_tma::load_cuTensorMapEncodeTiled();
+    TORCH_CHECK(encode, "tma_copy_tile: cuTensorMapEncodeTiled unavailable");
+
+    CUtensorMap in_desc{};
+    CUtensorMap out_desc{};
+    bool ok = cuda_tma::make_1d_tensor_map(in_desc, encode, src.data_ptr(), elems, tile) &&
+              cuda_tma::make_1d_tensor_map(out_desc, encode, dst.data_ptr(), elems, tile);
+    TORCH_CHECK(ok, "tma_copy_tile: descriptor creation failed");
+
+    const int total_tiles = (elems + tile - 1) / tile;
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    switch (tile) {
+        case 64: launch_kernel<64>(in_desc, out_desc, total_tiles, stream); break;
+        case 128: launch_kernel<128>(in_desc, out_desc, total_tiles, stream); break;
+        case 256: launch_kernel<256>(in_desc, out_desc, total_tiles, stream); break;
+        default: launch_kernel<128>(in_desc, out_desc, total_tiles, stream); break;
+    }
+
+    auto err = cudaGetLastError();
+    TORCH_CHECK(err == cudaSuccess, "tma_copy_tile launch failed: ", cudaGetErrorString(err));
+}
+#endif  // CUDART_VERSION < 13000
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("tma_copy_tile", &tma_copy_tile, "cp.async.bulk.tensor 1D copy");
+}
+"""
+
+    try:
+        from torch.utils.cpp_extension import load_inline
+    except ImportError as exc:  # pragma: no cover - torch always available in CI
+        raise RuntimeError(f"SKIPPED: torch extension loader unavailable ({exc})") from exc
+
+    try:
+        _TMA_CP_ASYNC_EXT = load_inline(
+            name="persistent_decode_tma_cp_async_ext",
+            cpp_sources=cpp_src,
+            cuda_sources=cuda_src,
+            functions=None,
+            extra_cuda_cflags=[
+                "--std=c++17",
+                "--use_fast_math",
+                "-lineinfo",
+                "-gencode=arch=compute_100,code=sm_100",
+                "-gencode=arch=compute_103,code=sm_103",
+                "-gencode=arch=compute_120,code=sm_120",
+                "-gencode=arch=compute_121,code=sm_121",
+            ],
+            extra_ldflags=["-lcuda"],
+            extra_include_paths=[str(include_dir)],
+            verbose=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(f"SKIPPED: failed to build TMA cp.async extension ({exc})") from exc
+
+    return _TMA_CP_ASYNC_EXT
+
+
 class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
-    """Prefill with shaped pseudo-TMA + decode hosted in a CUDA Graph."""
+    """Prefill with shaped cp.async.bulk.tensor bursts + graph-captured decode."""
 
     def __init__(self, *, graph_mode: "GraphMode | None" = None, max_capture_seq: int | None = None) -> None:
         super().__init__()
+        _enable_blackwell_compiler_defaults()
         self.device = resolve_device()
         self.inputs = None
         self.batch, self.seq_len, self.head_dim = resolve_shapes()
@@ -71,14 +291,16 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.graph_mode = graph_mode or GraphMode.from_str(os.getenv("PD_GRAPH_MODE"))
         self.max_capture_seq = max_capture_seq or int(os.getenv("PD_MAX_CAPTURE_SEQ", self.seq_len))
         self._history: dict[str, list[float]] = {}
+        self._tma_ext: object | None = None
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("optimized_tma_prefill_decode")
         self.inputs = build_inputs(self.device)
         # Skip on GPUs without TMA support to avoid false regressions.
-        if not torch.cuda.get_device_capability(self.device) >= (12, 0):
-            raise RuntimeError("SKIP: TMA not supported on this GPU")
+        if torch.cuda.get_device_capability(self.device) < (10, 0):
+            raise RuntimeError("SKIP: TMA not supported on this GPU (need SM 10.0+)")
+        self._tma_ext = _load_cp_async_tma_ext()
         self.prefill_src = torch.randn(
             self.prefill_chunks, self.prefill_chunk_elems, device=self.device
         )
@@ -99,11 +321,14 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
     def _capture_full_graph(self) -> None:
         if self.graph_mode == GraphMode.PIECEWISE:
             return
+        if self._tma_ext is None:
+            raise RuntimeError("TMA extension not initialized")
         self.full_graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.full_graph, stream=self.decode_stream):
-            # Simplified full-iteration capture: single-stream prefill analog + captured decode.
-            torch.cuda._sleep(self.cfg.tma_sleep_cycles)
-            self.prefill_dst.copy_(self.prefill_src)
+            # Simplified full-iteration capture: single-stream cp.async.bulk.tensor prefill + captured decode.
+            flat_src = self.prefill_src.reshape(-1)
+            flat_dst = self.prefill_dst.reshape(-1)
+            self._tma_ext.tma_copy_tile(flat_src, flat_dst, self.cfg.chunk_k)
             self._decode_body(self.graph_q, self.graph_k, self.graph_v, self.graph_out)
             self.inputs.out.copy_(self.graph_out)
         torch.cuda.synchronize()
@@ -120,13 +345,18 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
             out[:, t, :] = v_t * dot
 
     def _prefill_shaped(self, *, async_only: bool = False) -> list[torch.cuda.Event] | None:
-        """Launch pseudo-TMA copies on multiple streams with a max_in_flight cap."""
+        """Launch cp.async.bulk.tensor copies on multiple streams with a max_in_flight cap."""
+        if self._tma_ext is None:
+            raise RuntimeError("TMA extension not initialized")
         events = []
         for idx in range(self.prefill_chunks):
             stream = self.prefill_streams[idx % len(self.prefill_streams)]
             with torch.cuda.stream(stream):
-                torch.cuda._sleep(self.cfg.tma_sleep_cycles)
-                self.prefill_dst[idx].add_(self.prefill_src[idx])
+                self._tma_ext.tma_copy_tile(
+                    self.prefill_src[idx],
+                    self.prefill_dst[idx],
+                    self.cfg.chunk_k,
+                )
             evt = torch.cuda.Event(enable_timing=False, blocking=False)
             evt.record(stream)
             events.append(evt)

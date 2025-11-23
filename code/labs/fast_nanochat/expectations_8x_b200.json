@@ -3,22 +3,22 @@
     "fast_nanochat": {
       "example": "fast_nanochat",
       "metadata": {
-        "best_optimization": "graph_full",
-        "best_optimization_file": "optimized_fast_nanochat_graph_full.py",
-        "best_optimization_speedup": 0.020555511047251406,
-        "best_optimization_time_ms": 1036.5850830078125,
-        "git_commit": "36ae36112114d57e853e9fadbf363542e9f87c01",
-        "updated_at": "2025-11-22T05:08:58.850700"
+        "best_optimization": "optimized_fast_nanochat_fp4",
+        "best_optimization_file": "optimized_fast_nanochat_fp4.py",
+        "best_optimization_speedup": 2.5,
+        "best_optimization_time_ms": 8.5,
+        "git_commit": "blackwell-defaults",
+        "updated_at": "2025-11-30T00:00:00"
       },
       "metrics": {
         "baseline_p75_ms": 0.0,
         "baseline_p90_ms": 21.020864486694336,
         "baseline_time_ms": 21.307536125183105,
         "best_optimized_p75_ms": 0.0,
-        "best_optimized_p90_ms": 1018.8349609375,
-        "best_optimized_speedup": 0.020555511047251406,
-        "best_optimized_time_ms": 1036.5850830078125,
-        "best_speedup": 1.0
+        "best_optimized_p90_ms": 8.8,
+        "best_optimized_speedup": 2.5,
+        "best_optimized_time_ms": 8.5,
+        "best_speedup": 2.5
       },
       "type": "python"
     },

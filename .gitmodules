@@ -6,4 +6,4 @@
 	url = https://github.com/NVIDIA/TransformerEngine.git
 [submodule "code/labs/nanochat"]
 	path = code/labs/nanochat
-	url = https://github.com/cfregly/nanochat.git
+	url = git@github.com:cfregly/nanochat.git

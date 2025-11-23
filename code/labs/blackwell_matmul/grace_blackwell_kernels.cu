@@ -1,13 +1,16 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/Exceptions.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 
 #include <algorithm>
 #include <cooperative_groups.h>
 #include <cuda.h>
+#include <cuda/barrier>
 #include <cuda/pipeline>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include "../../common/headers/tma_helpers.cuh"
 
 namespace cg = cooperative_groups;
 using std::max;
@@ -15,12 +18,13 @@ using std::min;
 
 namespace {
 constexpr int BASELINE_BLOCK = 16;
-constexpr int PIPE_TILE_M = 64;
+// Tuned for B200 shared-memory limits and TMA alignment (16-byte stride).
+constexpr int PIPE_TILE_M = 80;
 constexpr int PIPE_TILE_N = 64;
-constexpr int PIPE_TILE_K = 64;
-constexpr int PIPE_THREADS = 4 * 32;  // load, compute, store, extra compute warp
+constexpr int PIPE_TILE_K = 32;
+constexpr int PIPE_THREADS = 8 * 32;   // more warps to cover 96x64 tile compute
 constexpr int CLUSTER_THREADS = 3 * 32;
-constexpr int TMA_THREADS = 128;       // use more threads to feed memcpy_async
+constexpr int TMA_THREADS = 8 * 32;    // keep consistent with PIPE_THREADS
 
 __global__ void baseline_kernel(const half* __restrict__ A,
                                 const half* __restrict__ B,
@@ -258,21 +262,91 @@ __global__ void cluster_kernel(const half* __restrict__ A,
   }
 }
 
-// Real TMA path (requires hardware support).
-__global__ void tma_prefetch_kernel(const half* __restrict__ A,
+// Encode a 2D tensor map for half data with the provided box dimensions.
+inline bool encode_tensor_map_half(CUtensorMap& desc,
+                                   PFN_cuTensorMapEncodeTiled_v12000 encode,
+                                   void* base,
+                                   int width,
+                                   int height,
+                                   int ld,
+                                   int box_width,
+                                   int box_height,
+                                   CUtensorMapSwizzle swizzle_mode) {
+  constexpr uint32_t rank = 2;
+  std::uint64_t dims[rank] = {static_cast<std::uint64_t>(width),
+                              static_cast<std::uint64_t>(height)};
+  std::uint64_t stride[rank - 1] = {static_cast<std::uint64_t>(ld * sizeof(half))};
+  std::uint32_t box[rank] = {static_cast<uint32_t>(box_width),
+                             static_cast<uint32_t>(box_height)};
+  std::uint32_t elem_stride[rank] = {1, 1};
+
+  constexpr auto interleave = CU_TENSOR_MAP_INTERLEAVE_NONE;
+  constexpr auto promotion = CU_TENSOR_MAP_L2_PROMOTION_NONE;
+  constexpr auto oob_fill = CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE;
+
+  auto fn = encode ? encode : cuTensorMapEncodeTiled;
+  CUresult res = fn(&desc,
+                    CU_TENSOR_MAP_DATA_TYPE_FLOAT16,
+                    rank,
+                    base,
+                    dims,
+                    stride,
+                    box,
+                    elem_stride,
+                    interleave,
+                    swizzle_mode,
+                    promotion,
+                    oob_fill);
+  if (res != CUDA_SUCCESS) {
+    const char* err_str = nullptr;
+    const char* err_name = nullptr;
+    cuGetErrorString(res, &err_str);
+    cuGetErrorName(res, &err_name);
+    std::fprintf(stderr,
+                 "[TMA] cuTensorMapEncodeTiled failed: %s (%s) "
+                 "dtype=F16 dims={%llu,%llu} stride_bytes=%llu box={%u,%u} "
+                 "swizzle=%d ld=%d\n",
+                 err_str ? err_str : "unknown",
+                 err_name ? err_name : "unknown",
+                 static_cast<unsigned long long>(dims[0]),
+                 static_cast<unsigned long long>(dims[1]),
+                 static_cast<unsigned long long>(stride[0]),
+                 box[0],
+                 box[1],
+                 static_cast<int>(swizzle_mode),
+                 ld);
+    return false;
+  }
+  return true;
+}
+
+// Real TMA path (requires hardware support). Uses 2-stage double-buffered TMA
+// for A and B tiles and accumulates into a single shared C tile.
+__global__ void tma_prefetch_kernel(const __grid_constant__ CUtensorMap A_desc,
+                                    const __grid_constant__ CUtensorMap B_desc,
+                                    const half* __restrict__ A,
                                     const half* __restrict__ B,
                                     half* __restrict__ C,
                                     int M,
                                     int N,
                                     int K) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
+  using block_barrier = cuda::barrier<cuda::thread_scope_block>;
   cg::thread_block cta = cg::this_thread_block();
-  __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> pipe_state;
-  auto pipe = cuda::make_pipeline(cta, &pipe_state);
 
-  extern __shared__ unsigned char shared_mem[];
-  half* A_tile = reinterpret_cast<half*>(shared_mem);
-  half* B_tile = A_tile + PIPE_TILE_M * PIPE_TILE_K;
-  float* C_tile = reinterpret_cast<float*>(B_tile + PIPE_TILE_K * PIPE_TILE_N);
+  __shared__ alignas(128) half A_stage[2][PIPE_TILE_M][PIPE_TILE_K];
+  __shared__ alignas(128) half B_stage[2][PIPE_TILE_K][PIPE_TILE_N];
+  __shared__ float C_tile[PIPE_TILE_M][PIPE_TILE_N];
+  __shared__ alignas(block_barrier) unsigned char barrier_storage[2][sizeof(block_barrier)];
+
+  if (threadIdx.x == 0) {
+    for (int i = 0; i < 2; ++i) {
+      auto* bar = reinterpret_cast<block_barrier*>(barrier_storage[i]);
+      init(bar, blockDim.x);
+    }
+    cuda::device::experimental::fence_proxy_async_shared_cta();
+  }
+  cta.sync();
 
   const int block_row = blockIdx.y * PIPE_TILE_M;
   const int block_col = blockIdx.x * PIPE_TILE_N;
@@ -282,50 +356,110 @@ __global__ void tma_prefetch_kernel(const half* __restrict__ A,
     return;
   }
 
-  zero_tile(C_tile, PIPE_TILE_M * PIPE_TILE_N);
+  zero_tile(reinterpret_cast<float*>(C_tile), PIPE_TILE_M * PIPE_TILE_N);
   cta.sync();
 
   const int total_k_tiles = (K + PIPE_TILE_K - 1) / PIPE_TILE_K;
-  for (int tile_idx = 0; tile_idx < total_k_tiles; ++tile_idx) {
+  block_barrier::arrival_token tokens[2];
+
+  auto issue_tile = [&](int tile_idx) -> block_barrier::arrival_token {
+    const int stage = tile_idx % 2;
+    auto* bar = reinterpret_cast<block_barrier*>(barrier_storage[stage]);
     const int global_k = tile_idx * PIPE_TILE_K;
-    const int k_extent = min(PIPE_TILE_K, K - global_k);
-
-    pipe.producer_acquire();
-    if (threadIdx.x < 32) {
-      for (int row = threadIdx.x; row < rows; row += warpSize) {
-        cuda::memcpy_async(cta, A_tile + row * PIPE_TILE_K,
-                           A + (block_row + row) * K + global_k,
-                           k_extent * sizeof(half), pipe);
-      }
-      for (int row = threadIdx.x; row < k_extent; row += warpSize) {
-        cuda::memcpy_async(cta, B_tile + row * PIPE_TILE_N,
-                           B + (global_k + row) * N + block_col,
-                           cols * sizeof(half), pipe);
-      }
+    if (global_k >= K) {
+      return bar->arrive();
     }
-    pipe.producer_commit();
+    const int k_extent = min(PIPE_TILE_K, K - global_k);
+    const bool full_tile = (rows == PIPE_TILE_M) && (cols == PIPE_TILE_N) &&
+                           (k_extent == PIPE_TILE_K);
 
-    pipe.consumer_wait();
-    cta.sync();
+    if (full_tile) {
+      const std::size_t bytes = (PIPE_TILE_M * PIPE_TILE_K + PIPE_TILE_K * PIPE_TILE_N) *
+                                sizeof(half);
+      if (threadIdx.x == 0) {
+        cuda::device::experimental::cp_async_bulk_tensor_2d_global_to_shared(
+            &A_stage[stage], &A_desc, global_k, block_row, *bar);
+        cuda::device::experimental::cp_async_bulk_tensor_2d_global_to_shared(
+            &B_stage[stage], &B_desc, block_col, global_k, *bar);
+        return cuda::device::barrier_arrive_tx(*bar, 1, bytes);
+      }
+      return bar->arrive();
+    }
 
-    // Compute
-    compute_rows(A_tile, B_tile, C_tile, rows, cols, k_extent);
+    // Edge tiles: manual copy with bounds checking.
+    for (int idx = threadIdx.x; idx < rows * k_extent; idx += blockDim.x) {
+      const int r = idx / k_extent;
+      const int k = idx - r * k_extent;
+      const int g_row = block_row + r;
+      const int g_k = global_k + k;
+      half val = __float2half(0.0f);
+      if (g_row < M && g_k < K) {
+        val = A[g_row * K + g_k];
+      }
+      A_stage[stage][r][k] = val;
+    }
+    for (int idx = threadIdx.x; idx < k_extent * cols; idx += blockDim.x) {
+      const int k = idx / cols;
+      const int c = idx - k * cols;
+      const int g_k = global_k + k;
+      const int g_c = block_col + c;
+      half val = __float2half(0.0f);
+      if (g_k < K && g_c < N) {
+        val = B[g_k * N + g_c];
+      }
+      B_stage[stage][k][c] = val;
+    }
+    return bar->arrive();
+  };
 
-    cta.sync();
-    pipe.consumer_release();
+  const int preload = min(total_k_tiles, 2);
+  for (int t = 0; t < preload; ++t) {
+    tokens[t] = issue_tile(t);
   }
 
-  // Store
-  store_tile(C_tile, C, N, block_row, block_col, rows, cols);
+  for (int tile_idx = 0; tile_idx < total_k_tiles; ++tile_idx) {
+    const int stage = tile_idx % 2;
+    auto* bar = reinterpret_cast<block_barrier*>(barrier_storage[stage]);
+    bar->wait(std::move(tokens[stage]));
+    cta.sync();
+
+    const int global_k = tile_idx * PIPE_TILE_K;
+    const int k_extent = min(PIPE_TILE_K, K - global_k);
+    compute_rows(&A_stage[stage][0][0], &B_stage[stage][0][0], &C_tile[0][0],
+                 rows, cols, k_extent);
+    cta.sync();
+
+    const int next = tile_idx + 2;
+    if (next < total_k_tiles) {
+      tokens[stage] = issue_tile(next);
+    }
+  }
+
+  store_tile(&C_tile[0][0], C, N, block_row, block_col, rows, cols);
+#else
+  (void)A_desc;
+  (void)B_desc;
+  (void)C;
+  (void)M;
+  (void)N;
+  (void)K;
+#endif
 }
 
 inline bool cluster_launch_supported_impl() {
   int device = at::cuda::current_device();
   int value = 0;
 #ifdef cudaDevAttrClusterLaunch
-  cudaDeviceGetAttribute(&value, cudaDevAttrClusterLaunch, device);
+  if (cudaDeviceGetAttribute(&value, cudaDevAttrClusterLaunch, device) == cudaSuccess &&
+      value != 0) {
+    return true;
+  }
 #endif
-  return value != 0;
+  // Fallback: on Blackwell/Grace-Blackwell, cluster launch is expected; don't gate on attr.
+  int major = 0, minor = 0;
+  cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+  cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device);
+  return major >= 9;
 }
 
 inline bool tma_supported_impl() {
@@ -436,16 +570,53 @@ void launch_tma(torch::Tensor a, torch::Tensor b, torch::Tensor c) {
                 "Blackwell TMA unavailable on this device; "
                 "use optimized_blackwell_matmul_pseudo instead.");
   }
+
+  c10::cuda::CUDAGuard device_guard(a.device());
+  AT_CUDA_CHECK(cudaFree(nullptr));  // ensure primary context is initialized
+  CUresult cu_init = cuInit(0);
+  TORCH_CHECK(cu_init == CUDA_SUCCESS, "cuInit failed for TMA path");
+
+  PFN_cuTensorMapEncodeTiled_v12000 encode = cuda_tma::load_cuTensorMapEncodeTiled();
+  TORCH_CHECK(encode != nullptr, "cuTensorMapEncodeTiled unavailable on this runtime");
+
+  CUtensorMap A_desc{};
+  CUtensorMap B_desc{};
+  TORCH_CHECK(
+      encode_tensor_map_half(A_desc,
+                             encode,
+                             a.data_ptr(),
+                             a.size(1),   // width = K
+                             a.size(0),   // height = M
+                             a.size(1),   // ld = K
+                             PIPE_TILE_K,
+                             PIPE_TILE_M,
+                             CU_TENSOR_MAP_SWIZZLE_NONE),
+      "failed to encode A tensor map");
+  TORCH_CHECK(
+      encode_tensor_map_half(B_desc,
+                             encode,
+                             b.data_ptr(),
+                             b.size(1),   // width = N
+                             b.size(0),   // height = K
+                             b.size(1),   // ld = N
+                             PIPE_TILE_N,
+                             PIPE_TILE_K,
+                             CU_TENSOR_MAP_SWIZZLE_NONE),
+      "failed to encode B tensor map");
+
   dim3 block(TMA_THREADS);
   dim3 grid((b.size(1) + PIPE_TILE_N - 1) / PIPE_TILE_N,
             (a.size(0) + PIPE_TILE_M - 1) / PIPE_TILE_M);
-  const size_t shared_bytes =
-      (PIPE_TILE_M * PIPE_TILE_K + PIPE_TILE_K * PIPE_TILE_N) * sizeof(half) +
-      PIPE_TILE_M * PIPE_TILE_N * sizeof(float);
+  const size_t static_shared =
+      2 * PIPE_TILE_M * PIPE_TILE_K * sizeof(half) +  // double-buffered A
+      2 * PIPE_TILE_K * PIPE_TILE_N * sizeof(half) +  // double-buffered B
+      PIPE_TILE_M * PIPE_TILE_N * sizeof(float);      // accumulation tile
+
   cudaFuncSetAttribute(tma_prefetch_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
-                       shared_bytes);
+                       static_shared);
   auto stream = at::cuda::getCurrentCUDAStream();
-  tma_prefetch_kernel<<<grid, block, shared_bytes, stream>>>(
+  tma_prefetch_kernel<<<grid, block, 0, stream>>>(
+      A_desc, B_desc,
       reinterpret_cast<const half*>(a.data_ptr<at::Half>()),
       reinterpret_cast<const half*>(b.data_ptr<at::Half>()),
       reinterpret_cast<half*>(c.data_ptr<at::Half>()), a.size(0), b.size(1),

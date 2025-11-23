@@ -1,0 +1,127 @@
+{
+  "examples": {
+    "gemm_cuda": {
+      "example": "gemm",
+      "metadata": {
+        "best_optimization": "strided",
+        "best_optimization_file": "optimized_gemm_strided.cu",
+        "best_optimization_speedup": 1.0609719174477135,
+        "best_optimization_time_ms": 555.2367726668308,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:33.536796"
+      },
+      "metrics": {
+        "baseline_p75_ms": 594.4398200008436,
+        "baseline_p90_ms": 594.4398200008436,
+        "baseline_time_ms": 589.0906233338077,
+        "best_optimized_p75_ms": 552.4290749999636,
+        "best_optimized_p90_ms": 552.4290749999636,
+        "best_optimized_speedup": 1.0609719174477135,
+        "best_optimized_time_ms": 555.2367726668308,
+        "best_speedup": 1.0609719174477135
+      },
+      "type": "cuda"
+    },
+    "guided_decoding": {
+      "example": "guided_decoding",
+      "metadata": {
+        "best_optimization": "optimized_guided_decoding",
+        "best_optimization_file": "optimized_guided_decoding.py",
+        "best_optimization_speedup": 3.049633415480759,
+        "best_optimization_time_ms": 0.6504655927419662,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:09.081200"
+      },
+      "metrics": {
+        "baseline_p75_ms": 2.195136070251465,
+        "baseline_time_ms": 1.983681607246399,
+        "best_optimized_p75_ms": 0.6432639956474304,
+        "best_optimized_speedup": 3.049633415480759,
+        "best_optimized_time_ms": 0.6504655927419662,
+        "best_speedup": 3.049633415480759
+      },
+      "type": "python"
+    },
+    "guided_decoding_math": {
+      "example": "guided_decoding_math",
+      "metadata": {
+        "best_optimization": "optimized_guided_decoding_math",
+        "best_optimization_file": "optimized_guided_decoding_math.py",
+        "best_optimization_speedup": 0.7601359928409418,
+        "best_optimization_time_ms": 1.323796808719635,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:09.939177"
+      },
+      "metrics": {
+        "baseline_p75_ms": 1.036736011505127,
+        "baseline_time_ms": 1.00626560151577,
+        "best_optimized_p75_ms": 1.1125760078430176,
+        "best_optimized_speedup": 0.7601359928409418,
+        "best_optimized_time_ms": 1.323796808719635,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    },
+    "ilp_basic": {
+      "example": "ilp_basic",
+      "metadata": {
+        "best_optimization": "optimized_ilp_basic",
+        "best_optimization_file": "optimized_ilp_basic.py",
+        "best_optimization_speedup": 0.9805053718840825,
+        "best_optimization_time_ms": 45.506051456928255,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:21.231728"
+      },
+      "metrics": {
+        "baseline_p75_ms": 61.67299270629883,
+        "baseline_time_ms": 44.61892790675163,
+        "best_optimized_p75_ms": 72.29049682617188,
+        "best_optimized_speedup": 0.9805053718840825,
+        "best_optimized_time_ms": 45.506051456928255,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    },
+    "performance": {
+      "example": "performance",
+      "metadata": {
+        "best_optimization": "optimized_performance",
+        "best_optimization_file": "optimized_performance.py",
+        "best_optimization_speedup": 5.532479439729927,
+        "best_optimization_time_ms": 10.191007995605469,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:27.447330"
+      },
+      "metrics": {
+        "baseline_p75_ms": 57.980831146240234,
+        "baseline_time_ms": 56.38154220581055,
+        "best_optimized_p75_ms": 10.070207595825195,
+        "best_optimized_speedup": 5.532479439729927,
+        "best_optimized_time_ms": 10.191007995605469,
+        "best_speedup": 5.532479439729927
+      },
+      "type": "python"
+    },
+    "warp_specialization": {
+      "example": "warp_specialization",
+      "metadata": {
+        "best_optimization": "optimized_warp_specialization",
+        "best_optimization_file": "optimized_warp_specialization.py",
+        "best_optimization_speedup": 20.711268669267376,
+        "best_optimization_time_ms": 0.7237279951572418,
+        "git_commit": "29d85ddf5a906f0f4d709e369fc3042db7b11b11",
+        "updated_at": "2025-11-23T05:11:28.031548"
+      },
+      "metrics": {
+        "baseline_p75_ms": 15.100992202758789,
+        "baseline_time_ms": 14.989324951171875,
+        "best_optimized_p75_ms": 0.703711986541748,
+        "best_optimized_speedup": 20.711268669267376,
+        "best_optimized_time_ms": 0.7237279951572418,
+        "best_speedup": 20.711268669267376
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

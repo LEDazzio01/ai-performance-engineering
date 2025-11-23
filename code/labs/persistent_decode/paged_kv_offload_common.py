@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -26,9 +27,13 @@ from typing import Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.backends.cuda import SDPBackend, sdp_kernel
 
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
+
+try:  # Prefer the Blackwell-aware SDPA selector when available.
+    from arch_config import prefer_sdpa_backends  # type: ignore
+except Exception:  # pragma: no cover - defensive import
+    prefer_sdpa_backends = None  # type: ignore
 
 
 def _torch_version_at_least(major: int, minor: int) -> bool:
@@ -45,16 +50,40 @@ def _supports_fp8_kv() -> bool:
 
 
 def _supports_fused_fp8_attention() -> bool:
-    """Heuristic: Blackwell-class GPUs (compute capability >= 10) + flash SDP."""
+    """Heuristic: Blackwell/Grace-Blackwell GPUs (SM 10.x or 12.x) + flash/TE SDP."""
     if not torch.cuda.is_available():
         return False
     cc_major, _ = torch.cuda.get_device_capability()
-    if cc_major < 10:  # Hopper is 9.x; Blackwell (B200/GB200) is 10.x+
+    if cc_major < 10:
         return False
     try:
-        return SDPBackend.flash in sdp_kernel.available_backends()
+        from torch.nn.attention import sdpa_kernel as _sdpa_kernel, SDPBackend as _SDPBackend
+
+        available = getattr(_sdpa_kernel, "available_backends", lambda: [])()
+        te_backend = getattr(_SDPBackend, "TRANSFORMER_ENGINE", None)
+        if available and te_backend is not None:
+            return te_backend in available
     except Exception:
-        return False
+        pass
+    return False
+
+
+def _randn_safe(*shape: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """
+    Generate random numbers; fail fast if the target dtype lacks a normal kernel.
+    """
+    try:
+        return torch.randn(*shape, device=device, dtype=dtype)
+    except (RuntimeError, NotImplementedError) as exc:
+        msg = str(exc).lower()
+        float8_e4m3 = getattr(torch, "float8_e4m3fn", None)
+        float8_e5m2 = getattr(torch, "float8_e5m2fn", None)
+        is_float8 = dtype in (float8_e4m3, float8_e5m2)
+        if is_float8 and ("not implemented" in msg or "normal_kernel" in msg):
+            raise RuntimeError(
+                f"FP8 normal kernel unavailable for dtype {dtype}; aborting benchmark."
+            ) from exc
+        raise
 
 
 def _np_dtype_for(torch_dtype: torch.dtype) -> np.dtype:
@@ -119,9 +148,8 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
             self._fp8_reason = "Falling back: PyTorch 2.10+ required for preferred FP8 KV path."
             return self.cfg.fallback_dtype
         if self.cfg.prefer_fp8 and _supports_fp8_kv():
-            if self.cfg.require_fused_fp8 and not _supports_fused_fp8_attention():
-                self._fp8_reason = "Falling back: fused FP8 attention not detected (use FP16)."
-                return self.cfg.fallback_dtype
+            if not _supports_fused_fp8_attention():
+                raise RuntimeError("FP8 requested but fused attention backend is unavailable.")
             self._fp8_reason = "Using FP8 KV: fused FlashAttention path detected."
             return torch.float8_e4m3fn  # type: ignore[attr-defined]
         return self.cfg.fallback_dtype
@@ -252,7 +280,7 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
         self._copy_to_device(staged, slice_len)
 
         # Simple attention step that will pick flash/mathematics based on dtype/backend.
-        q = torch.randn(
+        q = _randn_safe(
             self.cfg.batch_size,
             self.cfg.num_heads,
             self.cfg.decode_tokens,
@@ -262,11 +290,8 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
         )
         k = self.hot_k[..., :slice_len, :]
         v = self.hot_v[..., :slice_len, :]
-        with sdp_kernel(
-            enable_flash=self.enable_flash,
-            enable_mem_efficient=not self.enable_flash,
-            enable_math=True,
-        ):
+        ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
+        with ctx:
             _ = F.scaled_dot_product_attention(q, k, v)
 
         # Queue prefetch for the next page if requested.

@@ -177,7 +177,7 @@ def _configure_attention_kernels() -> None:
     if sdpa_kernel is not None and SDPBackend is not None:
         preferred = [
             getattr(SDPBackend, name)
-            for name in ("FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN")
+            for name in ("TRANSFORMER_ENGINE", "FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN")
             if hasattr(SDPBackend, name)
         ]
         if preferred:

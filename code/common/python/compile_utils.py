@@ -19,6 +19,34 @@ logger = logging.getLogger(__name__)
 _LEGACY_TF32_PATCHED = False
 
 
+def _configure_compiler_defaults() -> None:
+    """Enable Blackwell-friendly torch.compile defaults (TMA, autotune)."""
+    try:
+        config = torch._inductor.config  # type: ignore[attr-defined]
+    except Exception:
+        return
+
+    try:
+        cuda_cfg = getattr(config, "cuda", None)
+        if cuda_cfg is not None and hasattr(cuda_cfg, "enable_tma"):
+            cuda_cfg.enable_tma = True
+    except Exception:
+        logger.debug("Unable to enable Inductor CUDA TMA support", exc_info=True)
+
+    try:
+        triton_cfg = getattr(config, "triton", None)
+        if triton_cfg is not None:
+            if hasattr(triton_cfg, "tma_support"):
+                triton_cfg.tma_support = True
+            if hasattr(triton_cfg, "autotune_mode"):
+                triton_cfg.autotune_mode = "max-autotune"
+    except Exception:
+        logger.debug("Unable to enable Triton TMA/autotune defaults", exc_info=True)
+
+
+_configure_compiler_defaults()
+
+
 def _patch_legacy_tf32_attributes() -> None:
     """
     Override legacy TF32 accessors so reads/writes no-op instead of calling the

@@ -23,10 +23,10 @@
 namespace {
 
 constexpr int TILE_M = 128;
-constexpr int TILE_N = 128;
+constexpr int TILE_N = 64;   // Keep shared tile under 48 KB
 constexpr int BLOCK_X = 32;
 constexpr int BLOCK_Y = 4;
-constexpr int ITERATIONS = 50;
+constexpr int ITERATIONS = 20;
 
 __global__ void baseline_bulk_copy_kernel(const float* __restrict__ src,
                                           float* __restrict__ dst,

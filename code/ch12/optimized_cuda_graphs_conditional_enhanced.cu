@@ -31,13 +31,13 @@ __global__ void expensive_kernel(float* data, int n, float scale) {
 int main() {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-    bool is_sm121 = (prop.major == 12);
-    bool is_sm100 = (prop.major == 10 && prop.minor == 0);
+    bool is_sm12x = (prop.major >= 12);
+    bool is_sm10x = (prop.major == 10);
     bool supports_graphs = (prop.major >= 7 && prop.minor >= 5) || prop.major >= 8;
     
     std::printf("=== Optimized Conditional Graphs Enhanced (CUDA Graph Static Path) ===\n");
     std::printf("Architecture: %s (SM %d.%d)\n", 
-                is_sm121 ? "Grace-Blackwell GB10" : is_sm100 ? "Blackwell B200" : "Other",
+                is_sm12x ? "Grace-Blackwell GB10" : is_sm10x ? "Blackwell B200/B300" : "Other",
                 prop.major, prop.minor);
     
     if (!supports_graphs) {
@@ -89,7 +89,7 @@ int main() {
     std::printf("Optimized (CUDA graph static path): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
     std::printf("Note: Fixed path, no dynamic branching\n");
     
-    if (is_sm100 || is_sm121) {
+    if (is_sm10x || is_sm12x) {
         std::printf("\n✅ Blackwell Optimizations:\n");
         std::printf("  • Hardware support for conditional execution\n");
         std::printf("  • Reduced kernel launch overhead in graphs\n");
@@ -105,4 +105,3 @@ int main() {
     
     return 0;
 }
-
