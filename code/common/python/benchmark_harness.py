@@ -30,7 +30,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, TYPE_CHECKING, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union, cast
 
 import numpy as np
 import torch
@@ -628,7 +628,117 @@ class BaseBenchmark:
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         """Return workload metadata if registered."""
+        if self._workload_metadata is not None:
+            return self._workload_metadata
+        inferred = self._infer_workload_metadata()
+        if inferred is not None:
+            self._workload_metadata = inferred
         return self._workload_metadata
+
+    def _infer_workload_metadata(self) -> Optional[WorkloadMetadata]:
+        """Best-effort inference for benchmarks that rely on external configs.
+        
+        This inspects common attribute names (batch_size, seq_len, hidden_size, etc.)
+        to synthesize conservative workload metadata so downstream tools can make
+        apples-to-apples comparisons even when individual benchmarks omit explicit
+        WorkloadMetadata registration. The goal is cosmetic consistency for review
+        tooling; benchmarks can still override via register_workload_metadata().
+        """
+
+        def _collect_numeric_attrs() -> Dict[str, float]:
+            values: Dict[str, float] = {}
+            for attr in dir(self):
+                if attr.startswith("_"):
+                    continue
+                try:
+                    value = getattr(self, attr)
+                except Exception:
+                    continue
+                if isinstance(value, bool):
+                    continue
+                if isinstance(value, (int, float)):
+                    values[attr] = float(value)
+            return values
+
+        numeric_attrs = _collect_numeric_attrs()
+        if not numeric_attrs:
+            return None
+
+        def _pick(*names: str) -> Optional[float]:
+            for name in names:
+                if name in numeric_attrs:
+                    return numeric_attrs[name]
+            return None
+
+        requests = _pick(
+            "requests_per_iteration",
+            "num_requests",
+            "request_count",
+            "requests",
+            "batches_per_iteration",
+            "microbatch_size",
+            "micro_batch_size",
+            "batch_size",
+            "B",
+        )
+
+        tokens = _pick(
+            "tokens_per_iteration",
+            "token_count",
+            "tokens",
+            "num_tokens",
+            "total_tokens",
+            "elements_per_iteration",
+        )
+
+        def _product(names: Tuple[str, ...]) -> Optional[float]:
+            prod = 1.0
+            found = False
+            for name in names:
+                value = numeric_attrs.get(name)
+                if value is None:
+                    return None
+                prod *= value
+                found = True
+            return prod if found else None
+
+        if tokens is None:
+            combo_candidates = [
+                ("batch_size", "tokens_per_step", "decode_steps"),
+                ("batch_size", "sequence_length"),
+                ("batch_size", "seq_len"),
+                ("batch_size", "hidden_size"),
+                ("microbatch_size", "hidden_size"),
+                ("micro_batch_size", "hidden_size"),
+                ("batch_size", "input_len"),
+                ("batch_size", "model_dim"),
+                ("batch_size", "embedding_dim"),
+                ("N", "N"),
+                ("N", "K"),
+                ("M", "N"),
+                ("rows", "cols"),
+                ("size", "size"),
+            ]
+            for combo in combo_candidates:
+                prod = _product(combo)
+                if prod is not None and prod > 0:
+                    tokens = prod
+                    break
+
+        bytes_per_iter = _pick(
+            "bytes_per_iteration",
+            "byte_count",
+            "total_bytes",
+        )
+
+        if tokens is None and bytes_per_iter is None and requests is None:
+            return None
+
+        return WorkloadMetadata(
+            requests_per_iteration=requests if requests is not None else 1.0,
+            tokens_per_iteration=tokens,
+            bytes_per_iteration=bytes_per_iter,
+        )
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Benchmarks can override to expose custom metrics."""
