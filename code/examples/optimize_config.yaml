@@ -1,0 +1,48 @@
+# Auto-Optimizer Configuration
+# Copy to your project root as optimize_config.yaml
+
+llm:
+  provider: anthropic  # or 'openai'
+  model: null  # Uses default model for provider (claude-sonnet-4-20250514 / gpt-4o)
+  max_tokens: 16384
+  temperature: 0.1
+  # api_key: null  # Set via ANTHROPIC_API_KEY or OPENAI_API_KEY env var
+
+optimization:
+  max_iterations: 3
+  target_speedup: 1.2
+  techniques:
+    - torch_compile
+    - mixed_precision
+    - cuda_graphs
+    - kernel_fusion
+    - memory_optimization
+  fail_fast: true
+
+profiling:
+  warmup_iterations: 3
+  benchmark_iterations: 10
+  enable_memory_tracking: true
+  enable_trace: true
+  enable_flame_graph: true
+
+torch_compile:
+  mode: reduce-overhead  # 'default', 'reduce-overhead', 'max-autotune'
+  backend: inductor
+  fullgraph: false
+  dynamic: false
+
+mixed_precision:
+  dtype: bfloat16  # or 'float16'
+  enabled_ops:
+    - linear
+    - matmul
+    - conv2d
+    - attention
+
+output:
+  save_intermediate: true
+  generate_report: true
+  output_format: markdown  # or 'json', 'html'
+  output_dir: null  # Uses input directory if null
+

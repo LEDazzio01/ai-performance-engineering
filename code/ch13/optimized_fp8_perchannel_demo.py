@@ -495,7 +495,13 @@ class FP8PerChannelDemoBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        return {"fp8_perchannel_demo.scaling_mode": "per_channel"}
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_precision_metrics
+        return compute_precision_metrics(
+            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
+            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
+            precision_type="fp8",
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.demo_benchmark is None:

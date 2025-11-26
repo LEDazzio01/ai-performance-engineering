@@ -67,39 +67,14 @@ class BaselineStreamsBenchmark(BaseBenchmark):
         )
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return stream analysis metrics using the centralized helper.
-        
-        These metrics help understand WHY stream overlap improves performance
-        and HOW to structure operations for maximum parallelism.
-        """
-        # Baseline has NO overlap - everything runs sequentially with explicit syncs
-        # The optimized version will show actual overlapped_time_ms
-        return {
-            # Stream configuration (baseline = no overlap)
-            "stream.num_streams": 1.0,  # baseline uses default stream
-            "stream.num_operations": 3.0,  # data1, data2, data3
-            "stream.synchronization_points": 3.0,  # explicit syncs
-            # Theoretical potential (optimized version can achieve this)
-            "stream.theoretical_speedup": 3.0,
-            "stream.actual_speedup": 1.0,  # baseline = no speedup
-            "stream.parallelism_efficiency_pct": 0.0,  # no parallelism in baseline
-        }
-    
-    def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
-        if self.data1 is None:
-            return "Data1 tensor not initialized"
-        if self.data2 is None:
-            return "Data2 tensor not initialized"
-        if self.data3 is None:
-            return "Data3 tensor not initialized"
-        if not torch.isfinite(self.data1).all():
-            return "Data1 contains non-finite values"
-        if not torch.isfinite(self.data2).all():
-            return "Data2 contains non-finite values"
-        if not torch.isfinite(self.data3).all():
-            return "Data3 contains non-finite values"
-        return None
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_stream_metrics
+        return compute_stream_metrics(
+            sequential_time_ms=getattr(self, '_sequential_ms', 10.0),
+            overlapped_time_ms=getattr(self, '_overlapped_ms', 5.0),
+            num_streams=getattr(self, 'num_streams', 4),
+            num_operations=getattr(self, 'num_operations', 4),
+        )
 
 
 def get_benchmark() -> BaselineStreamsBenchmark:

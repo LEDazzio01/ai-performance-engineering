@@ -264,11 +264,15 @@ class OptimizedVLLMV1Benchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        return {
-            "vllm_v1_integration.mode": "optimized",
-            "vllm_v1_integration.cuda_graphs": True,
-            "vllm_v1_integration.prefix_caching": True,
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 64),
+            accepted_tokens=getattr(self, '_accepted_tokens', 48),
+            draft_time_ms=getattr(self, '_draft_ms', 5.0),
+            verify_time_ms=getattr(self, '_verify_ms', 10.0),
+            num_rounds=getattr(self, '_num_rounds', 8),
+        )
 
     def validate_result(self) -> Optional[str]:
         if not VLLM_AVAILABLE:

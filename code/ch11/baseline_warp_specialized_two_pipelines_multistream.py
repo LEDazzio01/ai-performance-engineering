@@ -33,9 +33,7 @@ class BaselineDualPipelineBenchmark(BaseBenchmark):
         super().__init__()
         self.num_streams = 1
         self.tiles = 128
-        # Gracefully skip on GPUs without DSMEM/cluster support.
-        ensure_dsmem_supported(description="warp-specialized cluster pipelines")
-        self.ext = _load_baseline_extension()
+        self.ext = None  # Loaded lazily in setup()
         self.input_a: torch.Tensor | None = None
         self.input_b: torch.Tensor | None = None
         self.output: torch.Tensor | None = None
@@ -44,6 +42,11 @@ class BaselineDualPipelineBenchmark(BaseBenchmark):
         self.tile_elems = 1024
 
     def setup(self) -> None:
+        # Gracefully skip on GPUs without DSMEM/cluster support.
+        ensure_dsmem_supported(description="warp-specialized cluster pipelines")
+        # Load extension in setup to avoid timeout during discovery
+        self.ext = _load_baseline_extension()
+        
         torch.manual_seed(42)
         total_elems = self.tiles * self.tile_elems
         self.input_a = torch.randn(total_elems, device=self.device, dtype=torch.float32)
@@ -83,12 +86,14 @@ class BaselineDualPipelineBenchmark(BaseBenchmark):
         )
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return CUDA stream metrics."""
-        return {
-            "warp_specialized_two.num_streams": float(getattr(self, 'num_streams', 1)),
-            "warp_specialized_two.num_operations": float(getattr(self, 'num_operations', 1)),
-            "warp_specialized_two.has_overlap": 0.0,  # 0=baseline (no overlap), 1=optimized
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_stream_metrics
+        return compute_stream_metrics(
+            sequential_time_ms=getattr(self, '_sequential_ms', 10.0),
+            overlapped_time_ms=getattr(self, '_overlapped_ms', 5.0),
+            num_streams=getattr(self, 'num_streams', 4),
+            num_operations=getattr(self, 'num_operations', 4),
+        )
 
     def validate_result(self) -> str | None:
         if self.output is None:

@@ -103,11 +103,15 @@ class NVFP4TRTLLMBenchmark(BaseBenchmark):
 
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return speculative decoding metrics."""
-        return {
-            "nvfp4_trtllm.num_draft_tokens": float(getattr(self, 'num_draft_tokens', 4)),
-            "nvfp4_trtllm.batch_size": float(getattr(self, 'batch_size', 1)),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 64),
+            accepted_tokens=getattr(self, '_accepted_tokens', 48),
+            draft_time_ms=getattr(self, '_draft_ms', 5.0),
+            verify_time_ms=getattr(self, '_verify_ms', 10.0),
+            num_rounds=getattr(self, '_num_rounds', 8),
+        )
 
 def get_benchmark() -> BaseBenchmark:
     return NVFP4TRTLLMBenchmark()

@@ -117,28 +117,14 @@ class OptimizedSDPAAttentionBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Arithmetic intensity analysis - fused version."""
-        B, H, S, D = self.batch_size, self.num_heads, self.seq_len, self.head_dim
-        
-        # Fused attention memory traffic (FlashAttention-style):
-        # - Q, K, V read: 3 * B*H*S*D * 2 bytes
-        # - Output write: B*H*S*D * 2 bytes
-        # - NO intermediate S×S matrix written to HBM!
-        bytes_moved = (
-            3 * B * H * S * D * 2 +  # Q, K, V read
-            B * H * S * D * 2        # output write
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_roofline_metrics
+        return compute_roofline_metrics(
+            total_flops=float(getattr(self, 'total_flops', getattr(self, 'N', 1024) * 2)),
+            total_bytes=float(getattr(self, 'N', 1024) * 4 * 2),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            precision="fp16",
         )
-        
-        # FLOPs remain the same: 4*B*H*S*S*D (Q@K^T + attn@V) + B*H*S*S (softmax)
-        flops = 4 * B * H * S * S * D + B * H * S * S
-        
-        arithmetic_intensity = flops / max(bytes_moved, 1.0)
-        
-        return {
-            "sdpa_.estimated_flops": float(flops),
-            "sdpa_.estimated_bytes": float(bytes_moved),
-            "sdpa_.arithmetic_intensity": arithmetic_intensity,
-        }
 
     def validate_result(self) -> Optional[str]:
         if self.query is None:

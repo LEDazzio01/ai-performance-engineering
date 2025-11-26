@@ -147,14 +147,14 @@ class GraceCoherentMemoryBenchmark(BaseBenchmark):
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
 
-    def get_custom_metrics(self) -> Optional[Dict[str, Any]]:
-        metrics: Dict[str, Any] = {
-            "bandwidth_gb_s": self.bandwidth_gb_s or 0.0,
-            "is_grace_blackwell": self._impl.is_grace_blackwell,
-            "size_mb": self._impl.size_mb,
-            "iterations": self._impl.iterations,
-        }
-        return metrics
+    def get_custom_metrics(self) -> Optional[dict]:
+        """Return memory transfer metrics for grace_coherent_memory."""
+        from common.python.benchmark_metrics import compute_memory_transfer_metrics
+        return compute_memory_transfer_metrics(
+            bytes_transferred=self.size,
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            transfer_type="hbm",
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.elapsed_s is None:

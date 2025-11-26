@@ -57,6 +57,140 @@ MINIMAL_METRICS = [
     "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
 ]
 
+# =============================================================================
+# Chapter-Specific Metric Sets
+# =============================================================================
+# Use these for targeted profiling of specific optimization techniques.
+# Each set focuses on the metrics most relevant to that chapter's topic.
+
+# Ch6: Kernel Fundamentals - Bank conflicts, warp divergence, occupancy
+CH6_KERNEL_METRICS = [
+    *ROOFLINE_METRICS,
+    # Bank conflicts (critical for Ch6)
+    "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum",
+    "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum",
+    # Warp divergence
+    "smsp__sass_average_branch_targets_threads_uniform.pct",
+    "smsp__thread_inst_executed_per_inst_executed.ratio",
+    # Occupancy details
+    "sm__warps_active.avg.pct_of_peak_sustained_active",
+    "launch__occupancy_per_block_size",
+    "launch__registers_per_thread",
+    "launch__shared_mem_per_block",
+]
+
+# Ch7: Memory Access - Coalescing, vectorization, cache behavior
+CH7_MEMORY_METRICS = [
+    *ROOFLINE_METRICS,
+    # Coalescing efficiency
+    "smsp__sass_average_data_bytes_per_sector_mem_global_op_ld.pct",
+    "smsp__sass_average_data_bytes_per_sector_mem_global_op_st.pct",
+    # L1 cache behavior
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit_rate.pct",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_st_lookup_hit_rate.pct",
+    # L2 cache behavior
+    "lts__t_sectors_op_read_hit_rate.pct",
+    "lts__t_sectors_op_write_hit_rate.pct",
+    # Transaction counts
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
+]
+
+# Ch8: Optimization Techniques - Stall analysis, ILP, register pressure
+CH8_OPTIMIZATION_METRICS = [
+    *DEEP_DIVE_METRICS,
+    # Stall reasons (THE KEY to understanding "why faster")
+    "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
+    "smsp__warp_issue_stalled_dependency_per_warp_active.pct",
+    "smsp__warp_issue_stalled_memory_throttle_per_warp_active.pct",
+    "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",
+    "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct",
+    "smsp__warp_issue_stalled_not_selected_per_warp_active.pct",
+    # ILP metrics
+    "smsp__inst_executed_per_warp.ratio",
+    # Register pressure
+    "launch__registers_per_thread",
+    "launch__shared_mem_per_block",
+]
+
+# Ch9: Compute-Bound - Tensor Core utilization, arithmetic intensity
+CH9_COMPUTE_METRICS = [
+    *ROOFLINE_METRICS,
+    # Tensor Core utilization
+    "sm__inst_executed_pipe_tensor.sum",
+    "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",
+    # FMA operations
+    "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_dmma_pred_on.sum",
+    "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",
+    # Instruction throughput
+    "sm__inst_executed.avg.per_cycle_elapsed",
+]
+
+# Ch10: Pipelining - Pipeline utilization, async copy
+CH10_PIPELINE_METRICS = [
+    *ROOFLINE_METRICS,
+    # Async copy metrics
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit_rate.pct",
+    # Pipeline stalls
+    "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
+    "smsp__warp_issue_stalled_membar_per_warp_active.pct",
+    # SM utilization
+    "sm__warps_active.avg.pct_of_peak_sustained_active",
+    "sm__ctas_active.avg.pct_of_peak_sustained_active",
+]
+
+# Ch11: Streams - Overlap metrics (use nsys primarily)
+CH11_STREAM_METRICS = [
+    *MINIMAL_METRICS,
+    # Basic timing for overlap analysis
+    "gpu__time_duration.sum",
+    "gpu__time_duration.avg",
+]
+
+# Ch12: CUDA Graphs - Launch overhead metrics
+CH12_GRAPH_METRICS = [
+    *MINIMAL_METRICS,
+    # Launch timing
+    "gpu__time_duration.avg",
+    "gpu__time_duration.sum",
+]
+
+# Ch13-14: PyTorch/Triton - General performance
+CH13_PYTORCH_METRICS = [
+    *ROOFLINE_METRICS,
+    # Tensor Core for FP8/FP16
+    "sm__inst_executed_pipe_tensor.sum",
+    # Memory efficiency
+    "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+]
+
+# Mapping from chapter number to metric set
+CHAPTER_METRICS = {
+    6: CH6_KERNEL_METRICS,
+    7: CH7_MEMORY_METRICS,
+    8: CH8_OPTIMIZATION_METRICS,
+    9: CH9_COMPUTE_METRICS,
+    10: CH10_PIPELINE_METRICS,
+    11: CH11_STREAM_METRICS,
+    12: CH12_GRAPH_METRICS,
+    13: CH13_PYTORCH_METRICS,
+    14: CH13_PYTORCH_METRICS,  # Same as Ch13
+}
+
+
+def get_chapter_metrics(chapter: int) -> List[str]:
+    """Get the recommended ncu metrics for a specific chapter.
+    
+    Args:
+        chapter: Chapter number (1-20)
+    
+    Returns:
+        List of ncu metric names appropriate for that chapter's topic
+    """
+    return CHAPTER_METRICS.get(chapter, ROOFLINE_METRICS)
+
+
 NCU_SET_BY_METRIC = {
     "deep_dive": "full",
     "roofline": "roofline",

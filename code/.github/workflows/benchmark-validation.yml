@@ -1,0 +1,90 @@
+name: Benchmark Validation
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'ch*/**'
+      - 'common/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/benchmark-validation.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'ch*/**'
+      - 'common/**'
+      - 'scripts/**'
+      - 'tests/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt || true
+      
+      - name: Run unit tests
+        run: |
+          pytest tests/test_benchmark_metrics.py tests/test_profiler_config.py tests/test_update_custom_metrics.py -v --tb=short
+        continue-on-error: false
+      
+      - name: Validate benchmark imports
+        run: |
+          python scripts/validate_imports.py --chapter 1 || true
+          python scripts/validate_imports.py --chapter 6 || true
+          python scripts/validate_imports.py --chapter 7 || true
+        continue-on-error: true  # Some imports need CUDA
+      
+      - name: Analyze metrics coverage
+        run: |
+          python scripts/update_custom_metrics.py --analyze
+      
+      - name: Generate coverage report
+        run: |
+          python scripts/benchmark_coverage.py --markdown >> $GITHUB_STEP_SUMMARY
+      
+      - name: Audit silent fallbacks
+        run: |
+          python scripts/audit_silent_fallbacks.py
+        continue-on-error: true
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install linters
+        run: |
+          pip install flake8 mypy
+      
+      - name: Run flake8
+        run: |
+          flake8 common/python/ scripts/ --max-line-length=120 --ignore=E501,W503,E402 --count --statistics
+        continue-on-error: true
+      
+      - name: Run mypy
+        run: |
+          mypy common/python/benchmark_metrics.py --ignore-missing-imports
+        continue-on-error: true
+

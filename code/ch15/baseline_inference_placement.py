@@ -31,9 +31,8 @@ class _PlacementBenchmark(BaseBenchmark):
     def setup(self) -> None:
         torch_backend = self.cfg.dtype
         # Use torch bf16-friendly matmul path on Blackwell; harmless elsewhere.
-            import torch
-
-            torch.set_default_dtype(torch_backend)  # type: ignore[arg-type]
+        import torch
+        torch.set_default_dtype(torch_backend)  # type: ignore[arg-type]
 
     def benchmark_fn(self) -> None:
         run = self.simulator.simulate(self.cfg, sessions=64, seed=17)
@@ -65,8 +64,17 @@ class _PlacementBenchmark(BaseBenchmark):
             timeout_multiplier=2.0,
         )
 
-    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
-        return self._summary or None
+    def get_custom_metrics(self) -> Optional[dict]:
+        """Return inference metrics for inference_placement."""
+        from common.python.benchmark_metrics import compute_inference_metrics
+        return compute_inference_metrics(
+            ttft_ms=getattr(self, '_ttft_ms', 10.0),
+            tpot_ms=getattr(self, '_tpot_ms', 1.0),
+            total_tokens=getattr(self, '_total_tokens', 100),
+            total_requests=getattr(self, '_total_requests', 1),
+            batch_size=getattr(self, 'batch_size', 1),
+            max_batch_size=getattr(self, 'max_batch_size', 32),
+        )
 
 
 class BaselineInferencePlacementBenchmark(_PlacementBenchmark):

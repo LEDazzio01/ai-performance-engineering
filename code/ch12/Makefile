@@ -6,7 +6,7 @@ NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) $(CUDA_NVTX_CFLAGS)
 NVCC_LIBS = -lcuda $(CUDA_NVTX_LDFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
-BASE_TARGETS = baseline_work_queue optimized_work_queue baseline_cuda_graphs optimized_cuda_graphs baseline_cuda_graphs_conditional optimized_cuda_graphs_conditional baseline_cuda_graphs_conditional_enhanced optimized_cuda_graphs_conditional_enhanced baseline_kernel_fusion optimized_kernel_fusion baseline_graph_bandwidth optimized_graph_bandwidth baseline_uneven_static optimized_uneven_static baseline_uneven_partition optimized_uneven_partition baseline_dynamic_parallelism_host optimized_dynamic_parallelism_host baseline_dynamic_parallelism_device optimized_dynamic_parallelism_device
+BASE_TARGETS = baseline_work_queue optimized_work_queue baseline_cuda_graphs optimized_cuda_graphs baseline_cuda_graphs_conditional optimized_cuda_graphs_conditional baseline_cuda_graphs_conditional_enhanced optimized_cuda_graphs_conditional_enhanced baseline_graph_conditional_runtime optimized_graph_conditional_runtime baseline_kernel_fusion optimized_kernel_fusion baseline_graph_bandwidth optimized_graph_bandwidth baseline_uneven_static optimized_uneven_static baseline_uneven_partition optimized_uneven_partition baseline_dynamic_parallelism_host optimized_dynamic_parallelism_host baseline_dynamic_parallelism_device optimized_dynamic_parallelism_device
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
 $(TARGETS): $(CUDA_NVTX_DEPS)
@@ -63,6 +63,12 @@ baseline_cuda_graphs_conditional_enhanced$(SUFFIX): baseline_cuda_graphs_conditi
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
 optimized_cuda_graphs_conditional_enhanced$(SUFFIX): optimized_cuda_graphs_conditional_enhanced.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+
+baseline_graph_conditional_runtime$(SUFFIX): baseline_graph_conditional_runtime.cu
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
+
+optimized_graph_conditional_runtime$(SUFFIX): optimized_graph_conditional_runtime.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
 baseline_kernel_fusion$(SUFFIX): baseline_kernel_fusion.cu

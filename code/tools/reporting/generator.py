@@ -1,0 +1,692 @@
+"""
+Report Generator - Create PDF and HTML reports from benchmark data.
+
+Supports multiple output formats and customizable templates.
+"""
+
+import base64
+import io
+import json
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+# Try to import PDF libraries
+try:
+    from weasyprint import HTML, CSS
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
+
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.charts.piecharts import Pie
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+
+
+@dataclass
+class ReportConfig:
+    """Configuration for report generation."""
+    title: str = "GPU Performance Report"
+    subtitle: str = "Benchmark Analysis and Optimization Results"
+    author: str = "AI Performance Engineering"
+    logo_path: Optional[str] = None
+    
+    # Styling
+    primary_color: str = "#00f5d4"
+    secondary_color: str = "#9d4edd"
+    accent_color: str = "#f72585"
+    background_color: str = "#0f172a"
+    text_color: str = "#ffffff"
+    
+    # Content options
+    include_summary: bool = True
+    include_charts: bool = True
+    include_details: bool = True
+    include_recommendations: bool = True
+    include_code_snippets: bool = False
+    
+    # Page settings
+    page_size: str = "A4"  # "A4" or "letter"
+    orientation: str = "portrait"
+
+
+@dataclass
+class BenchmarkData:
+    """Benchmark data for report generation."""
+    name: str
+    chapter: str = ""
+    baseline_time_ms: float = 0
+    optimized_time_ms: float = 0
+    speedup: float = 1.0
+    techniques: List[str] = field(default_factory=list)
+    memory_baseline_mb: float = 0
+    memory_optimized_mb: float = 0
+    status: str = "success"
+    notes: str = ""
+
+
+class ReportGenerator:
+    """
+    Generate PDF and HTML reports from benchmark data.
+    
+    Usage:
+        generator = ReportGenerator(config=ReportConfig(title="My Report"))
+        
+        # From benchmark data
+        generator.generate_pdf(benchmarks, "report.pdf")
+        
+        # From dashboard data
+        generator.generate_from_api("http://localhost:8080", "report.pdf")
+    """
+    
+    def __init__(self, config: Optional[ReportConfig] = None):
+        self.config = config or ReportConfig()
+        self._check_dependencies()
+    
+    def _check_dependencies(self):
+        """Check available PDF libraries."""
+        self.pdf_method = None
+        
+        if WEASYPRINT_AVAILABLE:
+            self.pdf_method = "weasyprint"
+        elif REPORTLAB_AVAILABLE:
+            self.pdf_method = "reportlab"
+        else:
+            # Check for wkhtmltopdf
+            try:
+                subprocess.run(["wkhtmltopdf", "--version"], capture_output=True)
+                self.pdf_method = "wkhtmltopdf"
+            except FileNotFoundError:
+                pass
+    
+    def generate_pdf(
+        self,
+        data: Union[Dict[str, Any], List[BenchmarkData]],
+        output_path: Union[str, Path],
+        template: str = "default",
+    ) -> Path:
+        """
+        Generate a PDF report.
+        
+        Args:
+            data: Benchmark data (dict or list of BenchmarkData)
+            output_path: Output PDF path
+            template: Template name ("default", "minimal", "detailed")
+            
+        Returns:
+            Path to generated PDF
+        """
+        output_path = Path(output_path)
+        
+        # Normalize data
+        if isinstance(data, dict):
+            benchmarks = self._parse_dict_data(data)
+        else:
+            benchmarks = data
+        
+        # Generate HTML first
+        html_content = self._generate_html(benchmarks, template)
+        
+        # Convert to PDF
+        if self.pdf_method == "weasyprint":
+            self._generate_pdf_weasyprint(html_content, output_path)
+        elif self.pdf_method == "reportlab":
+            self._generate_pdf_reportlab(benchmarks, output_path)
+        elif self.pdf_method == "wkhtmltopdf":
+            self._generate_pdf_wkhtmltopdf(html_content, output_path)
+        else:
+            # Fallback: save as HTML
+            html_path = output_path.with_suffix(".html")
+            html_path.write_text(html_content)
+            print(f"⚠️ No PDF library available. Saved as HTML: {html_path}")
+            print("Install weasyprint: pip install weasyprint")
+            return html_path
+        
+        return output_path
+    
+    def generate_html(
+        self,
+        data: Union[Dict[str, Any], List[BenchmarkData]],
+        output_path: Union[str, Path],
+        template: str = "default",
+    ) -> Path:
+        """Generate an HTML report."""
+        output_path = Path(output_path)
+        
+        if isinstance(data, dict):
+            benchmarks = self._parse_dict_data(data)
+        else:
+            benchmarks = data
+        
+        html_content = self._generate_html(benchmarks, template)
+        output_path.write_text(html_content)
+        
+        return output_path
+    
+    def generate_from_api(
+        self,
+        api_url: str,
+        output_path: Union[str, Path],
+        format: str = "pdf",
+    ) -> Path:
+        """
+        Generate report from dashboard API.
+        
+        Args:
+            api_url: Base URL of dashboard (e.g., "http://localhost:8080")
+            output_path: Output file path
+            format: "pdf" or "html"
+        """
+        import urllib.request
+        
+        # Fetch data from API
+        with urllib.request.urlopen(f"{api_url}/api/data") as response:
+            data = json.loads(response.read().decode())
+        
+        if format == "pdf":
+            return self.generate_pdf(data, output_path)
+        else:
+            return self.generate_html(data, output_path)
+    
+    def _parse_dict_data(self, data: Dict[str, Any]) -> List[BenchmarkData]:
+        """Parse dictionary data into BenchmarkData objects."""
+        benchmarks = []
+        
+        for item in data.get("benchmarks", []):
+            benchmarks.append(BenchmarkData(
+                name=item.get("name", "Unknown"),
+                chapter=item.get("chapter", ""),
+                baseline_time_ms=item.get("baseline_time_ms", 0),
+                optimized_time_ms=item.get("optimized_time_ms", 0),
+                speedup=item.get("speedup", 1.0),
+                techniques=item.get("techniques", []),
+                memory_baseline_mb=item.get("baseline_memory_mb", 0),
+                memory_optimized_mb=item.get("optimized_memory_mb", 0),
+                status=item.get("status", "success"),
+            ))
+        
+        return benchmarks
+    
+    def _generate_html(self, benchmarks: List[BenchmarkData], template: str) -> str:
+        """Generate HTML content for the report."""
+        
+        # Calculate summary stats
+        total = len(benchmarks)
+        successful = sum(1 for b in benchmarks if b.speedup > 1.0)
+        avg_speedup = sum(b.speedup for b in benchmarks) / max(total, 1)
+        best_speedup = max((b.speedup for b in benchmarks), default=1.0)
+        total_time_saved = sum(b.baseline_time_ms - b.optimized_time_ms for b in benchmarks if b.speedup > 1.0)
+        
+        # Group by chapter
+        chapters = {}
+        for b in benchmarks:
+            ch = b.chapter or "Other"
+            if ch not in chapters:
+                chapters[ch] = []
+            chapters[ch].append(b)
+        
+        # Generate benchmark rows
+        benchmark_rows = ""
+        for b in sorted(benchmarks, key=lambda x: -x.speedup)[:50]:
+            status_color = "#22c55e" if b.speedup > 1.1 else "#f59e0b" if b.speedup > 1.0 else "#ef4444"
+            techniques_str = ", ".join(b.techniques[:3]) if b.techniques else "-"
+            benchmark_rows += f"""
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #334155;">{b.name}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #334155;">{b.chapter}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #334155; text-align: right;">{b.baseline_time_ms:.2f}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #334155; text-align: right;">{b.optimized_time_ms:.2f}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #334155; text-align: right; color: {status_color}; font-weight: bold;">{b.speedup:.2f}x</td>
+                <td style="padding: 12px; border-bottom: 1px solid #334155; font-size: 12px;">{techniques_str}</td>
+            </tr>
+            """
+        
+        # Generate chapter summary
+        chapter_summary = ""
+        for ch, ch_benchmarks in sorted(chapters.items()):
+            ch_avg = sum(b.speedup for b in ch_benchmarks) / len(ch_benchmarks)
+            ch_best = max(b.speedup for b in ch_benchmarks)
+            chapter_summary += f"""
+            <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 10px;">
+                <div style="font-weight: 600; margin-bottom: 5px;">{ch}</div>
+                <div style="display: flex; gap: 20px; font-size: 14px; color: #94a3b8;">
+                    <span>{len(ch_benchmarks)} benchmarks</span>
+                    <span>Avg: {ch_avg:.2f}x</span>
+                    <span>Best: {ch_best:.2f}x</span>
+                </div>
+            </div>
+            """
+        
+        # Top performers
+        top_performers = ""
+        for b in sorted(benchmarks, key=lambda x: -x.speedup)[:5]:
+            top_performers += f"""
+            <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #334155;">
+                <span>{b.name}</span>
+                <span style="color: #22c55e; font-weight: bold;">{b.speedup:.2f}x</span>
+            </div>
+            """
+        
+        # Generate full HTML
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{self.config.title}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        
+        body {{
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: {self.config.background_color};
+            color: {self.config.text_color};
+            line-height: 1.6;
+            padding: 40px;
+        }}
+        
+        .container {{
+            max-width: 1000px;
+            margin: 0 auto;
+        }}
+        
+        .header {{
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 30px;
+            border-bottom: 2px solid {self.config.primary_color};
+        }}
+        
+        .header h1 {{
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, {self.config.primary_color}, {self.config.secondary_color});
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+        
+        .header .subtitle {{
+            font-size: 16px;
+            color: #94a3b8;
+        }}
+        
+        .header .date {{
+            font-size: 14px;
+            color: #64748b;
+            margin-top: 10px;
+        }}
+        
+        .summary-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-bottom: 40px;
+        }}
+        
+        .summary-card {{
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }}
+        
+        .summary-value {{
+            font-size: 36px;
+            font-weight: 700;
+            color: {self.config.primary_color};
+        }}
+        
+        .summary-label {{
+            font-size: 14px;
+            color: #94a3b8;
+            margin-top: 5px;
+        }}
+        
+        .section {{
+            margin-bottom: 40px;
+        }}
+        
+        .section-title {{
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #334155;
+        }}
+        
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            background: rgba(255,255,255,0.02);
+            border-radius: 8px;
+            overflow: hidden;
+        }}
+        
+        th {{
+            background: rgba(255,255,255,0.05);
+            padding: 15px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+        
+        .grid-2 {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }}
+        
+        .card {{
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 20px;
+        }}
+        
+        .card-title {{
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }}
+        
+        .footer {{
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #334155;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+        }}
+        
+        @media print {{
+            body {{ 
+                background: white; 
+                color: #1e293b;
+                padding: 20px;
+            }}
+            .summary-card, .card {{
+                background: #f8fafc;
+                border-color: #e2e8f0;
+            }}
+            .summary-value {{
+                color: #0f172a;
+            }}
+            th {{
+                background: #f1f5f9;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{self.config.title}</h1>
+            <div class="subtitle">{self.config.subtitle}</div>
+            <div class="date">Generated on {datetime.now().strftime("%B %d, %Y at %H:%M")}</div>
+        </div>
+        
+        <div class="summary-grid">
+            <div class="summary-card">
+                <div class="summary-value">{total}</div>
+                <div class="summary-label">Total Benchmarks</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value" style="color: #22c55e;">{best_speedup:.1f}x</div>
+                <div class="summary-label">Best Speedup</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{avg_speedup:.2f}x</div>
+                <div class="summary-label">Average Speedup</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{successful}/{total}</div>
+                <div class="summary-label">Optimized</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2 class="section-title">📊 Benchmark Results</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Benchmark</th>
+                        <th>Chapter</th>
+                        <th style="text-align: right;">Baseline (ms)</th>
+                        <th style="text-align: right;">Optimized (ms)</th>
+                        <th style="text-align: right;">Speedup</th>
+                        <th>Techniques</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {benchmark_rows}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-title">🏆 Top Performers</div>
+                    {top_performers}
+                </div>
+                <div class="card">
+                    <div class="card-title">📁 By Chapter</div>
+                    {chapter_summary}
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>{self.config.author} • Generated with AI Performance Engineering Tools</p>
+        </div>
+    </div>
+</body>
+</html>"""
+        
+        return html
+    
+    def _generate_pdf_weasyprint(self, html_content: str, output_path: Path):
+        """Generate PDF using WeasyPrint."""
+        html = HTML(string=html_content)
+        html.write_pdf(str(output_path))
+    
+    def _generate_pdf_wkhtmltopdf(self, html_content: str, output_path: Path):
+        """Generate PDF using wkhtmltopdf."""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as f:
+            f.write(html_content)
+            html_path = f.name
+        
+        try:
+            subprocess.run(
+                ["wkhtmltopdf", "--enable-local-file-access", html_path, str(output_path)],
+                capture_output=True,
+                check=True,
+            )
+        finally:
+            Path(html_path).unlink()
+    
+    def _generate_pdf_reportlab(self, benchmarks: List[BenchmarkData], output_path: Path):
+        """Generate PDF using ReportLab."""
+        
+        page_size = A4 if self.config.page_size == "A4" else letter
+        doc = SimpleDocTemplate(str(output_path), pagesize=page_size)
+        styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            spaceAfter=20,
+            textColor=colors.HexColor("#0f172a"),
+        )
+        
+        subtitle_style = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.HexColor("#64748b"),
+            spaceAfter=30,
+        )
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            spaceBefore=20,
+            spaceAfter=10,
+            textColor=colors.HexColor("#1e293b"),
+        )
+        
+        story = []
+        
+        # Title
+        story.append(Paragraph(self.config.title, title_style))
+        story.append(Paragraph(
+            f"{self.config.subtitle}<br/>Generated on {datetime.now().strftime('%B %d, %Y')}",
+            subtitle_style
+        ))
+        
+        # Summary stats
+        total = len(benchmarks)
+        avg_speedup = sum(b.speedup for b in benchmarks) / max(total, 1)
+        best_speedup = max((b.speedup for b in benchmarks), default=1.0)
+        successful = sum(1 for b in benchmarks if b.speedup > 1.0)
+        
+        summary_data = [
+            ['Total Benchmarks', 'Best Speedup', 'Average Speedup', 'Optimized'],
+            [str(total), f'{best_speedup:.1f}x', f'{avg_speedup:.2f}x', f'{successful}/{total}'],
+        ]
+        
+        summary_table = Table(summary_data, colWidths=[120, 100, 100, 100])
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor("#64748b")),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, 1), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('TOPPADDING', (0, 1), (-1, 1), 12),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ]))
+        
+        story.append(summary_table)
+        story.append(Spacer(1, 30))
+        
+        # Benchmark table
+        story.append(Paragraph("Benchmark Results", heading_style))
+        
+        table_data = [['Benchmark', 'Baseline (ms)', 'Optimized (ms)', 'Speedup']]
+        
+        for b in sorted(benchmarks, key=lambda x: -x.speedup)[:30]:
+            table_data.append([
+                b.name[:40],
+                f'{b.baseline_time_ms:.2f}',
+                f'{b.optimized_time_ms:.2f}',
+                f'{b.speedup:.2f}x',
+            ])
+        
+        bench_table = Table(table_data, colWidths=[200, 80, 80, 70])
+        bench_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#1e293b")),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+        ]))
+        
+        story.append(bench_table)
+        
+        # Build PDF
+        doc.build(story)
+
+
+def generate_report(
+    data: Union[Dict, str, Path],
+    output_path: Union[str, Path],
+    format: str = "pdf",
+    config: Optional[ReportConfig] = None,
+) -> Path:
+    """
+    Convenience function to generate a report.
+    
+    Args:
+        data: Benchmark data (dict, JSON file path, or API URL)
+        output_path: Output file path
+        format: "pdf" or "html"
+        config: Report configuration
+        
+    Returns:
+        Path to generated report
+    """
+    generator = ReportGenerator(config=config)
+    
+    # Handle different data sources
+    if isinstance(data, (str, Path)):
+        data_path = Path(data)
+        if data_path.exists():
+            # It's a file
+            with open(data_path) as f:
+                data = json.load(f)
+        elif str(data).startswith("http"):
+            # It's a URL
+            return generator.generate_from_api(str(data), output_path, format=format)
+    
+    if format == "pdf":
+        return generator.generate_pdf(data, output_path)
+    else:
+        return generator.generate_html(data, output_path)
+
+
+# CLI support
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Generate PDF/HTML reports from benchmark data")
+    parser.add_argument("input", help="Input data (JSON file or API URL)")
+    parser.add_argument("-o", "--output", default="report.pdf", help="Output file path")
+    parser.add_argument("-f", "--format", choices=["pdf", "html"], default="pdf", help="Output format")
+    parser.add_argument("--title", default="GPU Performance Report", help="Report title")
+    parser.add_argument("--author", default="AI Performance Engineering", help="Report author")
+    
+    args = parser.parse_args()
+    
+    config = ReportConfig(title=args.title, author=args.author)
+    
+    output_path = generate_report(
+        args.input,
+        args.output,
+        format=args.format,
+        config=config,
+    )
+    
+    print(f"✅ Report generated: {output_path}")
+
+
+if __name__ == "__main__":
+    main()
+

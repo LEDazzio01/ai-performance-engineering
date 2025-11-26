@@ -1,5 +1,23 @@
 #!/usr/bin/env python3
+"""Complete 8x B200 GPU Training Pipeline with PyTorch 2.10.
 
+Chapter 4: Multi-GPU and Multi-Node Training
+
+Production-ready training pipeline optimized for 8x Blackwell B200 GPUs.
+Demonstrates all latest optimizations:
+- NCCL 2.28 with NVLS for 8-GPU collectives
+- Hybrid parallelism (TP=2/4, DP=4/2)
+- PyTorch 2.10 compiled autograd
+- Symmetric memory for low-latency communication
+- FP8 training (optional)
+- GB200/GB300 Grace CPU optimizations
+
+FORWARD REFERENCES:
+- F.scaled_dot_product_attention (SDPA): See Chapter 9 for arithmetic intensity
+  analysis and FlashAttention optimizations (ch9/*sdpa*.py)
+- FP8 training: See Chapter 13 for detailed FP8 quantization (ch13/*fp8*.py)
+- torch.compile: See Chapter 14 for TorchInductor deep dive (ch14/*compile*.py)
+"""
 from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 import pathlib
 import sys
@@ -11,17 +29,7 @@ if str(_EXTRAS_REPO_ROOT) not in sys.path:
 from pathlib import Path
 
 """
-Complete 8x B200 GPU Training Pipeline with PyTorch 2.10
 ======================================================
-
-Production-ready training pipeline optimized for 8x Blackwell B200 GPUs.
-Demonstrates all latest optimizations:
-- NCCL 2.28 with NVLS for 8-GPU collectives
-- Hybrid parallelism (TP=2/4, DP=4/2)
-- PyTorch 2.10 compiled autograd
-- Symmetric memory for low-latency communication
-- FP8 training (optional)
-- GB200/GB300 Grace CPU optimizations
 
 Hardware Requirements:
 - 8x Blackwell B200 GPUs (1184 SMs, 1.44 TB HBM3e)

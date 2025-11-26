@@ -56,12 +56,13 @@ class DTensorMeshBenchmark(BaseBenchmark):
 
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return precision/quantization metrics."""
-        return {
-            "dtensor_mesh.batch_size": float(getattr(self, 'batch_size', 0)),
-            "dtensor_mesh.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
-            "dtensor_mesh.precision_bits": 32.0,  # Override: 32=fp32, 16=fp16, 8=fp8, 4=fp4
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_precision_metrics
+        return compute_precision_metrics(
+            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
+            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
+            precision_type="fp8",
+        )
 
 def get_benchmark() -> BaseBenchmark:
     return DTensorMeshBenchmark()

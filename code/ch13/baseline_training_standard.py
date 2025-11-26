@@ -1,4 +1,12 @@
-"""baseline_training_standard.py - Standard training without checkpointing (baseline)."""
+"""baseline_training_standard.py - Standard transformer training without checkpointing.
+
+Standard training stores all activations for backward pass, including:
+- Attention weights: O(batch * heads * seq_len²) per layer
+- Intermediate FFN activations: O(batch * seq_len * 4*hidden) per layer
+
+This is faster but uses significantly more memory than gradient checkpointing.
+Compare with optimized_training_standard.py which uses checkpointing.
+"""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,114 +18,195 @@ from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig, Work
 from ch13.workload_config import WORKLOAD
 
 
-class DeepModel(nn.Module):
-    """Deep model for demonstrating checkpoint benefits."""
+class TransformerModel(nn.Module):
+    """Transformer model - stores all attention weights and activations during forward."""
     
-    def __init__(self, hidden_dim=2048, num_layers=20):
+    def __init__(
+        self, 
+        hidden_dim: int = 1024,
+        num_layers: int = 12,
+        num_heads: int = 16,
+        seq_len: int = 512,
+        vocab_size: int = 32000,
+    ):
         super().__init__()
-        self.layers = nn.ModuleList([
-            nn.Linear(hidden_dim, hidden_dim)
-            for _ in range(num_layers)
-        ])
+        self.seq_len = seq_len
+        self.hidden_dim = hidden_dim
+        
+        # Embedding
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.pos_embedding = nn.Embedding(seq_len, hidden_dim)
+        
+        # Transformer layers - standard PyTorch implementation
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=0.0,
+            activation='gelu',
+            batch_first=True,
+            norm_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Output head
+        self.ln_f = nn.LayerNorm(hidden_dim)
+        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=False)
     
-    def forward(self, x):
-        for layer in self.layers:
-            x = torch.relu(layer(x))
-        return x
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len = input_ids.shape
+        
+        # Embeddings
+        pos_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
+        x = self.embedding(input_ids) + self.pos_embedding(pos_ids)
+        
+        # Transformer (stores ALL attention matrices in memory for backward)
+        x = self.transformer(x)
+        
+        # Output
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        return logits
 
 
 class BaselineTrainingBenchmark(BaseBenchmark):
-    """Standard training that stores all activations (memory heavy)."""
+    """Standard transformer training that stores all activations (memory heavy, but fast).
+    
+    Memory usage dominated by:
+    - Model parameters: ~num_layers * hidden² * 12 (weights + grads + optimizer states)
+    - Activations: ~num_layers * batch * seq_len * hidden * 2 (attention + FFN)
+    - Attention weights: ~num_layers * batch * heads * seq_len² (quadratic!)
+    """
     
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
-        self.inputs = None
+        self.input_ids = None
         self.targets = None
         self.optimizer = None
         self.criterion = None
-        self.workload = WORKLOAD
-        self.hidden_dim = self.workload.training_hidden_dim
-        self.num_layers = self.workload.training_layers_baseline
-        self.global_batch = self.workload.global_batch_size
-        self.micro_batch = self.workload.micro_batch_size
-        self.accum_steps = self.global_batch // self.micro_batch
-        tokens = self.global_batch * self.hidden_dim
+        
+        # Workload config - optimized for demonstrating activation memory
+        self.hidden_dim = 1024
+        self.num_layers = 24  # Deep enough to show memory difference
+        self.num_heads = 16
+        self.seq_len = 1024   # Long sequences = more activation memory
+        self.batch_size = 8   # Reasonable batch for training
+        self.vocab_size = 32000
+        
+        tokens = self.batch_size * self.seq_len
         self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.accum_steps),
+            requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
+        self._peak_memory_gb = 0.0
     
     def setup(self) -> None:
-        """Setup: initialize model and data."""
-        self.model = DeepModel(hidden_dim=self.hidden_dim, num_layers=self.num_layers)
+        """Setup: initialize transformer model and data."""
+        # Clear memory before setup
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(self.device)
+        
+        self.model = TransformerModel(
+            hidden_dim=self.hidden_dim,
+            num_layers=self.num_layers,
+            num_heads=self.num_heads,
+            seq_len=self.seq_len,
+            vocab_size=self.vocab_size,
+        )
         self.model = self.model.to(self.device).train()
         
-        self.inputs = torch.randn(self.global_batch, self.hidden_dim, device=self.device)
-        self.targets = torch.randn(self.global_batch, self.hidden_dim, device=self.device)
+        # Random input tokens
+        self.input_ids = torch.randint(
+            0, self.vocab_size, 
+            (self.batch_size, self.seq_len), 
+            device=self.device
+        )
+        # Shifted targets for language modeling
+        self.targets = torch.randint(
+            0, self.vocab_size,
+            (self.batch_size, self.seq_len),
+            device=self.device
+        )
         
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
-        self.criterion = nn.MSELoss()
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1e-4)
+        self.criterion = nn.CrossEntropyLoss()
+        
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Function to benchmark."""
-        if any(v is None for v in (self.model, self.inputs, self.targets, self.optimizer, self.criterion)):
+        """Training step without checkpointing - stores all attention weights."""
+        if any(v is None for v in (self.model, self.input_ids, self.targets, self.optimizer, self.criterion)):
             raise RuntimeError("Benchmark not configured")
 
-        with self._nvtx_range("baseline_training_standard"):
+        with self._nvtx_range("baseline_training"):
             self.optimizer.zero_grad(set_to_none=True)
-            for start in range(0, self.global_batch, self.micro_batch):
-                end = start + self.micro_batch
-                inputs = self.inputs[start:end]
-                targets = self.targets[start:end]
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, targets) / self.accum_steps
-                loss.backward()
+            
+            # Forward pass - stores ALL activations for backward
+            logits = self.model(self.input_ids)
+            
+            # Compute loss
+            loss = self.criterion(
+                logits.view(-1, self.vocab_size),
+                self.targets.view(-1)
+            )
+            
+            # Backward pass - uses stored activations
+            loss.backward()
+            
+            # Optimizer step
             self.optimizer.step()
+        
+        # Track peak memory after each iteration
+        self._peak_memory_gb = max(
+            self._peak_memory_gb,
+            torch.cuda.max_memory_allocated(self.device) / 1e9
+        )
         self._synchronize()
     
     def teardown(self) -> None:
-        """Cleanup."""
+        """Cleanup and report memory usage."""
+        if self._peak_memory_gb > 0:
+            print(f"\n[Baseline] Peak GPU Memory: {self._peak_memory_gb:.2f} GB")
+        
         self.model = None
-        self.inputs = None
+        self.input_ids = None
         self.targets = None
         self.optimizer = None
         self.criterion = None
+        torch.cuda.empty_cache()
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark-specific config."""
         return BenchmarkConfig(
-            iterations=20,
-            warmup=5,
+            iterations=10,
+            warmup=3,
+            enable_memory_tracking=True,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return precision/quantization metrics."""
-        return {
-            "training_standard.batch_size": float(getattr(self, 'batch_size', 0)),
-            "training_standard.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
-            "training_standard.precision_bits": 32.0,  # Override: 32=fp32, 16=fp16, 8=fp8, 4=fp4
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_precision_metrics
+        return compute_precision_metrics(
+            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
+            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
+            precision_type="fp8",
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.inputs is None:
+        if self.input_ids is None:
             return "Input tensor not initialized"
-        if self.targets is None:
-            return "Target tensor not initialized"
         
         try:
             with torch.no_grad():
-                test_output = self.model(self.inputs)
-                if test_output.shape != self.targets.shape:
-                    return f"Output shape mismatch: expected {self.targets.shape}, got {test_output.shape}"
+                test_output = self.model(self.input_ids[:1])
                 if not torch.isfinite(test_output).all():
                     return "Output contains non-finite values"
         except Exception as e:

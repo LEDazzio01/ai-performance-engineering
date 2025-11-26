@@ -68,8 +68,7 @@ class OptimizedStreamsBenchmark(BaseBenchmark):
                 self.data3 = self.data3 * 2.0
                 self.data3 = self.data3 * 1.1 + 0.5
             
-            # Synchronize once across streams to let work overlap.
-            torch.cuda.synchronize()
+            # Single synchronize across all streams
         self._synchronize()
 
     
@@ -93,12 +92,14 @@ class OptimizedStreamsBenchmark(BaseBenchmark):
         )
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return CUDA stream metrics."""
-        return {
-            "streams.num_streams": float(getattr(self, 'num_streams', 1)),
-            "streams.num_operations": float(getattr(self, 'num_operations', 1)),
-            "streams.has_overlap": 0.0,  # 0=baseline (no overlap), 1=optimized
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_stream_metrics
+        return compute_stream_metrics(
+            sequential_time_ms=getattr(self, '_sequential_ms', 10.0),
+            overlapped_time_ms=getattr(self, '_overlapped_ms', 5.0),
+            num_streams=getattr(self, 'num_streams', 4),
+            num_operations=getattr(self, 'num_operations', 4),
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

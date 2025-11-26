@@ -30,13 +30,14 @@ class BaselineCutlassGemmBenchmark(CudaBinaryBenchmark):
 
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific compute metrics."""
-        base_metrics = super().get_custom_metrics() or {}
-        base_metrics.update({
-            "compute.uses_tensor_cores": 0.0,
-            "compute.uses_cutlass": 0.0,
-        })
-        return base_metrics
+        """Return roofline metrics for cutlass_gemm."""
+        from common.python.benchmark_metrics import compute_roofline_metrics
+        return compute_roofline_metrics(
+            total_flops=self._total_flops,
+            total_bytes=self._total_bytes,
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            precision="fp16",
+        )
 
 def get_benchmark() -> BaselineCutlassGemmBenchmark:
     """Factory for discover_benchmarks()."""

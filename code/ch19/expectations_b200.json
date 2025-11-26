@@ -26,6 +26,32 @@
       },
       "type": "python"
     },
+    "fp4_weight_quantization": {
+      "example": "fp4_weight_quantization",
+      "metadata": {
+        "best_optimization": "optimized_fp4_weight_quantization",
+        "best_optimization_file": "optimized_fp4_weight_quantization.py",
+        "best_optimization_speedup": 0.9600262341109113,
+        "best_optimization_time_ms": 5.0260176181793215,
+        "git_commit": "8a9453873dcdbae15df8064ed77b6b20d3d8e49e",
+        "updated_at": "2025-11-25T21:00:49.590012"
+      },
+      "metrics": {
+        "baseline_p75_ms": 4.811200141906738,
+        "baseline_throughput.latency_ms": 4.825108766555786,
+        "baseline_throughput.requests_per_s": 6631.974852422226,
+        "baseline_throughput.tokens_per_s": 3395571.1244401797,
+        "baseline_time_ms": 4.825108766555786,
+        "best_optimized_p75_ms": 5.01859188079834,
+        "best_optimized_speedup": 0.9600262341109113,
+        "best_optimized_throughput.latency_ms": 5.0260176181793215,
+        "best_optimized_throughput.requests_per_s": 6366.869842289177,
+        "best_optimized_throughput.tokens_per_s": 3259837.3592520584,
+        "best_optimized_time_ms": 5.0260176181793215,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    },
     "kv_cuda": {
       "example": "kv",
       "metadata": {

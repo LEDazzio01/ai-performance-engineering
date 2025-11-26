@@ -110,18 +110,14 @@ class BaselineCutlassBenchmark(BaseBenchmark):
         )
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return roofline analysis metrics."""
-        # Estimate problem size for roofline analysis
-        n = getattr(self, 'N', 0) or getattr(self, 'hidden_dim', 0) or 4096
-        batch = getattr(self, 'batch_size', 1) or getattr(self, 'batch', 1)
-        # Simple FLOP estimate for linear layers
-        flops = 2.0 * batch * n * n  # Rough estimate
-        bytes_moved = batch * n * 4.0  # Input/output bytes
-        arithmetic_intensity = flops / max(bytes_moved, 1.0)
-        return {
-    "cutlass.estimated_flops": flops,
-    "cutlass.estimated_bytes": bytes_moved,
-    "cutlass.arithmetic_intensity": arithmetic_intensity,
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_triton_metrics
+        return compute_triton_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            block_size=getattr(self, 'BLOCK_SIZE', 1024),
+            num_warps=getattr(self, 'num_warps', 4),
+        )
 }
 
     def validate_result(self) -> Optional[str]:

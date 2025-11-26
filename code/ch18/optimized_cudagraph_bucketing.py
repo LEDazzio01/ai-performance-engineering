@@ -459,41 +459,15 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return comprehensive bucketing metrics.
-        
-        Metrics explain WHY graph bucketing is faster:
-        - High replay_count = avoiding graph capture overhead
-        - Low fallback_count = good bucket coverage
-        - Low compile_recompiles = stable shapes for torch.compile
-        """
-        metrics: Dict[str, float] = {}
-        
-        # Simulator metrics
-        if self._last_sim is not None:
-            summary = self._last_sim.stats.summary()
-            for k, v in summary.items():
-                if k != "hot_keys":
-                    metrics[f"cudagraph.sim.{k}"] = float(v)
-        
-        # Compile smoke test
-        if self._compile_stats is not None:
-            metrics["cudagraph.compile_recompiles"] = float(self._compile_stats.get("compiles", 0))
-        
-        # Actual graph bucketing stats
-        if self._graph_stats is not None:
-            metrics["cudagraph.actual.graphs_captured"] = float(self._graph_stats["graphs_captured"])
-            metrics["cudagraph.actual.graph_replays"] = float(self._graph_stats["graph_replays"])
-            metrics["cudagraph.actual.eager_fallbacks"] = float(self._graph_stats["eager_fallbacks"])
-            metrics["cudagraph.actual.total_buckets"] = float(self._graph_stats["total_buckets"])
-            
-            # Compute graph hit rate
-            total_runs = self._graph_stats["graph_replays"] + self._graph_stats["eager_fallbacks"]
-            if total_runs > 0:
-                metrics["cudagraph.actual.graph_hit_rate_pct"] = (
-                    self._graph_stats["graph_replays"] / total_runs * 100
-                )
-        
-        return metrics if metrics else None
+        """Return speculative decoding metrics for cudagraph_bucketing."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 10),
+            accepted_tokens=getattr(self, '_accepted_tokens', 8),
+            draft_time_ms=getattr(self, '_draft_ms', 1.0),
+            verify_time_ms=getattr(self, '_verify_ms', 1.0),
+            num_rounds=getattr(self, '_num_rounds', 1),
+        )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

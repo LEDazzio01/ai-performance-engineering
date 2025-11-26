@@ -26,18 +26,19 @@ class BaselineCopyScalarBenchmark(CudaBinaryBenchmark):
             iterations=3,
             warmup=1,
             timeout_seconds=90,
-            time_regex=r"out\[0\]=([0-9]+(?:\.[0-9]+)?)",
+            time_regex=r"TIME_MS:\s*([0-9.]+)",
         )
 
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific memory_access metrics."""
-        base_metrics = super().get_custom_metrics() or {}
-        base_metrics.update({
-            "memory_access.is_coalesced": 0.0,
-            "memory_access.expected_efficiency_pct": 3.125,
-        })
-        return base_metrics
+        """Return memory access metrics for scalar_copy."""
+        from common.python.benchmark_metrics import compute_memory_access_metrics
+        return compute_memory_access_metrics(
+            bytes_requested=self._bytes_requested,
+            bytes_actually_transferred=self._bytes_requested,  # Ideal case
+            num_transactions=max(1, self._bytes_requested // 128),
+            optimal_transactions=max(1, self._bytes_requested // 128),
+        )
 
 def get_benchmark() -> BaselineCopyScalarBenchmark:
     """Factory for discover_benchmarks()."""

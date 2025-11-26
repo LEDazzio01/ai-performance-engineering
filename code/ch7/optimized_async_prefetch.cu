@@ -1,21 +1,15 @@
-// optimized_async_prefetch.cu -- TMA-optimized async prefetch kernel (optimized).
-// Note: This requires CUDA 13+ and Blackwell TMA support
+// optimized_async_prefetch.cu -- Double-buffered async prefetch (optimized).
+// Demonstrates overlapping memory loads with computation using software pipelining.
 
 #include <cuda_runtime.h>
+#include <cooperative_groups.h>
+#include <cuda/pipeline>
 #include <cstdio>
 #include <cstdlib>
-#include <cmath>
 #include <vector>
+#include <cmath>
 
-#include "../common/headers/tma_helpers.cuh"
-
-#if CUDART_VERSION >= 13000
-#include <cuda/barrier>
-#include <cuda.h>
-#define TMA_CUDA13_AVAILABLE 1
-#else
-#define TMA_CUDA13_AVAILABLE 0
-#endif
+namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call) \
     do { \
@@ -27,201 +21,146 @@
         } \
     } while (0)
 
-#if TMA_CUDA13_AVAILABLE
-namespace cde = cuda::device::experimental;
-
+constexpr int TILE_SIZE = 4096;  // Larger tiles = more latency to hide
 constexpr int PIPELINE_STAGES = 2;
-constexpr std::size_t BYTES_PER_TILE(int tile_elems) {
-    return static_cast<std::size_t>(tile_elems) * sizeof(float);
+
+// Same light compute as baseline - memory latency becomes visible
+__device__ __forceinline__ float light_compute(float x) {
+    float y = x * 2.0f + 1.0f;
+    y = y * y - x;
+    y = y * 0.5f + x * 0.25f;
+    return y;
 }
 
-template <int TILE_SIZE>
-__global__ void async_prefetch_tma_kernel(
-    const __grid_constant__ CUtensorMap in_desc,
-    const __grid_constant__ CUtensorMap out_desc,
-    int total_tiles) {
-    __shared__ alignas(128) float stage_buffers[PIPELINE_STAGES][TILE_SIZE];
-    using block_barrier = cuda::barrier<cuda::thread_scope_block>;
-    __shared__ alignas(block_barrier) unsigned char stage_barrier_storage[PIPELINE_STAGES][sizeof(block_barrier)];
-
-    const int pipeline_stages = PIPELINE_STAGES;
-
+// Optimized: Double-buffered pipeline overlaps load(tile N+1) with compute(tile N)
+__global__ void pipelined_kernel(const float* __restrict__ data,
+                                  float* __restrict__ out,
+                                  int n,
+                                  int total_tiles) {
+    extern __shared__ float shared_mem[];
+    float* stage_buf[PIPELINE_STAGES];
+    for (int s = 0; s < PIPELINE_STAGES; ++s) {
+        stage_buf[s] = shared_mem + s * TILE_SIZE;
+    }
+    
+    cg::thread_block block = cg::this_thread_block();
+    
+    __shared__ alignas(cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>)
+        unsigned char pipe_storage[sizeof(cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>)];
+    auto* pipe_state = reinterpret_cast<cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>*>(pipe_storage);
     if (threadIdx.x == 0) {
-        for (int stage = 0; stage < pipeline_stages; ++stage) {
-            auto* bar_ptr = reinterpret_cast<block_barrier*>(stage_barrier_storage[stage]);
-            init(bar_ptr, blockDim.x);
-        }
-        cde::fence_proxy_async_shared_cta();
+        new (pipe_state) cuda::pipeline_shared_state<cuda::thread_scope_block, PIPELINE_STAGES>();
     }
-    __syncthreads();
-
-    cuda::barrier<cuda::thread_scope_block>::arrival_token tokens[PIPELINE_STAGES];
-
-    const int base_tile = static_cast<int>(blockIdx.x);
-    const int stride_tiles = static_cast<int>(gridDim.x);
-    const int tiles_this_block = (total_tiles <= base_tile)
-                                     ? 0
-                                     : (total_tiles - base_tile + stride_tiles - 1) / stride_tiles;
-
-    auto issue_tile = [&](int local_seq) {
-        if (local_seq >= tiles_this_block) {
-            return;
+    block.sync();
+    auto pipe = cuda::make_pipeline(block, pipe_state);
+    
+    // Calculate tiles for this block
+    const int tiles_per_block = (total_tiles + gridDim.x - 1) / gridDim.x;
+    const int first_tile = blockIdx.x * tiles_per_block;
+    const int last_tile = min(first_tile + tiles_per_block, total_tiles);
+    
+    auto issue_load = [&](int tile, int stage) {
+        int tile_offset = tile * TILE_SIZE;
+        int tile_elems = min(TILE_SIZE, n - tile_offset);
+        pipe.producer_acquire();
+        if (tile_elems > 0) {
+            cuda::memcpy_async(block, stage_buf[stage],
+                              data + tile_offset,
+                              tile_elems * sizeof(float), pipe);
         }
-        const int tile_idx = base_tile + local_seq * stride_tiles;
-        if (tile_idx >= total_tiles) {
-            return;
-        }
-        const int stage = local_seq % pipeline_stages;
-        auto* bar_ptr = reinterpret_cast<block_barrier*>(stage_barrier_storage[stage]);
-        auto& bar = *bar_ptr;
-
-        if (threadIdx.x == 0) {
-            cde::cp_async_bulk_tensor_1d_global_to_shared(
-                &stage_buffers[stage],
-                &in_desc,
-                tile_idx * TILE_SIZE,
-                bar);
-            tokens[stage] = cuda::device::barrier_arrive_tx(
-                bar,
-                1,
-                BYTES_PER_TILE(TILE_SIZE));
-        } else {
-            tokens[stage] = bar.arrive();
-        }
+        pipe.producer_commit();
     };
-
-    const int preload = std::min(total_tiles, pipeline_stages);
-    for (int t = 0; t < preload; ++t) {
-        issue_tile(t);
+    
+    // Prime the pipeline: load first PIPELINE_STAGES tiles
+    for (int i = 0; i < PIPELINE_STAGES && (first_tile + i) < last_tile; ++i) {
+        issue_load(first_tile + i, i);
     }
-
-    for (int local_seq = 0; local_seq < tiles_this_block; ++local_seq) {
-        const int stage = local_seq % pipeline_stages;
-        auto* bar_ptr = reinterpret_cast<block_barrier*>(stage_barrier_storage[stage]);
-        auto& bar = *bar_ptr;
-
-        bar.wait(std::move(tokens[stage]));
-        __syncthreads();
-
-        const int global_tile = base_tile + local_seq * stride_tiles;
-        if (threadIdx.x == 0) {
-            cde::cp_async_bulk_tensor_1d_shared_to_global(
-                &out_desc,
-                global_tile * TILE_SIZE,
-                &stage_buffers[stage]);
-            cde::cp_async_bulk_commit_group();
-            cde::cp_async_bulk_wait_group_read<0>();
+    
+    // Main loop: compute current tile while loading next
+    for (int tile = first_tile; tile < last_tile; ++tile) {
+        int stage = (tile - first_tile) % PIPELINE_STAGES;
+        int tile_offset = tile * TILE_SIZE;
+        int tile_elems = min(TILE_SIZE, n - tile_offset);
+        
+        // Wait for this tile's data
+        pipe.consumer_wait();
+        block.sync();
+        
+        // Compute while next tile is loading (overlap!)
+        for (int i = threadIdx.x; i < tile_elems; i += blockDim.x) {
+            float v = stage_buf[stage][i];
+            v = light_compute(v);
+            out[tile_offset + i] = v;
         }
-        __syncthreads();
-
-        const int next_seq = local_seq + pipeline_stages;
-        if (next_seq < tiles_this_block) {
-            issue_tile(next_seq);
+        
+        pipe.consumer_release();
+        
+        // Issue load for tile + PIPELINE_STAGES (non-blocking)
+        int next = tile + PIPELINE_STAGES;
+        if (next < last_tile) {
+            issue_load(next, stage);
         }
+        
+        block.sync();
     }
 }
-#endif
 
 int main() {
-#if !TMA_CUDA13_AVAILABLE
-    printf("SKIPPED: TMA requires CUDA 13.0+.\n");
-    return 3;
-#else
-    if (!cuda_tma::device_supports_tma()) {
-        printf("SKIPPED: TMA hardware/runtime support not detected.\n");
-        return 3;
-    }
-
-    constexpr int TILE_SIZE = 256;
-    constexpr int ELEMENTS = TILE_SIZE * 1000;  // match baseline workload size
+    constexpr int N = 64 * 1024 * 1024;  // Same as baseline - larger workload
     constexpr int THREADS = 256;
-    const auto limits = cuda_arch::get_tma_limits();
-    if (TILE_SIZE > static_cast<int>(limits.max_1d_box_size)) {
-        printf("SKIPPED: TILE_SIZE=%d exceeds 1D TMA box limit (%u)\n",
-               TILE_SIZE,
-               static_cast<unsigned int>(limits.max_1d_box_size));
-        return 3;
+    const size_t bytes = N * sizeof(float);
+    
+    float *d_in = nullptr, *d_out = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_in, bytes));
+    CUDA_CHECK(cudaMalloc(&d_out, bytes));
+    
+    std::vector<float> h_in(N);
+    for (int i = 0; i < N; ++i) {
+        h_in[i] = static_cast<float>(i % 1000) / 1000.0f;
     }
-
-    // Host data
-    std::vector<float> h_in(ELEMENTS);
-    for (int i = 0; i < ELEMENTS; ++i) {
-        h_in[i] = static_cast<float>(i % 1024) * 0.5f;
-    }
-    std::vector<float> h_out(ELEMENTS, 0.0f);
-
-    // Device buffers
-    float* d_in = nullptr;
-    float* d_out = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_in, ELEMENTS * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_out, ELEMENTS * sizeof(float)));
-    CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), ELEMENTS * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemset(d_out, 0, ELEMENTS * sizeof(float)));
-
-    // Encode tensor maps for 1D copies
-    CUtensorMap in_desc{};
-    CUtensorMap out_desc{};
-    auto encode = cuda_tma::load_cuTensorMapEncodeTiled();
-    if (!cuda_tma::make_1d_tensor_map(in_desc, encode, d_in, ELEMENTS, TILE_SIZE) ||
-        !cuda_tma::make_1d_tensor_map(out_desc, encode, d_out, ELEMENTS, TILE_SIZE)) {
-        printf("SKIPPED: cuTensorMapEncodeTiled unavailable on this runtime.\n");
-        cudaFree(d_in);
-        cudaFree(d_out);
-        return 3;
-    }
-
-    const int total_tiles = (ELEMENTS + TILE_SIZE - 1) / TILE_SIZE;
-
-    // Warmup + benchmark
-    int device = 0;
-    cudaGetDevice(&device);
-    cudaDeviceProp prop{};
-    cudaGetDeviceProperties(&prop, device);
-    const int max_blocks = std::max(1, prop.multiProcessorCount * 16);
-    const int blocks_x = std::min(total_tiles, max_blocks);
-
-    dim3 grid(blocks_x);
-    dim3 block(THREADS);
-
-    async_prefetch_tma_kernel<TILE_SIZE><<<grid, block>>>(in_desc, out_desc, total_tiles);
-    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), bytes, cudaMemcpyHostToDevice));
+    
+    const int total_tiles = (N + TILE_SIZE - 1) / TILE_SIZE;
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    const int grid = min(total_tiles, prop.multiProcessorCount * 4);
+    const size_t shared_bytes = PIPELINE_STAGES * TILE_SIZE * sizeof(float);
+    
+    // Warmup
+    pipelined_kernel<<<grid, THREADS, shared_bytes>>>(d_in, d_out, N, total_tiles);
     CUDA_CHECK(cudaDeviceSynchronize());
-
+    
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
-
-    constexpr int kIters = 20;
+    
+    constexpr int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
-    for (int i = 0; i < kIters; ++i) {
-        async_prefetch_tma_kernel<TILE_SIZE><<<grid, block>>>(in_desc, out_desc, total_tiles);
+    for (int i = 0; i < iterations; i++) {
+        pipelined_kernel<<<grid, THREADS, shared_bytes>>>(d_in, d_out, N, total_tiles);
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
-
-    float elapsed_ms = 0.0f;
-    CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
-    const float avg_ms = elapsed_ms / static_cast<float>(kIters);
-
-    CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, ELEMENTS * sizeof(float), cudaMemcpyDeviceToHost));
-
-    bool ok = true;
-    for (int i = 0; i < ELEMENTS; ++i) {
-        const float expected = h_in[i];
-        if (std::abs(h_out[i] - expected) > 1e-3f) {
-            printf("Mismatch at %d: got %f expected %f\n", i, h_out[i], expected);
-            ok = false;
-            break;
-        }
+    
+    float ms;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    float avg_ms = ms / iterations;
+    
+    std::vector<float> h_out(N);
+    CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (int i = 0; i < N; i += 10000) {
+        checksum += h_out[i];
     }
-
-    printf("TMA async prefetch: %.4f ms (avg over %d iters) [%s]\n",
-           avg_ms, kIters, ok ? "OK" : "FAIL");
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_in);
-    cudaFree(d_out);
-    return ok ? 0 : 1;
-#endif
+    
+    printf("Pipelined async prefetch (optimized): %.3f ms\n", avg_ms);
+    printf("TIME_MS: %.6f\n", avg_ms);
+    printf("Checksum: %.6f\n", checksum);
+    
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaFree(d_in));
+    CUDA_CHECK(cudaFree(d_out));
+    
+    return 0;
 }

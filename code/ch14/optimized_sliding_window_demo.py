@@ -396,7 +396,7 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
         torch.manual_seed(42)
         
         embed_dim = self.num_heads * self.head_dim
-        self.sliding_attn = SlidingWindowAttention(
+        self.sliding_attn = SlidingWindowSelfAttention(
             embed_dim=embed_dim,
             num_heads=self.num_heads,
             window_size=self.window_size,
@@ -433,7 +433,14 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        return {"sliding_window_demo.window_size": self.window_size}
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_triton_metrics
+        return compute_triton_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            block_size=getattr(self, 'BLOCK_SIZE', 1024),
+            num_warps=getattr(self, 'num_warps', 4),
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.sliding_attn is None:

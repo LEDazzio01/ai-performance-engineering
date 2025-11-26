@@ -119,6 +119,68 @@ def _cpus_for_node(node: int) -> List[int]:
     return cpus
 
 
+# ---------------------------------------------------------------------------
+# Public API (matches book Chapter 3 function names)
+# ---------------------------------------------------------------------------
+
+def parse_physical_cpu_list(phys_str: str) -> List[int]:
+    """Expand strings like '0-3,8-11' or '0 1 2 3' into explicit CPU indices.
+    
+    Book reference: Chapter 3, NUMA affinity section.
+    
+    Args:
+        phys_str: CPU specification string (e.g., "0-3,8-11" or "0 1 2 3")
+        
+    Returns:
+        List of CPU indices
+        
+    Example:
+        >>> parse_physical_cpu_list("0-3,8-11")
+        [0, 1, 2, 3, 8, 9, 10, 11]
+        >>> parse_physical_cpu_list("0 1 2 3")
+        [0, 1, 2, 3]
+    """
+    # Handle space-separated format (e.g., "0 1 2 3")
+    if " " in phys_str and "-" not in phys_str and "," not in phys_str:
+        return [int(x) for x in phys_str.split() if x.strip()]
+    return _parse_cpu_list(phys_str)
+
+
+def get_numa_cpus_for_node(node: int) -> List[int]:
+    """Return the list of CPUs belonging to a specific NUMA node.
+    
+    Book reference: Chapter 3, NUMA affinity section.
+    Reads from /sys/devices/system/node/node{N}/cpulist.
+    
+    Args:
+        node: NUMA node ID
+        
+    Returns:
+        List of CPU indices for that node
+        
+    Example:
+        >>> get_numa_cpus_for_node(0)
+        [0, 1, 2, 3, 4, 5, 6, 7]
+    """
+    return _cpus_for_node(node)
+
+
+def get_numa_cpus_and_memory() -> Tuple[List[int], int]:
+    """Return (current_cpu_mask, preferred_node) from numactl --show.
+    
+    Book reference: Chapter 3, NUMA affinity section.
+    Queries the current process's NUMA policy.
+    
+    Returns:
+        Tuple of (cpu_list, preferred_memory_node)
+        
+    Example:
+        >>> cpus, node = get_numa_cpus_and_memory()
+        >>> print(f"Process bound to CPUs {cpus}, memory node {node}")
+    """
+    return _current_numa_policy()
+
+
 def _gpu_pci_bus(device_index: int) -> str:
     props = torch.cuda.get_device_properties(device_index)
     return props.pci_bus_id  # e.g. '0000:03:00.0'

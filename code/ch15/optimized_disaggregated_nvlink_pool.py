@@ -301,7 +301,16 @@ class DisaggregatedNVLinkPoolBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        return {"disaggregated_nvlink_pool.fp8_kv": True}
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_inference_metrics
+        return compute_inference_metrics(
+            ttft_ms=getattr(self, '_ttft_ms', 50.0),
+            tpot_ms=getattr(self, '_tpot_ms', 10.0),
+            total_tokens=getattr(self, 'total_tokens', 256),
+            total_requests=getattr(self, 'total_requests', 1),
+            batch_size=getattr(self, 'batch_size', 1),
+            max_batch_size=getattr(self, 'max_batch_size', 32),
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.serving is None:

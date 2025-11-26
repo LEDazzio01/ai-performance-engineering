@@ -218,12 +218,16 @@ def _execute_benchmarks(
     rdzv_endpoint: Optional[str] = None,
     torchrun_env: Optional[List[str]] = None,
     target_extra_args: Optional[List[str]] = None,
+    # Verification (on by default)
+    verify_correctness: bool = True,
     # LLM options
     llm_analysis: bool = False,
+    force_llm: bool = False,
     llm_provider: Optional[str] = None,
     apply_llm_patches: bool = False,
     rebenchmark_llm_patches: bool = False,
     patch_strategy: str = "ast",
+    llm_patch_retries: int = 2,
     use_llm_cache: bool = True,
     llm_explain: bool = False,
 ) -> None:
@@ -289,12 +293,16 @@ def _execute_benchmarks(
             rdzv_endpoint=rdzv_endpoint,
             env_passthrough=torchrun_env,
             target_extra_args=parsed_extra_args,
+            # Verification
+            verify_correctness=verify_correctness,
             # LLM options
-            llm_analysis=llm_analysis,
+            llm_analysis=llm_analysis or force_llm,
+            force_llm=force_llm,
             llm_provider=llm_provider,
             apply_llm_patches=apply_llm_patches,
             rebenchmark_llm_patches=rebenchmark_llm_patches,
             patch_strategy=patch_strategy,
+            llm_patch_retries=llm_patch_retries,
             use_llm_cache=use_llm_cache,
             llm_explain=llm_explain,
         )
@@ -346,12 +354,16 @@ if TYPER_AVAILABLE:
         target_extra_args: Optional[List[str]] = Option(None, "--target-extra-arg", help='Per-target extra args, format: target="--flag value". Repeatable.'),
         # LLM analysis and patching options
         llm_analysis: bool = Option(False, "--llm-analysis", help="Enable LLM-powered analysis for benchmarks with <1.1x speedup. Requires API keys in .env.local", is_flag=True),
+        force_llm: bool = Option(False, "--force-llm", help="Force LLM analysis on ALL benchmarks regardless of speedup. Use to try improving even good results.", is_flag=True),
         llm_provider: Optional[str] = Option(None, "--llm-provider", help="LLM provider: 'anthropic' or 'openai'. Defaults to env LLM_PROVIDER."),
         apply_llm_patches: bool = Option(False, "--apply-llm-patches", help="Apply LLM-suggested patches to create new optimized variants. Requires --llm-analysis.", is_flag=True),
         rebenchmark_llm_patches: bool = Option(False, "--rebenchmark-llm-patches", help="Re-benchmark LLM-patched variants. Requires --apply-llm-patches.", is_flag=True),
         patch_strategy: str = Option("ast", "--patch-strategy", help="Patch strategy: 'ast' (default, AST-based) or 'fuzzy' (text matching)."),
+        llm_patch_retries: int = Option(2, "--llm-patch-retries", help="Max retry attempts when LLM patch fails (syntax/runtime errors). Default: 2"),
         no_llm_cache: bool = Option(False, "--no-llm-cache", help="Disable LLM analysis caching (always re-run LLM even if cached results exist).", is_flag=True),
         llm_explain: bool = Option(False, "--llm-explain", help="Generate educational explanations for best patches (why it works, optimization techniques used). Requires --rebenchmark-llm-patches.", is_flag=True),
+        # Verification (on by default - can skip with --skip-verify)
+        skip_verify: bool = Option(False, "--skip-verify", help="Skip output correctness verification. By default, optimized outputs are verified against baseline.", is_flag=True),
     ):
         """Run benchmarks - discover, run, and summarize results."""
         combined_targets: List[str] = []
@@ -394,12 +406,16 @@ if TYPER_AVAILABLE:
             rdzv_endpoint=rdzv_endpoint,
             torchrun_env=torchrun_env,
             target_extra_args=target_extra_args,
+            # Verification
+            verify_correctness=not skip_verify,
             # LLM options
-            llm_analysis=llm_analysis,
+            llm_analysis=llm_analysis or force_llm,
+            force_llm=force_llm,
             llm_provider=llm_provider,
             apply_llm_patches=apply_llm_patches,
             rebenchmark_llm_patches=rebenchmark_llm_patches,
             patch_strategy=patch_strategy,
+            llm_patch_retries=llm_patch_retries,
             use_llm_cache=not no_llm_cache,
             llm_explain=llm_explain,
         )
@@ -443,6 +459,196 @@ if TYPER_AVAILABLE:
 
         if not any_targets:
             typer.echo("No benchmark targets discovered.")
+
+    @app.command("analyze")
+    def analyze(
+        show_leaderboards: bool = Option(True, "--leaderboards/--no-leaderboards", help="Show separate speed/memory leaderboards"),
+        show_pareto: bool = Option(True, "--pareto/--no-pareto", help="Show Pareto-optimal benchmarks"),
+        show_tradeoffs: bool = Option(True, "--tradeoffs/--no-tradeoffs", help="Show cost-benefit trade-off analysis"),
+        show_recommendations: bool = Option(True, "--recommendations/--no-recommendations", help="Show constraint-based recommendations"),
+        show_chart: bool = Option(True, "--chart/--no-chart", help="Show ASCII trade-off scatter chart"),
+        top_n: int = Option(5, "--top", "-n", help="Number of entries to show per category"),
+        json_output: bool = Option(False, "--json", help="Output as JSON"),
+    ):
+        """Analyze benchmark results: Pareto frontier, trade-offs, and recommendations."""
+        from tools.dashboard.server import DashboardHandler
+        
+        # Create a mock handler to access analysis methods
+        class MockHandler(DashboardHandler):
+            def __init__(self):
+                self.data_file = None
+        
+        handler = MockHandler()
+        
+        results = {}
+        
+        if show_leaderboards:
+            results['leaderboards'] = handler.get_categorized_leaderboards()
+        if show_pareto:
+            results['pareto'] = handler.get_pareto_frontier()
+        if show_tradeoffs:
+            results['tradeoffs'] = handler.get_tradeoff_analysis()
+        if show_recommendations:
+            results['recommendations'] = handler.get_constraint_recommendations()
+        
+        if json_output:
+            typer.echo(json.dumps(results, indent=2))
+            return
+        
+        # Pretty print results
+        typer.echo("\n" + "=" * 70)
+        typer.echo("📊 MULTI-METRIC BENCHMARK ANALYSIS")
+        typer.echo("=" * 70)
+        
+        if show_leaderboards and 'leaderboards' in results:
+            boards = results['leaderboards'].get('leaderboards', {})
+            
+            # Speed leaderboard
+            speed = boards.get('speed', {})
+            typer.echo(f"\n🚀 SPEED CHAMPIONS ({speed.get('count', 0)} benchmarks)")
+            typer.echo("-" * 50)
+            for e in speed.get('entries', [])[:top_n]:
+                rank_icon = "🥇" if e['rank'] == 1 else "🥈" if e['rank'] == 2 else "🥉" if e['rank'] == 3 else f"#{e['rank']}"
+                typer.echo(f"  {rank_icon} {e['name']}: {e['primary_metric']}")
+            
+            # Memory leaderboard
+            memory = boards.get('memory', {})
+            if memory.get('entries'):
+                typer.echo(f"\n💾 MEMORY CHAMPIONS ({memory.get('count', 0)} benchmarks)")
+                typer.echo("-" * 50)
+                for e in memory.get('entries', [])[:top_n]:
+                    rank_icon = "🥇" if e['rank'] == 1 else "🥈" if e['rank'] == 2 else "🥉" if e['rank'] == 3 else f"#{e['rank']}"
+                    typer.echo(f"  {rank_icon} {e['name']}: {e['primary_metric']} ({e['secondary_metric']})")
+        
+        if show_pareto and 'pareto' in results:
+            pareto = results['pareto']
+            typer.echo(f"\n⭐ PARETO-OPTIMAL BENCHMARKS ({pareto.get('pareto_count', 0)} / {pareto.get('total_count', 0)})")
+            typer.echo("-" * 50)
+            typer.echo("  (No other benchmark is better on ALL metrics)")
+            for p in pareto.get('pareto_frontier', [])[:top_n]:
+                mem_str = f"-{p['memory_savings']:.0f}% mem" if p['memory_savings'] > 0 else "N/A"
+                typer.echo(f"  ⭐ {p['name']}")
+                typer.echo(f"      Speed: {p['speedup']:.2f}x | Memory: {mem_str}")
+        
+        if show_tradeoffs and 'tradeoffs' in results:
+            tradeoffs = results['tradeoffs']
+            typer.echo(f"\n⚡ EFFICIENCY RANKINGS (Cost-Benefit Analysis)")
+            typer.echo("-" * 50)
+            
+            # Memory specialists
+            mem_specs = tradeoffs.get('memory_specialists', [])
+            if mem_specs:
+                typer.echo("  💾 Memory Efficiency:")
+                for t in mem_specs[:3]:
+                    typer.echo(f"      {t['name']}: {t['benefit']} ({t['cost']})")
+            
+            # Speed specialists
+            speed_specs = tradeoffs.get('speed_specialists', [])
+            if speed_specs:
+                typer.echo("  🚀 Speed Efficiency (top 3):")
+                for t in speed_specs[:3]:
+                    typer.echo(f"      {t['name']}: {t['benefit']} (eff={t['efficiency_score']})")
+        
+        if show_recommendations and 'recommendations' in results:
+            recs = results['recommendations']
+            typer.echo(f"\n🎯 RECOMMENDATIONS BY USE CASE")
+            typer.echo("-" * 50)
+            for scenario in recs.get('scenarios', []):
+                typer.echo(f"\n  {scenario['icon']} {scenario['name']}")
+                typer.echo(f"     {scenario['description']}")
+                for r in scenario.get('recommendations', [])[:2]:
+                    typer.echo(f"       → {r['name']}: {r['benefit']}")
+        
+        if show_chart and 'pareto' in results:
+            render_ascii_scatter_chart(results['pareto'])
+        
+        typer.echo("\n" + "=" * 70)
+        typer.echo("💡 Tip: Use --json for machine-readable output")
+        typer.echo("=" * 70 + "\n")
+    
+    def render_ascii_scatter_chart(pareto_data: dict, width: int = 60, height: int = 20):
+        """Render an ASCII scatter chart of speed vs memory trade-offs."""
+        all_points = pareto_data.get('all_points', [])
+        pareto_points = pareto_data.get('pareto_frontier', [])
+        pareto_names = set(p['name'] for p in pareto_points)
+        
+        if not all_points:
+            return
+        
+        typer.echo(f"\n📈 SPEED vs MEMORY TRADE-OFF CHART")
+        typer.echo("-" * 70)
+        
+        # Filter to reasonable range for visualization (log scale for speed)
+        import math
+        
+        # Get ranges
+        speedups = [p['speedup'] for p in all_points if p['speedup'] > 0]
+        mem_savings = [p['memory_savings'] for p in all_points]
+        
+        if not speedups:
+            typer.echo("  No data to display")
+            return
+        
+        # Use log scale for speedup (clamped)
+        min_speedup = max(0.1, min(speedups))
+        max_speedup = min(1000, max(speedups))  # Cap at 1000x for visualization
+        min_mem = min(mem_savings) if mem_savings else 0
+        max_mem = max(mem_savings) if mem_savings else 100
+        
+        # Ensure some range
+        if max_mem <= min_mem:
+            max_mem = min_mem + 10
+        
+        # Create grid
+        grid = [[' ' for _ in range(width)] for _ in range(height)]
+        
+        # Plot points
+        for p in all_points:
+            speedup = max(min_speedup, min(max_speedup, p['speedup']))
+            mem = p['memory_savings']
+            
+            # Log scale for x (speedup)
+            if speedup > 0:
+                x = int((math.log10(speedup) - math.log10(min_speedup)) / 
+                       (math.log10(max_speedup) - math.log10(min_speedup) + 0.001) * (width - 1))
+            else:
+                x = 0
+            
+            # Linear scale for y (memory savings)
+            y = int((mem - min_mem) / (max_mem - min_mem + 0.001) * (height - 1))
+            
+            x = max(0, min(width - 1, x))
+            y = max(0, min(height - 1, y))
+            y = height - 1 - y  # Flip y axis
+            
+            # Mark point
+            if p['name'] in pareto_names:
+                grid[y][x] = '★'  # Pareto optimal
+            elif grid[y][x] == ' ':
+                grid[y][x] = '·'  # Regular point
+            elif grid[y][x] == '·':
+                grid[y][x] = '○'  # Multiple points
+        
+        # Draw chart
+        typer.echo(f"  Memory")
+        typer.echo(f"  Savings")
+        typer.echo(f"  {max_mem:>5.0f}% ┌" + "─" * width + "┐")
+        
+        for i, row in enumerate(grid):
+            if i == 0 or i == height - 1 or i == height // 2:
+                label = f"{max_mem - (max_mem - min_mem) * i / (height - 1):>5.0f}%"
+            else:
+                label = "      "
+            typer.echo(f"  {label} │{''.join(row)}│")
+        
+        typer.echo(f"  {min_mem:>5.0f}% └" + "─" * width + "┘")
+        
+        # X-axis labels
+        typer.echo(f"         {min_speedup:<10.1f}x" + " " * (width - 25) + f"{max_speedup:>10.1f}x")
+        typer.echo(f"                              Speedup (log scale) →")
+        
+        # Legend
+        typer.echo(f"\n  Legend: ★ = Pareto optimal  · = Regular  ○ = Multiple points")
 
     @app.command("utils")
     def utils(

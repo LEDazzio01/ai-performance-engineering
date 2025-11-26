@@ -1,0 +1,31 @@
+{
+  "examples": {
+    "decode_attention": {
+      "example": "decode_attention",
+      "metadata": {
+        "best_optimization": "optimized_decode_attention",
+        "best_optimization_file": "optimized_decode_attention.py",
+        "best_optimization_speedup": 1.0604958605657921,
+        "best_optimization_time_ms": 0.4004239998757839,
+        "git_commit": "8a9453873dcdbae15df8064ed77b6b20d3d8e49e",
+        "updated_at": "2025-11-25T20:17:54.895712"
+      },
+      "metrics": {
+        "baseline_p75_ms": 0.39907199144363403,
+        "baseline_throughput.latency_ms": 0.4246479943394661,
+        "baseline_throughput.requests_per_s": 57266.79869997644,
+        "baseline_throughput.tokens_per_s": 29320600.934387937,
+        "baseline_time_ms": 0.4246479943394661,
+        "best_optimized_p75_ms": 0.31248000264167786,
+        "best_optimized_speedup": 1.0604958605657921,
+        "best_optimized_throughput.latency_ms": 0.4004239998757839,
+        "best_optimized_throughput.requests_per_s": 69442.03275305705,
+        "best_optimized_throughput.tokens_per_s": 35554320.76956521,
+        "best_optimized_time_ms": 0.4004239998757839,
+        "best_speedup": 1.0604958605657921
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

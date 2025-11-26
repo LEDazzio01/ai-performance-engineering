@@ -190,26 +190,13 @@ class OptimizedTEFP8Benchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=50, warmup=10)
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return FP8 precision and optimization metrics.
-        
-        These metrics help understand WHY FP8 with Transformer Engine is faster
-        and HOW the precision tradeoffs affect performance.
-        """
-        # Theoretical compute density improvement
-        # FP8 Tensor Cores: ~2x throughput vs FP16 on Blackwell
-        return {
-            "fp8.batch_size": float(self.batch_size),
-            "fp8.hidden_dim": float(self.hidden_dim),
-            "fp8.compute_dtype": str(self.compute_dtype),
-            # Recipe parameters affecting precision/performance tradeoff
-            "fp8.amax_history_len": 1024,
-            "fp8.scaling_algorithm": "hysteresis",
-            # Expected improvement factors
-            "fp8.theoretical_speedup_vs_fp16": 2.0,  # Blackwell FP8 vs FP16
-            "fp8.memory_reduction_factor": 2.0,      # 8-bit vs 16-bit
-            # CUDA graph optimization
-            "fp8.uses_cuda_graph": True,
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_precision_metrics
+        return compute_precision_metrics(
+            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
+            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
+            precision_type="fp8",
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.model is None:

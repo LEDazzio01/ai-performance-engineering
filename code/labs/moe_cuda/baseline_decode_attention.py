@@ -21,9 +21,10 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.batch = 8
+        # Realistic decode workload where BF16 optimization shows benefit
+        self.batch = 32
         self.num_heads = 12
-        self.kv_seq = 256
+        self.kv_seq = 512
         self.head_dim = 64
         self.module: Optional[torch.nn.Module] = None
         self.q: Optional[torch.Tensor] = None

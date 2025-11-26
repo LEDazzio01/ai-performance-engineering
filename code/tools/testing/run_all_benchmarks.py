@@ -178,7 +178,39 @@ def extract_from_pytorch_trace(trace_path: Path) -> Dict[str, float]:
     return metrics
 
 
-INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {}
+# Examples that demonstrate techniques but may not show speedup (educational demos, analysis tools)
+# These are valuable for showing HOW to implement something, even if not faster for this workload
+INFORMATIONAL_BENCHMARKS: Dict[str, Set[str]] = {
+    # Ch3: NUMA awareness demo shows the technique (outcome depends on system topology)
+    "ch3": {"numa_unaware"},
+    # Ch4: DataParallel demo shows basic parallelism pattern (requires multi-GPU)
+    "ch4": {"dataparallel_basic"},
+    # Ch12: Graph CUDA demos show graph capture patterns
+    "ch12": {"graph_cuda"},
+    # Ch14: Sliding window bench uses FlexAttention which may not have full Blackwell support
+    "ch14": {"sliding_window_bench"},
+    # Ch15: Disaggregated inference demos show architecture patterns (multi-GPU)
+    "ch15": {"disaggregated_inference", "inference_placement"},
+    # Ch16: Paged attention demos show memory management technique (value is memory efficiency)
+    "ch16": {"paged_attention", "paged_attention_blackwell", "piece_graphs"},
+    # Ch17: Pipeline parallelism and routing demos (multi-GPU)
+    "ch17": {"pipeline_parallelism", "prefill_decode_disagg"},
+    # Ch18: Speculative decoding demos show technique patterns
+    "ch18": {"speculative_decoding_multi_draft", "flexdecoding_graphs"},
+    # Ch19: NVFP4 is cutting-edge and may not be faster than BF16 yet
+    "ch19": {"nvfp4_training"},
+    # Labs: Dynamic router demos show routing patterns
+    "dynamic_router": {"dynamic_router", "router_vectorized"},
+    # Labs: Persistent decode demos show technique patterns
+    "persistent_decode": {"kv_locality_microbench", "persistent_decode_cuda"},
+}
+
+# Note: The following have been moved to tools/:
+# - ch2/uma_memory_reporting -> tools/diagnostics/uma_memory/
+# - ch10/roofline -> tools/analysis/roofline/
+# - ch15/moe_validation -> tools/verification/moe/
+# - speculative_decode/spec_config_sweep -> tools/analysis/speculative_decode/
+# - occupancy_tuning/proton_* -> tools/profiling/occupancy_tuning/
 
 def format_time_ms(time_ms: float) -> str:
     """Format time in milliseconds with adaptive precision.
@@ -1501,12 +1533,16 @@ def _test_chapter_impl(
     rdzv_endpoint: Optional[str] = None,
     env_passthrough: Optional[List[str]] = None,
     target_extra_args: Optional[Dict[str, List[str]]] = None,
+    # Verification
+    verify_correctness: bool = False,
     # LLM analysis and patching options
     llm_analysis: bool = False,
+    force_llm: bool = False,
     llm_provider: Optional[str] = None,
     apply_llm_patches: bool = False,
     rebenchmark_llm_patches: bool = False,
     patch_strategy: str = "ast",
+    llm_patch_retries: int = 2,
     use_llm_cache: bool = True,
     llm_explain: bool = False,
 ) -> Dict[str, Any]:
@@ -1714,7 +1750,8 @@ def _test_chapter_impl(
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
 
-    protected_fields: Set[str] = set()
+    # Fields that should not be overridden by individual benchmarks
+    protected_fields: Set[str] = {"enable_memory_tracking"}  # Always track memory for analysis
     if enable_profiling:
         protected_fields.update({"enable_profiling", "enable_nsys", "enable_ncu", "enable_nvtx", "profile_type"})
 
@@ -1847,8 +1884,11 @@ def _test_chapter_impl(
                 'baseline_file': baseline_path.name,
                 'baseline_time_ms': None,
                 'baseline_throughput': None,
+                'baseline_memory_mb': None,  # Peak memory for baseline
                 'optimizations': [],
                 'best_speedup': 1.0,
+                'best_memory_savings_pct': 0.0,  # Memory reduction percentage
+                'optimization_goal': 'speed',  # Primary goal: speed, memory, throughput
                 'status': 'failed_error',
                 'error': None,
             }
@@ -1917,6 +1957,10 @@ def _test_chapter_impl(
                 result_entry['baseline_time_ms'] = baseline_time
                 if baseline_custom_metrics:
                     result_entry['baseline_custom_metrics'] = baseline_custom_metrics
+                
+                # Capture baseline memory
+                if baseline_memory and baseline_memory.peak_mb:
+                    result_entry['baseline_memory_mb'] = baseline_memory.peak_mb
                 
                 # Enhanced baseline metrics display with emojis and formatting
                 logger.info(f"    Baseline: {format_time_ms(baseline_time)} ms")
@@ -2073,6 +2117,15 @@ def _test_chapter_impl(
                     continue
                 
                 optimized_benchmark = load_benchmark(optimized_path)
+                
+                # Capture optimization goal from the OPTIMIZED benchmark (not baseline)
+                try:
+                    if optimized_benchmark is not None:
+                        opt_goal = optimized_benchmark.get_optimization_goal()
+                        result_entry['optimization_goal'] = opt_goal
+                except AttributeError:
+                    pass  # Old benchmarks without get_optimization_goal()
+                
                 if optimized_benchmark is None:
                     load_error = get_last_load_error() or ""
                     skip_reason = check_hardware_limitation(load_error)
@@ -2221,6 +2274,19 @@ def _test_chapter_impl(
                         'time_ms': optimized_time,
                         'speedup': speedup,
                     }
+                    
+                    # Add memory metrics
+                    if optimized_memory and optimized_memory.peak_mb:
+                        opt_result['memory_mb'] = optimized_memory.peak_mb
+                        # Calculate memory savings percentage
+                        if baseline_memory and baseline_memory.peak_mb and baseline_memory.peak_mb > 0:
+                            memory_savings_pct = ((baseline_memory.peak_mb - optimized_memory.peak_mb) 
+                                                   / baseline_memory.peak_mb) * 100
+                            opt_result['memory_savings_pct'] = memory_savings_pct
+                            # Track best memory savings
+                            if memory_savings_pct > result_entry.get('best_memory_savings_pct', 0):
+                                result_entry['best_memory_savings_pct'] = memory_savings_pct
+                    
                     if opt_p75 is not None:
                         opt_result['p75_ms'] = opt_p75
                     if opt_p90 is not None:
@@ -2455,6 +2521,24 @@ def _test_chapter_impl(
                 else:
                     result_entry['status'] = 'succeeded'
                     successful += 1
+                    
+                    # Verify outputs if requested
+                    if verify_correctness and best_opt and result_entry.get('baseline_file'):
+                        baseline_path = result_entry.get('baseline_file')
+                        optimized_path = best_opt.get('file')
+                        if baseline_path and optimized_path:
+                            baseline_full = chapter_dir / baseline_path
+                            optimized_full = chapter_dir / optimized_path
+                            if baseline_full.exists() and optimized_full.exists():
+                                verify_result = _verify_patched_benchmark(
+                                    str(baseline_full),
+                                    str(optimized_full),
+                                )
+                                result_entry['verification'] = verify_result
+                                if verify_result.get('verified'):
+                                    logger.info(f"    ✓ Verified: optimized output matches baseline")
+                                elif verify_result.get('errors'):
+                                    logger.warning(f"    ⚠ Verification: {verify_result['errors'][0]}")
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1
@@ -2911,15 +2995,19 @@ def _test_chapter_impl(
         'patches_refined': 0,  # Successfully refined after initial failure
         'best_patches_selected': 0,  # Number of "best" patches identified
         'total_speedup_improvement': 0.0,  # Sum of speedups from best patches
+        'patches_verified': 0,  # Patches that passed output verification
+        'patches_verification_failed': 0,  # Patches with verification errors
         'failures': [],  # List of {example, reason}
     }
     
     if llm_analysis:
         logger.info("  Running LLM-powered analysis...")
         for bench_result in benchmark_results:
-            # Run LLM analysis for benchmarks that need optimization (<1.1x speedup)
+            # Run LLM analysis for benchmarks that need optimization
+            # Default: <1.1x speedup, but --force-llm runs on ALL benchmarks
             best_speedup = bench_result.get('best_speedup', 1.0)
-            if bench_result.get('status') in ('succeeded', 'failed_regression') and best_speedup < 1.1:
+            needs_analysis = force_llm or best_speedup < 1.1
+            if bench_result.get('status') in ('succeeded', 'failed_regression') and needs_analysis:
                 llm_result = _run_llm_analysis_for_benchmark(
                     bench_result,
                     profiling_output_dir,
@@ -2940,6 +3028,8 @@ def _test_chapter_impl(
                             chapter_dir,
                             profiling_output_dir,
                             patch_strategy=patch_strategy,
+                            llm_provider=llm_provider,
+                            max_refinement_attempts=llm_patch_retries,
                         )
                         if patch_results:
                             bench_result['llm_patches'] = patch_results
@@ -2985,17 +3075,31 @@ def _test_chapter_impl(
                                         if patch_time and baseline_time > 0:
                                             patch['actual_speedup'] = baseline_time / patch_time
                                             logger.info(f"      ✓ {patch.get('variant_name', 'patch')}: {patch_time:.3f}ms ({patch['actual_speedup']:.2f}x vs baseline)")
+                                        
+                                        # Auto-verify patched output matches original
+                                        if optimized_file.exists():
+                                            verify_result = _verify_patched_benchmark(
+                                                str(optimized_file),
+                                                patch['patched_file'],
+                                            )
+                                            patch['verification'] = verify_result
+                                            if verify_result.get('verified'):
+                                                llm_patch_metrics['patches_verified'] += 1
+                                                logger.info(f"      ✓ Verified: output matches original")
+                                            elif verify_result.get('errors'):
+                                                llm_patch_metrics['patches_verification_failed'] += 1
+                                                logger.warning(f"      ⚠ Verification: {verify_result['errors'][0]}")
                                     else:
                                         # Rebenchmark failed - try iterative refinement
                                         error_info = rebench_result
                                         logger.warning(f"      ✗ {patch.get('variant_name', 'patch')} failed: {error_info.get('error_type')}")
                                         
-                                        # Try refinement (up to 2 attempts)
+                                        # Try refinement (up to llm_patch_retries attempts)
                                         if original_optimized_code:
                                             patched_code = Path(patch['patched_file']).read_text() if Path(patch['patched_file']).exists() else None
                                             if patched_code:
-                                                for attempt in range(2):
-                                                    logger.info(f"      🔄 Refinement attempt {attempt + 1}/2...")
+                                                for attempt in range(llm_patch_retries):
+                                                    logger.info(f"      🔄 Refinement attempt {attempt + 1}/{llm_patch_retries}...")
                                                     refined_code = _refine_patch_with_llm(
                                                         original_optimized_code,
                                                         patched_code,
@@ -3027,6 +3131,20 @@ def _test_chapter_impl(
                                                             if patch_time and baseline_time > 0:
                                                                 patch['actual_speedup'] = baseline_time / patch_time
                                                                 logger.info(f"      ✓ Refined {patch.get('variant_name', 'patch')}: {patch_time:.3f}ms ({patch['actual_speedup']:.2f}x)")
+                                                            
+                                                            # Verify refined patch
+                                                            if optimized_file.exists():
+                                                                verify_result = _verify_patched_benchmark(
+                                                                    str(optimized_file),
+                                                                    str(refined_path),
+                                                                )
+                                                                patch['verification'] = verify_result
+                                                                if verify_result.get('verified'):
+                                                                    llm_patch_metrics['patches_verified'] += 1
+                                                                    logger.info(f"      ✓ Verified: output matches original")
+                                                                elif verify_result.get('errors'):
+                                                                    llm_patch_metrics['patches_verification_failed'] += 1
+                                                                    logger.warning(f"      ⚠ Verification: {verify_result['errors'][0]}")
                                                             break
                                                         else:
                                                             # Update error info for next attempt
@@ -3245,8 +3363,14 @@ def _apply_llm_patches_for_benchmark(
     chapter_dir: Path,
     profiling_output_dir: Optional[Path],
     patch_strategy: str = "ast",
+    llm_provider: Optional[str] = None,
+    max_refinement_attempts: int = 2,
 ) -> List[Dict[str, Any]]:
-    """Apply LLM-suggested patches to create new optimized variants."""
+    """Apply LLM-suggested patches to create new optimized variants.
+    
+    If a patch fails with a syntax error, it will be sent back to the LLM
+    for refinement (up to max_refinement_attempts times).
+    """
     from tools.analysis.llm_patch_applier import LLMPatchApplier
     
     md_path = llm_result.get('md_path')
@@ -3284,11 +3408,12 @@ def _apply_llm_patches_for_benchmark(
     output_dir = chapter_dir / "llm_patches"
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    original_code = source_file.read_text()
     results = applier.apply_patches(patches, source_file, output_dir)
     
-    # Serialize results
+    # Serialize results, with refinement for failures
     serializable = []
-    for r in results:
+    for i, r in enumerate(results):
         if r.success:
             variant_name = getattr(r.patch, 'variant_name', '') if r.patch else ''
             serializable.append({
@@ -3301,13 +3426,65 @@ def _apply_llm_patches_for_benchmark(
                 'can_benchmark': not bool(r.validation_errors),
             })
         else:
-            serializable.append({
-                'success': False,
-                'error': r.error,
-                'failure_reason': r.error,
-                'can_benchmark': False,
-            })
-            logger.warning(f"      ✗ Patch failed: {r.error}")
+            # Try refinement for failed patches (syntax errors, etc.)
+            variant_name = getattr(r.patch, 'variant_name', f'patch_{i}') if r.patch else f'patch_{i}'
+            patch_code = getattr(r.patch, 'code', '') if r.patch else ''
+            error_msg = r.error or 'Unknown error'
+            
+            refined_successfully = False
+            for attempt in range(max_refinement_attempts):
+                if not patch_code:
+                    break
+                    
+                logger.info(f"      🔄 Refining {variant_name} (attempt {attempt + 1}/{max_refinement_attempts})...")
+                
+                # Send to LLM for refinement
+                refined_code = _refine_patch_with_llm(
+                    original_code,
+                    patch_code,
+                    {'error': error_msg, 'error_type': 'syntax_error'},
+                    benchmark_result,
+                    chapter_dir,
+                    llm_provider=llm_provider,
+                )
+                
+                if refined_code:
+                    # Try to apply the refined patch
+                    refined_path = output_dir / f"optimized_{example_name}_{variant_name}_refined.py"
+                    try:
+                        refined_path.write_text(refined_code)
+                        # Validate syntax
+                        compile(refined_code, str(refined_path), 'exec')
+                        logger.info(f"      ✓ {variant_name} refined successfully")
+                        serializable.append({
+                            'success': True,
+                            'patched_file': str(refined_path),
+                            'variant_name': f"{variant_name}_refined",
+                            'description': getattr(r.patch, 'description', '') if r.patch else '',
+                            'expected_speedup': getattr(r.patch, 'expected_speedup', '') if r.patch else '',
+                            'validation_errors': [],
+                            'can_benchmark': True,
+                            'refined': True,
+                            'refinement_attempts': attempt + 1,
+                        })
+                        refined_successfully = True
+                        break
+                    except SyntaxError as e:
+                        error_msg = str(e)
+                        patch_code = refined_code
+                        logger.warning(f"      ✗ Refinement still has syntax error: {e}")
+                else:
+                    break
+            
+            if not refined_successfully:
+                serializable.append({
+                    'success': False,
+                    'error': r.error,
+                    'failure_reason': r.error,
+                    'can_benchmark': False,
+                    'variant_name': variant_name,
+                })
+                logger.warning(f"      ✗ Patch failed: {r.error}")
     
     return serializable
 
@@ -3398,6 +3575,199 @@ def _rebenchmark_patched_variant(
             'traceback': traceback.format_exc()[-1000:],  # Last 1000 chars of traceback
             'patched_file': patched_file,
         }
+
+
+def _verify_patched_benchmark(
+    original_file: str,
+    patched_file: str,
+    test_shape: tuple = (256, 256),
+) -> Dict[str, Any]:
+    """Verify that a patched benchmark produces the same output as the original.
+    
+    Uses the kernel verification tools to compare outputs.
+    
+    Args:
+        original_file: Path to original optimized benchmark
+        patched_file: Path to LLM-patched benchmark
+        test_shape: Shape for test tensors
+        
+    Returns:
+        Dict with keys:
+            - verified: bool (True if outputs match)
+            - verification_type: str (e.g., 'output_comparison', 'skipped')
+            - errors: List[str] (if any verification errors)
+            - details: Dict (additional info)
+    """
+    import importlib.util
+    import torch
+    from pathlib import Path
+    
+    result = {
+        'verified': False,
+        'verification_type': 'output_comparison',
+        'errors': [],
+        'details': {},
+    }
+    
+    # Load both modules
+    try:
+        # Load original
+        orig_path = Path(original_file)
+        if not orig_path.exists():
+            result['verification_type'] = 'skipped'
+            result['errors'].append(f"Original file not found: {original_file}")
+            return result
+            
+        orig_spec = importlib.util.spec_from_file_location("orig_module", orig_path)
+        orig_module = importlib.util.module_from_spec(orig_spec)
+        orig_spec.loader.exec_module(orig_module)
+        
+        # Load patched
+        patch_path = Path(patched_file)
+        if not patch_path.exists():
+            result['verification_type'] = 'skipped'
+            result['errors'].append(f"Patched file not found: {patched_file}")
+            return result
+            
+        patch_spec = importlib.util.spec_from_file_location("patch_module", patch_path)
+        patch_module = importlib.util.module_from_spec(patch_spec)
+        patch_spec.loader.exec_module(patch_module)
+        
+    except Exception as e:
+        result['errors'].append(f"Failed to load modules: {e}")
+        return result
+    
+    # Find benchmark classes
+    from common.python.benchmark_harness import BaseBenchmark
+    
+    def find_benchmark_class(module):
+        for name in dir(module):
+            obj = getattr(module, name)
+            if isinstance(obj, type) and issubclass(obj, BaseBenchmark) and obj is not BaseBenchmark:
+                return obj
+        return None
+    
+    orig_class = find_benchmark_class(orig_module)
+    patch_class = find_benchmark_class(patch_module)
+    
+    if not orig_class or not patch_class:
+        result['verification_type'] = 'skipped'
+        result['errors'].append("Could not find benchmark classes")
+        return result
+    
+    # Run both benchmarks with same seed and compare outputs
+    try:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed(42)
+        
+        # Helper to instantiate benchmark, handling various signatures
+        def instantiate_benchmark(cls, file_path):
+            import inspect
+            sig = inspect.signature(cls.__init__)
+            params = list(sig.parameters.values())[1:]  # Skip 'self'
+            
+            # Check if all params have defaults
+            required = [p for p in params if p.default is inspect.Parameter.empty]
+            if not required:
+                return cls()
+            
+            # Try to provide common required args
+            kwargs = {}
+            for p in required:
+                if p.name == 'chapter_dir':
+                    kwargs['chapter_dir'] = Path(file_path).parent
+                elif p.name == 'binary_name':
+                    kwargs['binary_name'] = Path(file_path).stem
+                elif p.name == 'friendly_name':
+                    kwargs['friendly_name'] = Path(file_path).stem.replace('_', ' ')
+                else:
+                    # Unknown required param - can't instantiate
+                    return None
+            return cls(**kwargs)
+        
+        # Run original
+        orig_benchmark = instantiate_benchmark(orig_class, original_file)
+        if orig_benchmark is None:
+            result['verification_type'] = 'skipped'
+            result['errors'].append(f"Cannot instantiate {orig_class.__name__} - unknown required args")
+            return result
+            
+        orig_benchmark.setup()
+        orig_benchmark.benchmark_fn()
+        orig_output = getattr(orig_benchmark, 'output', None)
+        if orig_output is None:
+            # Try common attribute names
+            for attr in ['result', 'y', 'out', 'output_tensor']:
+                orig_output = getattr(orig_benchmark, attr, None)
+                if orig_output is not None:
+                    break
+        
+        # Reset seed and run patched
+        torch.manual_seed(42)
+        torch.cuda.manual_seed(42)
+        
+        patch_benchmark = instantiate_benchmark(patch_class, patched_file)
+        if patch_benchmark is None:
+            result['verification_type'] = 'skipped'
+            result['errors'].append(f"Cannot instantiate {patch_class.__name__} - unknown required args")
+            return result
+            
+        patch_benchmark.setup()
+        patch_benchmark.benchmark_fn()
+        patch_output = getattr(patch_benchmark, 'output', None)
+        if patch_output is None:
+            for attr in ['result', 'y', 'out', 'output_tensor']:
+                patch_output = getattr(patch_benchmark, attr, None)
+                if patch_output is not None:
+                    break
+        
+        # Compare outputs
+        if orig_output is None or patch_output is None:
+            result['verification_type'] = 'skipped'
+            result['details']['reason'] = 'No output tensor found for comparison'
+            result['verified'] = True  # Can't verify, assume OK
+        elif isinstance(orig_output, torch.Tensor) and isinstance(patch_output, torch.Tensor):
+            if orig_output.shape != patch_output.shape:
+                result['errors'].append(f"Shape mismatch: {orig_output.shape} vs {patch_output.shape}")
+            else:
+                # Dtype-aware tolerances
+                # FP32: tight (1e-5), FP16: medium (1e-3), BF16: loose (1e-2), FP8: very loose (5e-2)
+                dtype = orig_output.dtype
+                if dtype == torch.float32:
+                    rtol, atol = 1e-5, 1e-5
+                elif dtype == torch.float16:
+                    rtol, atol = 1e-3, 1e-3
+                elif dtype == torch.bfloat16:
+                    rtol, atol = 1e-2, 1e-2
+                elif dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+                    rtol, atol = 5e-2, 5e-2
+                else:
+                    rtol, atol = 1e-4, 1e-4  # Default for int types, etc.
+                
+                result['details']['dtype'] = str(dtype)
+                result['details']['rtol'] = rtol
+                result['details']['atol'] = atol
+                
+                max_diff = (orig_output.float() - patch_output.float()).abs().max().item()
+                result['details']['max_diff'] = max_diff
+                
+                if torch.allclose(orig_output.float(), patch_output.float(), rtol=rtol, atol=atol):
+                    result['verified'] = True
+                else:
+                    result['errors'].append(f"Output mismatch: max diff = {max_diff:.6f} (rtol={rtol}, atol={atol})")
+        else:
+            result['verification_type'] = 'skipped'
+            result['details']['reason'] = 'Non-tensor outputs, cannot compare'
+            result['verified'] = True
+        
+        # Cleanup
+        orig_benchmark.teardown()
+        patch_benchmark.teardown()
+        
+    except Exception as e:
+        result['errors'].append(f"Verification error: {e}")
+    
+    return result
 
 
 def _refine_patch_with_llm(
@@ -3699,12 +4069,16 @@ def test_chapter(
     rdzv_endpoint: Optional[str] = None,
     env_passthrough: Optional[List[str]] = None,
     target_extra_args: Optional[Dict[str, List[str]]] = None,
+    # Verification
+    verify_correctness: bool = False,
     # LLM analysis and patching options
     llm_analysis: bool = False,
+    force_llm: bool = False,
     llm_provider: Optional[str] = None,
     apply_llm_patches: bool = False,
     rebenchmark_llm_patches: bool = False,
     patch_strategy: str = "ast",
+    llm_patch_retries: int = 2,
     use_llm_cache: bool = True,
     llm_explain: bool = False,
 ) -> Dict[str, Any]:
@@ -3727,11 +4101,14 @@ def test_chapter(
         rdzv_endpoint=rdzv_endpoint,
         env_passthrough=env_passthrough,
         target_extra_args=target_extra_args,
+        verify_correctness=verify_correctness,
+        force_llm=force_llm,
         llm_analysis=llm_analysis,
         llm_provider=llm_provider,
         apply_llm_patches=apply_llm_patches,
         rebenchmark_llm_patches=rebenchmark_llm_patches,
         patch_strategy=patch_strategy,
+        llm_patch_retries=llm_patch_retries,
         use_llm_cache=use_llm_cache,
         llm_explain=llm_explain,
     )

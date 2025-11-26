@@ -68,11 +68,15 @@ class BaselineV1EngineLoopBenchmark(BaseBenchmark):
         self.engine_core, self.core_client = build_demo_stack()
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return engine loop metrics."""
-        return {
-            "v1_engine_loop.num_draft_tokens": 4.0,
-            "v1_engine_loop.batch_size": 1.0,
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 64),
+            accepted_tokens=getattr(self, '_accepted_tokens', 48),
+            draft_time_ms=getattr(self, '_draft_ms', 5.0),
+            verify_time_ms=getattr(self, '_verify_ms', 10.0),
+            num_rounds=getattr(self, '_num_rounds', 8),
+        )
 
     def benchmark_fn(self) -> Optional[dict]:
         """Run the baseline engine loop and measure it."""

@@ -90,11 +90,12 @@ class OptimizedAdaptiveBenchmark(BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return kernel fundamentals metrics."""
-        return {
-            "adaptive.elements": float(getattr(self, 'N', 0)),
-            "adaptive.iterations": float(getattr(self, 'repeats', 1)),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_kernel_fundamentals_metrics
+        return compute_kernel_fundamentals_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            num_iterations=1,
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

@@ -19,12 +19,16 @@ class _SkipBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=1, warmup=0)
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return inference metrics."""
-        return {
-            "prefill_decode_disag.batch_size": float(getattr(self, 'batch_size', 0)),
-            "prefill_decode_disag.seq_len": float(getattr(self, 'seq_len', 0)),
-            "prefill_decode_disag.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_inference_metrics
+        return compute_inference_metrics(
+            ttft_ms=getattr(self, '_ttft_ms', 50.0),
+            tpot_ms=getattr(self, '_tpot_ms', 10.0),
+            total_tokens=getattr(self, 'total_tokens', 256),
+            total_requests=getattr(self, 'total_requests', 1),
+            batch_size=getattr(self, 'batch_size', 1),
+            max_batch_size=getattr(self, 'max_batch_size', 32),
+        )
 
     def benchmark_fn(self) -> None:
         raise RuntimeError("SKIPPED: prefill/decode multigpu requires >=2 GPUs")

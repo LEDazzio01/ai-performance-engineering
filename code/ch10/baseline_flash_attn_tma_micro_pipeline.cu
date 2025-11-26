@@ -118,58 +118,13 @@ bool device_available() {
     return count > 0;
 }
 
-bool tma_supported() {
-#if CUDART_VERSION < 12000
-    return false;
-#else
-    #ifdef cudaDevAttrTensorMapAccessSupported
-    int attr = 0;
-    if (cudaDeviceGetAttribute(&attr, cudaDevAttrTensorMapAccessSupported, 0) != cudaSuccess) {
-        return false;
-    }
-    return attr != 0;
-    #else
-    return false;
-    #endif
-#endif
-}
-
-bool tma_descriptor_supported(int d_head_bytes) {
-#if CUDART_VERSION < 13000
-    return false;  // descriptor-backed TMA needs CUDA 13.0+ toolkit
-#else
-    // Require descriptor support and leading dimension aligned to 16 bytes (TMA requirement).
-    if (!tma_supported()) return false;
-    if ((d_head_bytes % 16) != 0) return false;
-    return true;
-#endif
-}
-
 int main() {
     if (!device_available()) {
-        std::printf("SKIP: No CUDA device found.\nelapsed_ms=0.0 ms\n");
+        std::printf("SKIP: No CUDA device found.\nTIME_MS=0.0\n");
         return 0;
     }
 
-#if CUDART_VERSION < 12000
-    std::printf("SKIP: TMA requires CUDA 12.0+ runtime (found %d).\nelapsed_ms=0.0 ms\n", CUDART_VERSION);
-    return 0;
-#endif
-
-    // Enforce no-fallback behavior: if TMA is unavailable, skip the run.
-    int major = 0, minor = 0;
-    cudaDeviceProp prop{};
-    if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-        major = prop.major;
-        minor = prop.minor;
-    }
-    const int sm = major * 10 + minor;
-    const int d_head_bytes = D_HEAD * sizeof(float);
-    if (sm < 90 || !tma_descriptor_supported(d_head_bytes)) {
-        std::printf("SKIP: TMA descriptor path unavailable (sm_%d%d, align=%d bytes).\nelapsed_ms=0.0 ms\n",
-                    major, minor, d_head_bytes);
-        return 0;
-    }
+    // Baseline runs on any GPU - no TMA required
 
     const int seq_len = SEQ_LEN;
     const int d_head = D_HEAD;
@@ -197,16 +152,26 @@ int main() {
     CHECK_CUDA(cudaEventCreate(&start));
     CHECK_CUDA(cudaEventCreate(&stop));
 
-    CHECK_CUDA(cudaEventRecord(start, stream));
+    // Warmup
     flash_attn_baseline_kernel<<<grid, block, shmem_bytes, stream>>>(
         d_q, d_k, d_v, d_o, seq_len, d_head);
+    CHECK_CUDA(cudaStreamSynchronize(stream));
+    
+    // Benchmark with multiple iterations
+    constexpr int ITERS = 10;
+    CHECK_CUDA(cudaEventRecord(start, stream));
+    for (int i = 0; i < ITERS; ++i) {
+        flash_attn_baseline_kernel<<<grid, block, shmem_bytes, stream>>>(
+            d_q, d_k, d_v, d_o, seq_len, d_head);
+    }
     CHECK_CUDA(cudaEventRecord(stop, stream));
 
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaEventSynchronize(stop));
 
-    float ms = 0.0f;
-    CHECK_CUDA(cudaEventElapsedTime(&ms, start, stop));
+    float total_ms = 0.0f;
+    CHECK_CUDA(cudaEventElapsedTime(&total_ms, start, stop));
+    float avg_ms = total_ms / ITERS;
     CHECK_CUDA(cudaEventDestroy(start));
     CHECK_CUDA(cudaEventDestroy(stop));
 
@@ -216,6 +181,7 @@ int main() {
     CHECK_CUDA(cudaFree(d_v));
     CHECK_CUDA(cudaFree(d_o));
 
-    std::printf("elapsed_ms=%.3f ms\n", ms);
+    std::printf("FlashAttention baseline: %.3f ms\n", avg_ms);
+    std::printf("TIME_MS: %.6f\n", avg_ms);
     return 0;
 }

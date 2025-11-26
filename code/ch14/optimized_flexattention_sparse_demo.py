@@ -500,7 +500,14 @@ class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        return {"flexattention_sparse_demo.pattern": "causal"}
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_triton_metrics
+        return compute_triton_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            block_size=getattr(self, 'BLOCK_SIZE', 1024),
+            num_warps=getattr(self, 'num_warps', 4),
+        )
 
     def validate_result(self) -> Optional[str]:
         if not HAS_FLEX_ATTENTION:

@@ -79,6 +79,7 @@ DEFAULT_SPECS = BLACKWELL_B200
 
 def detect_hardware_specs() -> HardwareSpecs:
     """Detect current hardware and return appropriate specs."""
+    try:
         import torch
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
@@ -86,6 +87,8 @@ def detect_hardware_specs() -> HardwareSpecs:
                 return BLACKWELL_B200
             elif props.major == 9:  # Hopper
                 return HOPPER_H100
+    except ImportError:
+        pass
     return DEFAULT_SPECS
 
 
@@ -531,6 +534,383 @@ def compute_speculative_decoding_metrics(
 
 
 # =============================================================================
+# Chapter 1: Environment Setup Metrics
+# =============================================================================
+
+def compute_environment_metrics(
+    gpu_count: int,
+    gpu_memory_gb: float,
+    cuda_version: str = "",
+    driver_version: str = "",
+    pytorch_version: str = "",
+) -> Dict[str, float]:
+    """Compute metrics for environment setup benchmarks (ch1).
+    
+    Args:
+        gpu_count: Number of GPUs detected
+        gpu_memory_gb: Total GPU memory in GB
+        cuda_version: CUDA version string
+        driver_version: Driver version string
+        pytorch_version: PyTorch version string
+    
+    Returns:
+        Dict with environment configuration metrics
+    """
+    return {
+        "env.gpu_count": float(gpu_count),
+        "env.gpu_memory_gb": gpu_memory_gb,
+        "env.cuda_major": float(cuda_version.split('.')[0]) if cuda_version else 0.0,
+        "env.is_multi_gpu": 1.0 if gpu_count > 1 else 0.0,
+        "env.total_memory_gb": gpu_memory_gb * gpu_count,
+    }
+
+
+# =============================================================================
+# Chapter 3: System Configuration Metrics
+# =============================================================================
+
+def compute_system_config_metrics(
+    numa_nodes: int,
+    cpu_cores: int,
+    memory_channels: int = 0,
+    pcie_lanes: int = 0,
+    nvlink_connections: int = 0,
+) -> Dict[str, float]:
+    """Compute metrics for system configuration benchmarks (ch3).
+    
+    Args:
+        numa_nodes: Number of NUMA nodes
+        cpu_cores: Total CPU cores
+        memory_channels: Memory channels per socket
+        pcie_lanes: PCIe lanes available
+        nvlink_connections: NVLink connections between GPUs
+    
+    Returns:
+        Dict with system topology metrics
+    """
+    return {
+        "system.numa_nodes": float(numa_nodes),
+        "system.cpu_cores": float(cpu_cores),
+        "system.memory_channels": float(memory_channels),
+        "system.pcie_lanes": float(pcie_lanes),
+        "system.nvlink_connections": float(nvlink_connections),
+        "system.cores_per_numa": float(cpu_cores / numa_nodes) if numa_nodes > 0 else 0.0,
+    }
+
+
+# =============================================================================
+# Chapter 4: Distributed Communication Metrics
+# =============================================================================
+
+def compute_distributed_metrics(
+    world_size: int,
+    bytes_transferred: float,
+    elapsed_ms: float,
+    collective_type: str = "allreduce",  # "allreduce", "allgather", "reduce_scatter", "p2p"
+    specs: Optional[HardwareSpecs] = None,
+) -> Dict[str, float]:
+    """Compute metrics for distributed communication benchmarks (ch4).
+    
+    Args:
+        world_size: Number of processes/GPUs
+        bytes_transferred: Bytes moved in the collective
+        elapsed_ms: Time elapsed in milliseconds
+        collective_type: Type of collective operation
+        specs: Hardware specs (auto-detected if None)
+    
+    Returns:
+        Dict with distributed communication metrics
+    """
+    specs = specs or detect_hardware_specs()
+    elapsed_s = max(elapsed_ms / 1000.0, 1e-9)
+    
+    # Achieved bandwidth
+    achieved_gbps = (bytes_transferred / 1e9) / elapsed_s
+    
+    # Theoretical peak (NVLink for multi-GPU)
+    theoretical_peak = specs.nvlink_bandwidth_gbps * (world_size - 1)  # Ring topology
+    efficiency = (achieved_gbps / theoretical_peak) * 100.0 if theoretical_peak > 0 else 0.0
+    
+    # Algorithm bandwidth (accounts for collective overhead)
+    algo_bw_factor = {
+        "allreduce": 2.0 * (world_size - 1) / world_size,
+        "allgather": (world_size - 1) / world_size,
+        "reduce_scatter": (world_size - 1) / world_size,
+        "p2p": 1.0,
+    }
+    factor = algo_bw_factor.get(collective_type, 1.0)
+    algo_bandwidth_gbps = achieved_gbps * factor
+    
+    return {
+        "distributed.world_size": float(world_size),
+        "distributed.bytes_transferred": bytes_transferred,
+        "distributed.achieved_gbps": achieved_gbps,
+        "distributed.algo_bandwidth_gbps": algo_bandwidth_gbps,
+        "distributed.theoretical_peak_gbps": theoretical_peak,
+        "distributed.efficiency_pct": min(efficiency, 100.0),
+        "distributed.collective_type": 0.0 if collective_type == "allreduce" else 1.0,
+    }
+
+
+# =============================================================================
+# Chapter 5: Storage I/O Metrics
+# =============================================================================
+
+def compute_storage_io_metrics(
+    bytes_read: float,
+    bytes_written: float,
+    read_time_ms: float,
+    write_time_ms: float,
+    num_files: int = 1,
+    is_async: bool = False,
+) -> Dict[str, float]:
+    """Compute metrics for storage I/O benchmarks (ch5).
+    
+    Args:
+        bytes_read: Total bytes read from storage
+        bytes_written: Total bytes written to storage
+        read_time_ms: Time spent reading
+        write_time_ms: Time spent writing
+        num_files: Number of files accessed
+        is_async: Whether async I/O was used
+    
+    Returns:
+        Dict with storage I/O performance metrics
+    """
+    read_time_s = max(read_time_ms / 1000.0, 1e-9)
+    write_time_s = max(write_time_ms / 1000.0, 1e-9)
+    
+    read_gbps = (bytes_read / 1e9) / read_time_s if bytes_read > 0 else 0.0
+    write_gbps = (bytes_written / 1e9) / write_time_s if bytes_written > 0 else 0.0
+    
+    total_bytes = bytes_read + bytes_written
+    total_time_s = read_time_s + write_time_s
+    total_gbps = (total_bytes / 1e9) / total_time_s if total_bytes > 0 else 0.0
+    
+    return {
+        "storage.bytes_read": bytes_read,
+        "storage.bytes_written": bytes_written,
+        "storage.read_gbps": read_gbps,
+        "storage.write_gbps": write_gbps,
+        "storage.total_gbps": total_gbps,
+        "storage.num_files": float(num_files),
+        "storage.is_async": 1.0 if is_async else 0.0,
+        "storage.read_write_ratio": bytes_read / bytes_written if bytes_written > 0 else 0.0,
+    }
+
+
+# =============================================================================
+# Chapter 10: Pipeline Metrics
+# =============================================================================
+
+def compute_pipeline_metrics(
+    num_stages: int,
+    stage_times_ms: list,
+    bubble_time_ms: float = 0.0,
+    microbatches: int = 1,
+) -> Dict[str, float]:
+    """Compute metrics for pipeline parallelism benchmarks (ch10).
+    
+    Args:
+        num_stages: Number of pipeline stages
+        stage_times_ms: List of execution times per stage
+        bubble_time_ms: Time spent in pipeline bubbles
+        microbatches: Number of microbatches
+    
+    Returns:
+        Dict with pipeline efficiency metrics
+    """
+    if not stage_times_ms:
+        stage_times_ms = [1.0]
+    
+    total_stage_time = sum(stage_times_ms)
+    max_stage_time = max(stage_times_ms)
+    min_stage_time = min(stage_times_ms)
+    avg_stage_time = total_stage_time / len(stage_times_ms)
+    
+    # Pipeline efficiency: ideal vs actual
+    ideal_time = max_stage_time * (num_stages + microbatches - 1)
+    actual_time = total_stage_time + bubble_time_ms
+    efficiency = (ideal_time / actual_time) * 100.0 if actual_time > 0 else 0.0
+    
+    # Load imbalance
+    imbalance = (max_stage_time / min_stage_time) if min_stage_time > 0 else 1.0
+    
+    # Bubble fraction
+    bubble_fraction = bubble_time_ms / actual_time if actual_time > 0 else 0.0
+    
+    return {
+        "pipeline.num_stages": float(num_stages),
+        "pipeline.microbatches": float(microbatches),
+        "pipeline.max_stage_ms": max_stage_time,
+        "pipeline.min_stage_ms": min_stage_time,
+        "pipeline.avg_stage_ms": avg_stage_time,
+        "pipeline.bubble_time_ms": bubble_time_ms,
+        "pipeline.bubble_fraction": bubble_fraction,
+        "pipeline.load_imbalance": imbalance,
+        "pipeline.efficiency_pct": min(efficiency, 100.0),
+    }
+
+
+# =============================================================================
+# Chapter 14: Triton Kernel Metrics
+# =============================================================================
+
+def compute_triton_metrics(
+    num_elements: int,
+    elapsed_ms: float,
+    block_size: int = 1024,
+    num_warps: int = 4,
+    num_stages: int = 2,
+    bytes_transferred: float = 0.0,
+    specs: Optional[HardwareSpecs] = None,
+) -> Dict[str, float]:
+    """Compute metrics for Triton kernel benchmarks (ch14).
+    
+    Args:
+        num_elements: Number of elements processed
+        elapsed_ms: Execution time in milliseconds
+        block_size: Triton block size
+        num_warps: Number of warps per block
+        num_stages: Software pipeline stages
+        bytes_transferred: Bytes moved to/from memory
+        specs: Hardware specs (auto-detected if None)
+    
+    Returns:
+        Dict with Triton kernel performance metrics
+    """
+    specs = specs or detect_hardware_specs()
+    elapsed_s = max(elapsed_ms / 1000.0, 1e-9)
+    
+    # Throughput
+    elements_per_second = num_elements / elapsed_s
+    
+    # Bandwidth if bytes provided
+    achieved_gbps = (bytes_transferred / 1e9) / elapsed_s if bytes_transferred > 0 else 0.0
+    bandwidth_efficiency = (achieved_gbps / specs.hbm_bandwidth_gbps) * 100.0 if achieved_gbps > 0 else 0.0
+    
+    # Occupancy estimate
+    threads_per_block = num_warps * 32
+    blocks_per_sm_estimate = min(32, 2048 // threads_per_block)
+    
+    return {
+        "triton.num_elements": float(num_elements),
+        "triton.elements_per_second": elements_per_second,
+        "triton.block_size": float(block_size),
+        "triton.num_warps": float(num_warps),
+        "triton.num_stages": float(num_stages),
+        "triton.threads_per_block": float(threads_per_block),
+        "triton.achieved_gbps": achieved_gbps,
+        "triton.bandwidth_efficiency_pct": bandwidth_efficiency,
+        "triton.blocks_per_sm_estimate": float(blocks_per_sm_estimate),
+    }
+
+
+# =============================================================================
+# Chapter 20: AI-Assisted Optimization Metrics
+# =============================================================================
+
+def compute_ai_optimization_metrics(
+    original_time_ms: float,
+    ai_optimized_time_ms: float,
+    suggestions_applied: int,
+    suggestions_total: int,
+    code_changes: int = 0,
+) -> Dict[str, float]:
+    """Compute metrics for AI-assisted optimization benchmarks (ch20).
+    
+    Args:
+        original_time_ms: Original execution time
+        ai_optimized_time_ms: Time after AI-suggested optimizations
+        suggestions_applied: Number of AI suggestions applied
+        suggestions_total: Total AI suggestions generated
+        code_changes: Number of code changes made
+    
+    Returns:
+        Dict with AI optimization effectiveness metrics
+    """
+    speedup = original_time_ms / ai_optimized_time_ms if ai_optimized_time_ms > 0 else 0.0
+    improvement_pct = ((original_time_ms - ai_optimized_time_ms) / original_time_ms) * 100.0 if original_time_ms > 0 else 0.0
+    
+    # Suggestion acceptance rate
+    acceptance_rate = (suggestions_applied / suggestions_total) * 100.0 if suggestions_total > 0 else 0.0
+    
+    # Efficiency per change
+    improvement_per_change = improvement_pct / code_changes if code_changes > 0 else 0.0
+    
+    return {
+        "ai_opt.original_ms": original_time_ms,
+        "ai_opt.optimized_ms": ai_optimized_time_ms,
+        "ai_opt.speedup": speedup,
+        "ai_opt.improvement_pct": improvement_pct,
+        "ai_opt.suggestions_applied": float(suggestions_applied),
+        "ai_opt.suggestions_total": float(suggestions_total),
+        "ai_opt.acceptance_rate_pct": acceptance_rate,
+        "ai_opt.code_changes": float(code_changes),
+        "ai_opt.improvement_per_change": improvement_per_change,
+    }
+
+
+# =============================================================================
+# MoE (Mixture of Experts) Metrics
+# =============================================================================
+
+def compute_moe_metrics(
+    num_experts: int,
+    active_experts: int,
+    tokens_per_expert: list,
+    routing_time_ms: float,
+    expert_compute_time_ms: float,
+    load_balance_loss: float = 0.0,
+) -> Dict[str, float]:
+    """Compute metrics for MoE (Mixture of Experts) benchmarks.
+    
+    Args:
+        num_experts: Total number of experts
+        active_experts: Number of experts activated per token (top-k)
+        tokens_per_expert: List of token counts per expert
+        routing_time_ms: Time spent in routing/gating
+        expert_compute_time_ms: Time spent in expert computation
+        load_balance_loss: Auxiliary load balancing loss
+    
+    Returns:
+        Dict with MoE efficiency metrics
+    """
+    if not tokens_per_expert:
+        tokens_per_expert = [1]
+    
+    total_tokens = sum(tokens_per_expert)
+    max_tokens = max(tokens_per_expert)
+    min_tokens = min(tokens_per_expert)
+    avg_tokens = total_tokens / len(tokens_per_expert)
+    
+    # Load imbalance: 1.0 = perfect balance
+    load_imbalance = max_tokens / avg_tokens if avg_tokens > 0 else 1.0
+    
+    # Expert utilization
+    experts_used = sum(1 for t in tokens_per_expert if t > 0)
+    utilization = (experts_used / num_experts) * 100.0 if num_experts > 0 else 0.0
+    
+    # Routing overhead
+    total_time = routing_time_ms + expert_compute_time_ms
+    routing_overhead = (routing_time_ms / total_time) * 100.0 if total_time > 0 else 0.0
+    
+    return {
+        "moe.num_experts": float(num_experts),
+        "moe.active_experts": float(active_experts),
+        "moe.total_tokens": float(total_tokens),
+        "moe.max_tokens_per_expert": float(max_tokens),
+        "moe.min_tokens_per_expert": float(min_tokens),
+        "moe.load_imbalance": load_imbalance,
+        "moe.expert_utilization_pct": utilization,
+        "moe.routing_time_ms": routing_time_ms,
+        "moe.expert_compute_time_ms": expert_compute_time_ms,
+        "moe.routing_overhead_pct": routing_overhead,
+        "moe.load_balance_loss": load_balance_loss,
+    }
+
+
+# =============================================================================
 # Generic Helper
 # =============================================================================
 
@@ -558,6 +938,64 @@ def compute_speedup_metrics(
         f"{prefix}optimized_ms": optimized_ms,
         f"{prefix}speedup": speedup,
         f"{prefix}improvement_pct": improvement_pct,
+    }
+
+
+# =============================================================================
+# Validation Helper
+# =============================================================================
+
+def validate_metrics(metrics: Optional[Dict[str, float]]) -> Dict[str, Any]:
+    """Validate that metrics dict is well-formed and contains meaningful data.
+    
+    Args:
+        metrics: The metrics dict to validate
+    
+    Returns:
+        Dict with validation results:
+        - valid: bool
+        - issues: list of issues found
+        - stats: dict with statistics about the metrics
+    """
+    issues = []
+    
+    if metrics is None:
+        return {"valid": False, "issues": ["Metrics is None"], "stats": {}}
+    
+    if not isinstance(metrics, dict):
+        return {"valid": False, "issues": [f"Metrics is {type(metrics).__name__}, expected dict"], "stats": {}}
+    
+    if len(metrics) == 0:
+        return {"valid": False, "issues": ["Metrics dict is empty"], "stats": {}}
+    
+    # Check for common issues
+    all_zeros = all(v == 0.0 for v in metrics.values() if isinstance(v, (int, float)))
+    if all_zeros and len(metrics) > 1:
+        issues.append("All metric values are zero")
+    
+    # Check for NaN/Inf
+    for key, value in metrics.items():
+        if isinstance(value, float):
+            if value != value:  # NaN check
+                issues.append(f"{key} is NaN")
+            elif value == float('inf') or value == float('-inf'):
+                issues.append(f"{key} is infinite")
+    
+    # Check naming convention
+    for key in metrics.keys():
+        if '.' not in key:
+            issues.append(f"Key '{key}' doesn't follow 'category.metric' naming convention")
+    
+    stats = {
+        "num_metrics": len(metrics),
+        "num_zero": sum(1 for v in metrics.values() if v == 0.0),
+        "num_negative": sum(1 for v in metrics.values() if isinstance(v, (int, float)) and v < 0),
+    }
+    
+    return {
+        "valid": len(issues) == 0,
+        "issues": issues,
+        "stats": stats,
     }
 
 

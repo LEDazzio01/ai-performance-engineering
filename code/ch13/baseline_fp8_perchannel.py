@@ -152,15 +152,13 @@ class BaselineFP8PerChannelBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return custom metrics for analysis."""
-        return {
-            "fp8_perchannel.batch_size": self.batch_size,
-            "fp8_perchannel.seq_len": self.seq_len,
-            "fp8_perchannel.in_features": self.in_features,
-            "fp8_perchannel.out_features": self.out_features,
-            "fp8_perchannel.quantization_error_pct": self._error_sum * 100,
-            "fp8_perchannel.scaling_mode": "per_tensor",
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_precision_metrics
+        return compute_precision_metrics(
+            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
+            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
+            precision_type="fp8",
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

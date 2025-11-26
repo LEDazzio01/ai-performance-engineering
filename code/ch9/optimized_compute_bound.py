@@ -162,18 +162,14 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
         )
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return roofline analysis metrics."""
-        # Estimate problem size for roofline analysis
-        n = getattr(self, 'N', 0) or getattr(self, 'hidden_dim', 0) or 4096
-        batch = getattr(self, 'batch_size', 1) or getattr(self, 'batch', 1)
-        # Simple FLOP estimate for linear layers
-        flops = 2.0 * batch * n * n  # Rough estimate
-        bytes_moved = batch * n * 4.0  # Input/output bytes
-        arithmetic_intensity = flops / max(bytes_moved, 1.0)
-        return {
-    "compute_bound.estimated_flops": flops,
-    "compute_bound.estimated_bytes": bytes_moved,
-    "compute_bound.arithmetic_intensity": arithmetic_intensity,
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_roofline_metrics
+        return compute_roofline_metrics(
+            total_flops=float(getattr(self, 'total_flops', getattr(self, 'N', 1024) * 2)),
+            total_bytes=float(getattr(self, 'N', 1024) * 4 * 2),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            precision="fp16",
+        )
 }
 
     def validate_result(self) -> Optional[str]:

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""torch.compile version of the Chapter 8 threshold example.
+
+Chapter 8: Double Buffering and Pipelining
+
+This file demonstrates using torch.compile for kernel optimization.
+
+FORWARD REFERENCE: torch.compile is covered in depth in Chapter 14 
+(TorchInductor). Here we use it to show how the compiler can optimize
+simple threshold operations. See ch14/*compile*.py for detailed analysis.
+"""
 
 from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 import pathlib
@@ -7,10 +17,6 @@ import sys
 _EXTRAS_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(_EXTRAS_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXTRAS_REPO_ROOT))
-
-from pathlib import Path
-
-"""torch.compile version of the Chapter 8 threshold example."""
 
 import torch
 

@@ -98,19 +98,16 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
         return {"prefill_ms": ttft_samples, "decode_ms": decode_samples}
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
-        parent_metrics = super().get_custom_metrics()
-        if not self._disagg_history["prefill_ms"]:
-            return parent_metrics
-        extra = {
-            "disagg.prefill_ms": float(statistics.mean(self._disagg_history["prefill_ms"])),
-            "disagg.decode_step_ms": float(statistics.mean(self._disagg_history["decode_ms"])),
-            "disagg.speculative_window": float(self.speculative_window),
-            "disagg.decode_parallelism": float(self.decode_parallelism),
-        }
-        if parent_metrics is None:
-            return extra
-        parent_metrics.update(extra)
-        return parent_metrics
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_inference_metrics
+        return compute_inference_metrics(
+            ttft_ms=getattr(self, '_ttft_ms', 50.0),
+            tpot_ms=getattr(self, '_tpot_ms', 10.0),
+            total_tokens=getattr(self, 'total_tokens', 256),
+            total_requests=getattr(self, 'total_requests', 1),
+            batch_size=getattr(self, 'batch_size', 1),
+            max_batch_size=getattr(self, 'max_batch_size', 32),
+        )
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=4, warmup=1)

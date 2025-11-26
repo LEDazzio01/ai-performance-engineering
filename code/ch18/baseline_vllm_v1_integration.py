@@ -211,12 +211,15 @@ class BaselineVLLMV1Benchmark(BaseBenchmark):
         self.integration.setup()
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return vLLM metrics."""
-        return {
-            "vllm_v1_integration.batch_size": 4.0,
-            "vllm_v1_integration.max_tokens": 32.0,
-            "vllm_v1_integration.vllm_available": float(VLLM_AVAILABLE),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 64),
+            accepted_tokens=getattr(self, '_accepted_tokens', 48),
+            draft_time_ms=getattr(self, '_draft_ms', 5.0),
+            verify_time_ms=getattr(self, '_verify_ms', 10.0),
+            num_rounds=getattr(self, '_num_rounds', 8),
+        )
 
     def benchmark_fn(self) -> Optional[dict]:
         """Run the baseline vLLM inference."""

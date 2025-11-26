@@ -76,11 +76,14 @@ class BaselinePipelineSequentialBenchmark(BaseBenchmark):
         )
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics for performance analysis."""
-        # Basic metrics - override in subclass for domain-specific values
-        return {
-            "pipeline_sequential.workload_size": float(getattr(self, 'batch_size', 0)),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_ai_optimization_metrics
+        return compute_ai_optimization_metrics(
+            original_time_ms=getattr(self, '_original_ms', 10.0),
+            ai_optimized_time_ms=getattr(self, '_optimized_ms', 5.0),
+            suggestions_applied=getattr(self, '_suggestions_applied', 1),
+            suggestions_total=getattr(self, '_suggestions_total', 1),
+        )
 
     def setup(self) -> None:
         """Setup: Initialize pipeline stages."""

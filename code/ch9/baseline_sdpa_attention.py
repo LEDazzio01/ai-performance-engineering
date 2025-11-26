@@ -115,37 +115,14 @@ class BaselineSDPAAttentionBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Arithmetic intensity analysis."""
-        # Naive attention memory traffic estimate:
-        # - Q, K read: 2 * B*H*S*D * 2 bytes
-        # - attn_scores write: B*H*S*S * 2 bytes
-        # - attn_scores read for softmax: B*H*S*S * 2 bytes
-        # - attn_weights write: B*H*S*S * 2 bytes
-        # - attn_weights read, V read: B*H*S*S*2 + B*H*S*D*2 bytes
-        # - output write: B*H*S*D * 2 bytes
-        B, H, S, D = self.batch_size, self.num_heads, self.seq_len, self.head_dim
-        
-        # Total bytes moved (conservative estimate)
-        bytes_moved = (
-            2 * B * H * S * D * 2 +  # Q, K read
-            B * H * S * S * 2 +      # attn_scores write
-            B * H * S * S * 2 +      # softmax read
-            B * H * S * S * 2 +      # softmax write
-            B * H * S * S * 2 +      # attn_weights read
-            B * H * S * D * 2 +      # V read
-            B * H * S * D * 2        # output write
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_roofline_metrics
+        return compute_roofline_metrics(
+            total_flops=float(getattr(self, 'total_flops', getattr(self, 'N', 1024) * 2)),
+            total_bytes=float(getattr(self, 'N', 1024) * 4 * 2),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            precision="fp16",
         )
-        
-        # FLOPs: 2*B*H*S*S*D (Q@K^T) + B*H*S*S (softmax) + 2*B*H*S*S*D (attn@V)
-        flops = 4 * B * H * S * S * D + B * H * S * S
-        
-        arithmetic_intensity = flops / max(bytes_moved, 1.0)
-        
-        return {
-            "sdpa_.estimated_flops": float(flops),
-            "sdpa_.estimated_bytes": float(bytes_moved),
-            "sdpa_.arithmetic_intensity": arithmetic_intensity,
-        }
 
     def validate_result(self) -> Optional[str]:
         if self.query is None:

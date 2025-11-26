@@ -1,17 +1,15 @@
-// graph_bandwidth_measurement.cu
-// Measures bandwidth within CUDA graphs
+// baseline_graph_bandwidth.cu
+// Baseline: Separate kernel launches WITHOUT CUDA graphs
 //
 // Key concepts:
-// - CUDA graphs capture kernel sequences
-// - Bandwidth measurement requires proper synchronization
-// - Graph replay overhead vs separate kernel launches
-// - Memory traffic analysis within graph execution
+// - Traditional separate kernel launches incur launch overhead
+// - Many small kernels amplify the per-launch overhead
+// - This is the baseline to compare against CUDA graph optimization
 
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
-#include <chrono>
 #include "../common/headers/profiling_helpers.cuh"
 
 #define CUDA_CHECK(call)                                                     \
@@ -24,229 +22,137 @@
     }                                                                        \
   } while (0)
 
-// Simple memory copy kernel
-__global__ void memory_copy_kernel(float* dst, const float* src, int n) {
+// Very small, fast kernels to emphasize launch overhead
+__global__ void saxpy_kernel(float* y, const float* x, float a, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        y[idx] = a * x[idx] + y[idx];
+    }
+}
+
+__global__ void scale_kernel(float* data, float scale, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        data[idx] *= scale;
+    }
+}
+
+__global__ void add_kernel(float* c, const float* a, const float* b, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        c[idx] = a[idx] + b[idx];
+    }
+}
+
+__global__ void copy_kernel(float* dst, const float* src, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
         dst[idx] = src[idx];
     }
 }
 
-// Memory-intensive computation kernel
-__global__ void compute_kernel(float* data, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        // Memory-intensive: multiple reads and writes
-        float val1 = data[idx];
-        float val2 = data[(idx + 1) % n];
-        float val3 = data[(idx + 2) % n];
-        data[idx] = val1 * val2 + val3;
-    }
-}
-
-// Measure bandwidth for a kernel sequence
-struct BandwidthResult {
-    float time_ms;
-    float bandwidth_gbs;
-    size_t bytes_transferred;
-};
-
-BandwidthResult measure_bandwidth_graph(
-    cudaGraphExec_t exec,
-    cudaStream_t stream,
-    int iterations,
-    size_t data_size_bytes,
-    const char* name
-) {
-    // Warmup
-    for (int i = 0; i < 5; ++i) {
-        CUDA_CHECK(cudaGraphLaunch(exec, stream));
-    }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    
-    // Measure
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    
-    CUDA_CHECK(cudaEventRecord(start, stream));
-    {
-        PROFILE_KERNEL_LAUNCH(name);
-        for (int i = 0; i < iterations; ++i) {
-            CUDA_CHECK(cudaGraphLaunch(exec, stream));
-        }
-    }
-    CUDA_CHECK(cudaEventRecord(stop, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    
-    float ms;
-    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-    
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-    
-    // Calculate bandwidth
-    // For copy: 2 * size (read + write)
-    // For compute: estimate based on memory accesses
-    size_t total_bytes = data_size_bytes * iterations * 2;  // Read + write
-    float bandwidth_gbs = (total_bytes / (1024.0f * 1024.0f * 1024.0f)) / (ms / 1000.0f);
-    
-    return {ms, bandwidth_gbs, total_bytes};
-}
-
-BandwidthResult measure_bandwidth_separate(
-    void (*kernel)(float*, const float*, int),
-    float* dst,
-    const float* src,
-    int n,
-    int iterations,
-    cudaStream_t stream,
-    const char* name
-) {
-    dim3 block(256);
-    dim3 grid((n + block.x - 1) / block.x);
-    
-    // Warmup
-    for (int i = 0; i < 5; ++i) {
-        kernel<<<grid, block, 0, stream>>>(dst, src, n);
-    }
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    
-    // Measure
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-    
-    CUDA_CHECK(cudaEventRecord(start, stream));
-    {
-        PROFILE_KERNEL_LAUNCH(name);
-        for (int i = 0; i < iterations; ++i) {
-            kernel<<<grid, block, 0, stream>>>(dst, src, n);
-        }
-    }
-    CUDA_CHECK(cudaEventRecord(stop, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    
-    float ms;
-    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-    
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
-    
-    size_t total_bytes = n * sizeof(float) * iterations * 2;  // Read + write
-    float bandwidth_gbs = (total_bytes / (1024.0f * 1024.0f * 1024.0f)) / (ms / 1000.0f);
-    
-    return {ms, bandwidth_gbs, total_bytes};
-}
-
 int main() {
-    constexpr int N = 50'000'000;  // 50M elements (~200 MB)
-    constexpr int ITERATIONS = 50;
+    // Small data to make kernels fast (emphasize launch overhead)
+    constexpr int N = 100'000;  // 100K elements (~400 KB)
+    constexpr int ITERATIONS = 500;
+    constexpr int KERNELS_PER_ITER = 16;  // Many small kernels per iteration
     const size_t data_size_bytes = N * sizeof(float);
     
     printf("========================================\n");
-    printf("CUDA Graph Bandwidth Measurement\n");
+    printf("BASELINE: Separate Kernel Launches\n");
     printf("========================================\n");
-    printf("Problem size: %d elements (%.2f MB)\n", N, data_size_bytes / 1024.0f / 1024.0f);
-    printf("Iterations: %d\n\n", ITERATIONS);
+    printf("Problem size: %d elements (%.2f KB)\n", N, data_size_bytes / 1024.0f);
+    printf("Iterations: %d\n", ITERATIONS);
+    printf("Kernels per iteration: %d (separate launches)\n", KERNELS_PER_ITER);
+    printf("Total kernel launches: %d\n\n", ITERATIONS * KERNELS_PER_ITER);
     
     // Allocate memory
-    std::vector<float> h_src(N);
-    std::vector<float> h_dst(N);
+    std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
-        h_src[i] = static_cast<float>(i);
+        h_data[i] = static_cast<float>(i % 1000) / 1000.0f;
     }
     
-    float* d_src = nullptr;
-    float* d_dst = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_src, data_size_bytes));
-    CUDA_CHECK(cudaMalloc(&d_dst, data_size_bytes));
+    float *d_a = nullptr, *d_b = nullptr, *d_c = nullptr, *d_tmp = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_a, data_size_bytes));
+    CUDA_CHECK(cudaMalloc(&d_b, data_size_bytes));
+    CUDA_CHECK(cudaMalloc(&d_c, data_size_bytes));
+    CUDA_CHECK(cudaMalloc(&d_tmp, data_size_bytes));
     
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
     
-    // Copy initial data
-    CUDA_CHECK(cudaMemcpy(d_src, h_src.data(), data_size_bytes,
-                          cudaMemcpyHostToDevice));
-    
-    //------------------------------------------------------
-    // Test 1: Separate kernel launches
-    printf("1. Separate kernel launches:\n");
-    BandwidthResult separate_result = measure_bandwidth_separate(
-        memory_copy_kernel, d_dst, d_src, N, ITERATIONS, stream, "separate_kernels");
-    printf("   Time: %.3f ms\n", separate_result.time_ms);
-    printf("   Bandwidth: %.2f GB/s\n", separate_result.bandwidth_gbs);
-    printf("   Bytes transferred: %.2f GB\n", 
-           separate_result.bytes_transferred / (1024.0f * 1024.0f * 1024.0f));
-    
-    //------------------------------------------------------
-    // Test 2: CUDA Graph with single kernel
-    printf("\n2. CUDA Graph (single kernel):\n");
-    
-    cudaGraph_t graph1;
-    cudaGraphExec_t exec1;
+    CUDA_CHECK(cudaMemcpy(d_a, h_data.data(), data_size_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_b, h_data.data(), data_size_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(d_c, 0, data_size_bytes));
     
     dim3 block(256);
     dim3 grid((N + block.x - 1) / block.x);
     
-    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-    memory_copy_kernel<<<grid, block, 0, stream>>>(d_dst, d_src, N);
-    CUDA_CHECK(cudaStreamEndCapture(stream, &graph1));
-    CUDA_CHECK(cudaGraphInstantiate(&exec1, graph1, nullptr, nullptr, 0));
+    // Warmup
+    for (int i = 0; i < 5; ++i) {
+        saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_a, 1.0f, N);
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     
-    BandwidthResult graph1_result = measure_bandwidth_graph(
-        exec1, stream, ITERATIONS, data_size_bytes, "graph_single_kernel");
-    printf("   Time: %.3f ms (%.2fx vs separate)\n", 
-           graph1_result.time_ms, separate_result.time_ms / graph1_result.time_ms);
-    printf("   Bandwidth: %.2f GB/s\n", graph1_result.bandwidth_gbs);
+    // Measure - launch many small kernels separately each iteration
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
     
-    //------------------------------------------------------
-    // Test 3: CUDA Graph with multiple kernels
-    printf("\n3. CUDA Graph (multiple kernels):\n");
+    printf("Running separate kernel launches (baseline)...\n");
     
-    cudaGraph_t graph2;
-    cudaGraphExec_t exec2;
+    CUDA_CHECK(cudaEventRecord(start, stream));
+    for (int i = 0; i < ITERATIONS; ++i) {
+        // 16 small kernel launches per iteration - accumulates launch overhead
+        saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_a, 1.001f, N);
+        scale_kernel<<<grid, block, 0, stream>>>(d_c, 0.999f, N);
+        add_kernel<<<grid, block, 0, stream>>>(d_tmp, d_a, d_b, N);
+        copy_kernel<<<grid, block, 0, stream>>>(d_c, d_tmp, N);
+        
+        saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_b, 1.001f, N);
+        scale_kernel<<<grid, block, 0, stream>>>(d_c, 0.999f, N);
+        add_kernel<<<grid, block, 0, stream>>>(d_tmp, d_b, d_c, N);
+        copy_kernel<<<grid, block, 0, stream>>>(d_c, d_tmp, N);
+        
+        saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_a, 1.001f, N);
+        scale_kernel<<<grid, block, 0, stream>>>(d_c, 0.999f, N);
+        add_kernel<<<grid, block, 0, stream>>>(d_tmp, d_c, d_a, N);
+        copy_kernel<<<grid, block, 0, stream>>>(d_c, d_tmp, N);
+        
+        saxpy_kernel<<<grid, block, 0, stream>>>(d_c, d_b, 1.001f, N);
+        scale_kernel<<<grid, block, 0, stream>>>(d_c, 0.999f, N);
+        add_kernel<<<grid, block, 0, stream>>>(d_tmp, d_a, d_c, N);
+        copy_kernel<<<grid, block, 0, stream>>>(d_c, d_tmp, N);
+    }
+    CUDA_CHECK(cudaEventRecord(stop, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     
-    CUDA_CHECK(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
-    memory_copy_kernel<<<grid, block, 0, stream>>>(d_dst, d_src, N);
-    compute_kernel<<<grid, block, 0, stream>>>(d_dst, N);
-    memory_copy_kernel<<<grid, block, 0, stream>>>(d_src, d_dst, N);
-    CUDA_CHECK(cudaStreamEndCapture(stream, &graph2));
-    CUDA_CHECK(cudaGraphInstantiate(&exec2, graph2, nullptr, nullptr, 0));
+    float ms;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
     
-    // Estimate: 3 kernels, each with read+write = 6x data transfers
-    size_t multi_kernel_bytes = data_size_bytes * 6;
-    BandwidthResult graph2_result = measure_bandwidth_graph(
-        exec2, stream, ITERATIONS, multi_kernel_bytes, "graph_multi_kernel");
-    printf("   Time: %.3f ms\n", graph2_result.time_ms);
-    printf("   Bandwidth: %.2f GB/s\n", graph2_result.bandwidth_gbs);
-    printf("   Bytes transferred: %.2f GB\n", 
-           graph2_result.bytes_transferred / (1024.0f * 1024.0f * 1024.0f));
+    printf("\nResults:\n");
+    printf("  Total time: %.3f ms\n", ms);
+    printf("  Total kernel launches: %d\n", ITERATIONS * KERNELS_PER_ITER);
+    printf("  Avg time per kernel: %.4f ms\n", ms / (ITERATIONS * KERNELS_PER_ITER));
+    printf("  Avg time per iteration: %.4f ms\n", ms / ITERATIONS);
     
-    //------------------------------------------------------
-    // Results summary
     printf("\n========================================\n");
-    printf("Summary:\n");
-    printf("  Separate launches:  %.2f GB/s\n", separate_result.bandwidth_gbs);
-    printf("  Graph (single):     %.2f GB/s (%.2fx speedup)\n", 
-           graph1_result.bandwidth_gbs, separate_result.time_ms / graph1_result.time_ms);
-    printf("  Graph (multi):      %.2f GB/s\n", graph2_result.bandwidth_gbs);
-    
-    printf("\nKey insights:\n");
-    printf("  - CUDA graphs reduce launch overhead\n");
-    printf("  - Bandwidth measurement helps identify bottlenecks\n");
-    printf("  - Graph capture allows efficient replay of kernel sequences\n");
+    printf("Baseline Characteristics:\n");
+    printf("  - %d kernel launches incur CPU->GPU overhead\n", ITERATIONS * KERNELS_PER_ITER);
+    printf("  - Each launch has driver processing time\n");
+    printf("  - No batching of launch commands\n");
     printf("========================================\n");
     
+    printf("\nTIME_MS: %.6f\n", ms);
+    
     // Cleanup
-    CUDA_CHECK(cudaGraphExecDestroy(exec2));
-    CUDA_CHECK(cudaGraphDestroy(graph2));
-    CUDA_CHECK(cudaGraphExecDestroy(exec1));
-    CUDA_CHECK(cudaGraphDestroy(graph1));
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
     CUDA_CHECK(cudaStreamDestroy(stream));
-    CUDA_CHECK(cudaFree(d_dst));
-    CUDA_CHECK(cudaFree(d_src));
+    CUDA_CHECK(cudaFree(d_a));
+    CUDA_CHECK(cudaFree(d_b));
+    CUDA_CHECK(cudaFree(d_c));
+    CUDA_CHECK(cudaFree(d_tmp));
     
     return 0;
 }
-

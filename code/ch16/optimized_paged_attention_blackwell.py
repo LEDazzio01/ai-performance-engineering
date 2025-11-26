@@ -246,12 +246,12 @@ class PagedKVCache:
             
             # Store per-page scale factors for dequantization
             # Note: Using max of existing and new scale to handle incremental writes
-            self.page_scales[page_id, layer_idx, 0] = torch.max(
-                self.page_scales[page_id, layer_idx, 0], 
+            self.page_scales[page_id, layer_idx, 0] = max(
+                self.page_scales[page_id, layer_idx, 0].item(), 
                 k_scale.item()
             )
-            self.page_scales[page_id, layer_idx, 1] = torch.max(
-                self.page_scales[page_id, layer_idx, 1], 
+            self.page_scales[page_id, layer_idx, 1] = max(
+                self.page_scales[page_id, layer_idx, 1].item(), 
                 v_scale.item()
             )
         else:
@@ -401,15 +401,22 @@ class OptimizedPagedAttentionBlackwell:
             # Allocate pages for sequence
             pages = self.kv_cache.allocate_pages(seq_id, self.seq_length)
             
-            # Write KV to cache (simulating prefill)
+            # Write KV to cache (simulating prefill) - write page by page
             for layer_idx in range(min(4, self.num_layers)):  # Test with 4 layers
-                self.kv_cache.write_kv(
-                    sequence_id=seq_id,
-                    layer_idx=layer_idx,
-                    k=self.k[seq_id:seq_id+1],
-                    v=self.v[seq_id:seq_id+1],
-                    position=0
-                )
+                # Write tokens in chunks of page_size
+                for pos in range(0, self.seq_length, self.page_size):
+                    chunk_end = min(pos + self.page_size, self.seq_length)
+                    chunk_size = chunk_end - pos
+                    # Extract chunk: [1, num_heads, chunk_size, head_dim]
+                    k_chunk = self.k[seq_id:seq_id+1, :, pos:chunk_end, :]
+                    v_chunk = self.v[seq_id:seq_id+1, :, pos:chunk_end, :]
+                    self.kv_cache.write_kv(
+                        sequence_id=seq_id,
+                        layer_idx=layer_idx,
+                        k=k_chunk,
+                        v=v_chunk,
+                        position=pos
+                    )
             
             # Read KV from cache (simulating decode)
             k_cached, v_cached = self.kv_cache.read_kv(

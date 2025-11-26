@@ -19,7 +19,11 @@ BASE_TARGETS = baseline_cluster_group optimized_cluster_group \
                baseline_warp_specialized_pipeline optimized_warp_specialized_pipeline \
                optimized_warp_specialized_pipeline_enhanced \
                baseline_warp_specialized_cluster_pipeline optimized_warp_specialized_cluster_pipeline \
-               tma_2d_pipeline_blackwell
+               tma_2d_pipeline_blackwell \
+               baseline_tma_multicast optimized_tma_multicast \
+               baseline_pipeline_3stage optimized_pipeline_3stage \
+               baseline_dsmem_reduction optimized_dsmem_reduction \
+               baseline_warp_spec_pingpong optimized_warp_spec_pingpong
 
 # Guard optional demos that are not shipped on every branch.
 ifneq ($(wildcard optimized_cluster_group_dram_partial_cluster_sync_no_dsmem.cu),)
@@ -104,6 +108,30 @@ optimized_flash_attn_tma_micro_pipeline$(SUFFIX): optimized_flash_attn_tma_micro
 
 tma_2d_pipeline_blackwell$(SUFFIX): tma_2d_pipeline_blackwell.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -std=c++17 $(INCLUDES) -lcuda -o $@ $<
+
+baseline_tma_multicast$(SUFFIX): baseline_tma_multicast.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+
+optimized_tma_multicast$(SUFFIX): optimized_tma_multicast.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
+baseline_pipeline_3stage$(SUFFIX): baseline_pipeline_3stage.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+
+optimized_pipeline_3stage$(SUFFIX): optimized_pipeline_3stage.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+
+baseline_dsmem_reduction$(SUFFIX): baseline_dsmem_reduction.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+
+optimized_dsmem_reduction$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
+baseline_warp_spec_pingpong$(SUFFIX): baseline_warp_spec_pingpong.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
+
+optimized_warp_spec_pingpong$(SUFFIX): optimized_warp_spec_pingpong.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
 
 # Legacy target name for double_buffered_pipeline (without suffix)
 double_buffered_pipeline: baseline_double_buffered_pipeline$(SUFFIX)

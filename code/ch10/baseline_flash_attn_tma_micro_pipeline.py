@@ -28,13 +28,12 @@ class BaselineFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
 
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific pipeline metrics."""
-        base_metrics = super().get_custom_metrics() or {}
-        base_metrics.update({
-            "pipeline.uses_clusters": 0.0,
-            "pipeline.uses_pipeline": 0.0,
-        })
-        return base_metrics
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_pipeline_metrics
+        return compute_pipeline_metrics(
+            num_stages=getattr(self, 'num_stages', 4),
+            stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
+        )
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineFlashAttnTmaMicroPipelineBenchmark()

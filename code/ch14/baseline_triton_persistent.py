@@ -160,16 +160,14 @@ class BaselineTritonPersistentBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return custom metrics for analysis."""
-        flops = 2 * self.batch_size * self.M * self.N * self.K
-        return {
-            "triton_persistent.batch_size": self.batch_size,
-            "triton_persistent.M": self.M,
-            "triton_persistent.N": self.N,
-            "triton_persistent.K": self.K,
-            "triton_persistent.flops": flops,
-            "triton_persistent.kernel_type": "individual_launches",
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_triton_metrics
+        return compute_triton_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            block_size=getattr(self, 'BLOCK_SIZE', 1024),
+            num_warps=getattr(self, 'num_warps', 4),
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

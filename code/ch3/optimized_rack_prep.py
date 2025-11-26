@@ -151,17 +151,12 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         return None
 
     def get_custom_metrics(self) -> Optional[dict]:
-        metrics = {
-            "affinity_mask": cpulist_to_mask(self.bound_cpus) or "",
-            "cpu_count_bound": len(self.bound_cpus),
-            "nic_layouts": len(self.nic_plan),
-            "affinity_applied": bool(self.apply_affinity),
-            "preferred_nics": ",".join(self.preferred_nics),
-        }
-        if self.nic_plan:
-            metrics["primary_nic"] = self.nic_plan[0].name
-            metrics["primary_nic_numa"] = self.nic_plan[0].numa_node if self.nic_plan[0].numa_node is not None else -1
-        return metrics
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_system_config_metrics
+        return compute_system_config_metrics(
+            numa_nodes=getattr(self, 'numa_nodes', 1),
+            cpu_cores=getattr(self, 'cpu_cores', 64),
+        )
 
     def apply_target_overrides(self, argv: List[str]) -> None:
         """Handle benchmark_cli --target-extra-arg overrides."""

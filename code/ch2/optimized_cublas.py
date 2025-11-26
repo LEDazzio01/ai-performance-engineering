@@ -90,12 +90,13 @@ class OptimizedCublasBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return memory transfer metrics for bandwidth analysis."""
-        bytes_moved = getattr(self, 'N', 0) * 4  # Estimate: elements * 4 bytes
-        return {
-            "cublas.bytes_transferred": float(bytes_moved),
-            "cublas.transfer_type": 0.0,  # 0=pcie, 1=nvlink, 2=hbm
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_memory_transfer_metrics
+        return compute_memory_transfer_metrics(
+            bytes_transferred=self._bytes_transferred if hasattr(self, '_bytes_transferred') else float(getattr(self, 'N', 1024) * 4),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            transfer_type="hbm",
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.A is None or self.B is None:

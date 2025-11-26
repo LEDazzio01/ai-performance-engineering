@@ -95,7 +95,7 @@ class VectorizedRouterBenchmark(BaseBenchmark):
         torch.manual_seed(7)
         model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
         model = model.to(self.device, dtype=torch.bfloat16)
-            model = compile_callable(model, mode="reduce-overhead", fullgraph=True)
+        model = compile_callable(model, mode="reduce-overhead", fullgraph=True)
         model.eval()
         self.model = model
 

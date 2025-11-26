@@ -298,14 +298,13 @@ class OptimizedMXFP8MoEBenchmark(BaseBenchmark):
         )
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
-        return {
-            "mxfp8_optimized.tokens": float(self.num_tokens),
-            "mxfp8_optimized.experts": float(self.num_experts),
-            "mxfp8_optimized.hidden_dim": float(self.hidden_dim),
-            "mxfp8_optimized.block": float(MX_BLOCK_SIZE),
-            "mxfp8_optimized.top_k": float(max(1, int(self.top_k))),
-            "mxfp8_optimized.cuda_graphs": float(1 if self.use_cuda_graphs else 0),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_precision_metrics
+        return compute_precision_metrics(
+            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
+            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
+            precision_type="fp8",
+        )
 
 
 def get_benchmark() -> BaseBenchmark:

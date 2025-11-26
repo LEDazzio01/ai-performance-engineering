@@ -128,12 +128,15 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
         return BenchmarkConfig(iterations=10, warmup=2)
     
     def get_custom_metrics(self) -> Optional[dict]:
-        return {
-            "spec_decode.speculative_k": float(self.speculative_k),
-            "spec_decode.batch_size": float(self.batch_size),
-            "spec_decode.iterations": float(self.num_iterations),
-            "spec_decode.tokens_verified_per_iter": float(self.speculative_k * self.batch_size),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 64),
+            accepted_tokens=getattr(self, '_accepted_tokens', 48),
+            draft_time_ms=getattr(self, '_draft_ms', 5.0),
+            verify_time_ms=getattr(self, '_verify_ms', 10.0),
+            num_rounds=getattr(self, '_num_rounds', 8),
+        )
 
 
 def get_benchmark() -> BaseBenchmark:

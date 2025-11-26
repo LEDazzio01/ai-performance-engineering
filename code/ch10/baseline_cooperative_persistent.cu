@@ -59,7 +59,7 @@ double checksum(const std::vector<float>& data) {
 
 int main() {
   std::vector<float> h_data(ELEMENTS);
-  std::mt19937 rng(2025);
+  std::mt19937 rng(1337);
   std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
   for (auto& v : h_data) v = dist(rng);
 

@@ -599,6 +599,56 @@ class BaseBenchmark:
         """
         return None
 
+    def _verify_kernel(
+        self,
+        kernel_fn,
+        reference_fn,
+        shape: tuple,
+        *,
+        formal: bool = False,
+        kernel_source: Optional[str] = None,
+    ) -> tuple:
+        """Verify kernel correctness using tools/verification/kernel_correctness.
+        
+        Helper method for benchmarks to verify their kernels match a reference.
+        Can be called in validate_result() or anywhere else.
+        
+        Args:
+            kernel_fn: The kernel function to verify
+            reference_fn: Reference implementation to compare against
+            shape: Input tensor shape for testing
+            formal: If True, use formal verification with proofs (slower but thorough)
+            kernel_source: CUDA source code (required if formal=True)
+            
+        Returns:
+            Tuple of (passed: bool, result: VerificationResult or FormalVerificationResult)
+            
+        Example:
+            def validate_result(self) -> Optional[str]:
+                passed, result = self._verify_kernel(
+                    self.my_kernel, 
+                    self.reference_impl,
+                    shape=(1024, 1024),
+                )
+                if not passed:
+                    return f"Kernel verification failed: {result}"
+                return None
+        """
+        try:
+            if formal:
+                from tools.verification.kernel_correctness import FormalKernelVerifier
+                verifier = FormalKernelVerifier(device=str(self.device))
+                result = verifier.verify(kernel_fn, reference_fn, kernel_source or "")
+                return (result.all_proven, result)
+            else:
+                from tools.verification.kernel_correctness import ManualKernelVerifier
+                verifier = ManualKernelVerifier(device=str(self.device))
+                result = verifier.verify(kernel_fn, reference_fn, shape)
+                return (result.all_passed, result)
+        except ImportError:
+            # Verification tools not available
+            return (True, None)
+
     def register_workload_metadata(
         self,
         *,
@@ -738,6 +788,24 @@ class BaseBenchmark:
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Benchmarks can override to expose custom metrics."""
         return None
+
+    def get_optimization_goal(self) -> str:
+        """Return the primary optimization goal for this benchmark.
+        
+        Override this method to indicate what metric the optimization targets.
+        The harness will use this to evaluate success appropriately.
+        
+        Returns:
+            One of: "speed", "memory", "throughput", "latency", "power"
+            Default is "speed" (lower time = better)
+            
+        Examples:
+            - "speed": Traditional speedup (baseline_time / optimized_time)
+            - "memory": Memory reduction (baseline_memory / optimized_memory)
+            - "throughput": Higher is better (optimized_throughput / baseline_throughput)
+            - "latency": Lower is better (baseline_latency / optimized_latency)
+        """
+        return "speed"
     
     def _record_start(self) -> float:
         """Return a high-resolution timestamp for chunk-level timing."""

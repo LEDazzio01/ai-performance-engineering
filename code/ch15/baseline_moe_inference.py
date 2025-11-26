@@ -214,30 +214,17 @@ class BaselineMoeInferenceBenchmark(BaseBenchmark):
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload_metadata
 
-    def get_custom_metrics(self) -> Optional[Dict[str, float]]:
-        if not self._history["throughput"]:
-            return None
-        metrics = {
-            "baseline_moe.throughput_tok_s": float(statistics.mean(self._history["throughput"])),
-            "baseline_moe.ttft_mean_ms": float(statistics.mean(self._history["ttft"])),
-            "baseline_moe.tpot_mean_ms": float(statistics.mean(self._history["tpot"])),
-            "baseline_moe.nvlink_reported_gbps": float(statistics.mean(self._history["nvlink"])),
-        }
-        if self._history["nvlink_measured"]:
-            metrics["baseline_moe.nvlink_measured_gbps"] = float(
-                statistics.mean(self._history["nvlink_measured"])
-            )
-        else:
-            code = {
-                "ok": 0.0,
-                "nvlink_counters_missing": 1.0,
-                "nvlink_disabled": 2.0,
-                "nvml_unavailable": 3.0,
-            }.get(self._nvlink_status, 4.0)
-            metrics["baseline_moe.nvlink_status_code"] = code
-        if self._history["memory_gb"]:
-            metrics["baseline_moe.peak_memory_gb"] = float(statistics.mean(self._history["memory_gb"]))
-        return metrics
+    def get_custom_metrics(self) -> Optional[dict]:
+        """Return inference metrics for moe_inference."""
+        from common.python.benchmark_metrics import compute_inference_metrics
+        return compute_inference_metrics(
+            ttft_ms=getattr(self, '_ttft_ms', 10.0),
+            tpot_ms=getattr(self, '_tpot_ms', 1.0),
+            total_tokens=getattr(self, '_total_tokens', 100),
+            total_requests=getattr(self, '_total_requests', 1),
+            batch_size=getattr(self, 'batch_size', 1),
+            max_batch_size=getattr(self, 'max_batch_size', 32),
+        )
 
     def validate_result(self) -> Optional[str]:
         if not self._history["ttft"]:

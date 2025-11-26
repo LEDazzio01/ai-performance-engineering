@@ -1,4 +1,17 @@
-""" Multi-Node Distributed Training for Blackwell GPUs Demonstrates multi-node distributed training optimizations for Blackwell B200/B300 GPUs with NVLink-C2C and NCCL. Includes tensor parallelism, FSDP, and gradient compression for multi-node scaling. """
+"""Multi-Node Distributed Training for Blackwell GPUs.
+
+Chapter 4: Multi-GPU and Multi-Node Training
+
+Demonstrates multi-node distributed training optimizations for Blackwell 
+B200/B300 GPUs with NVLink-C2C and NCCL. Includes tensor parallelism, 
+FSDP, and gradient compression for multi-node scaling.
+
+NOTE: This file uses F.scaled_dot_product_attention (SDPA), which is covered
+in depth in Chapter 9 (arithmetic intensity, FlashAttention). Here we use it
+as a building block for the attention layer in our training pipeline.
+See ch9/baseline_sdpa_attention.py and ch9/optimized_sdpa_attention.py for
+detailed SDPA analysis and optimization techniques.
+"""
 
 from common.python import compile_utils as _compile_utils_patch  # noqa: F401
 import pathlib

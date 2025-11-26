@@ -55,23 +55,13 @@ class BaselineMemoryTransferBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return memory transfer metrics for bandwidth analysis.
-        
-        These metrics help understand WHY NVLink/C2C transfers are faster
-        and HOW to optimize data movement patterns.
-        """
-        bytes_transferred = self.N * 4  # float32 = 4 bytes
-        
-        # Theoretical peak bandwidths (GB/s)
-        pcie_gen5_x16_peak = 64.0   # PCIe Gen5 x16: ~64 GB/s
-        nvlink_peak = 900.0          # NVLink per-link: ~900 GB/s (varies by config)
-        
-        return {
-            "memory.bytes_transferred": float(bytes_transferred),
-            "memory.pcie_theoretical_gbps": pcie_gen5_x16_peak,
-            "memory.nvlink_theoretical_gbps": nvlink_peak,
-            # Note: actual achieved bandwidth calculated by harness from timing
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_memory_transfer_metrics
+        return compute_memory_transfer_metrics(
+            bytes_transferred=self._bytes_transferred if hasattr(self, '_bytes_transferred') else float(getattr(self, 'N', 1024) * 4),
+            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
+            transfer_type="hbm",
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

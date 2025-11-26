@@ -15,11 +15,13 @@ class Chapter13Workload:
     num_requests: int = 8
     batch_size: int = 4
 
-    training_hidden_dim: int = 6144
-    training_layers_baseline: int = 28
-    training_layers_optimized: int = 44
-    global_batch_size: int = 96
-    micro_batch_size: int = 8
+    # Training standard config - same model for fair checkpointing comparison
+    # Larger model to demonstrate checkpointing memory savings
+    training_hidden_dim: int = 4096
+    training_layers_baseline: int = 48  # Deeper model for activation memory pressure
+    training_layers_optimized: int = 48  # Same model with checkpointing
+    global_batch_size: int = 256  # Larger batch for more activation memory
+    micro_batch_size: int = 32
 
 
 WORKLOAD = Chapter13Workload()

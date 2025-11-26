@@ -115,12 +115,15 @@ class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
         self._last = sim
 
     def get_custom_metrics(self) -> Optional[dict]:
-        if self._last is None:
-            return None
-        summary = self._last.stats.summary()
-        # Flatten summary for harness output.
-        flat = {f"cudagraph.{k}": v for k, v in summary.items() if k != "hot_keys"}
-        return flat
+        """Return speculative decoding metrics for cudagraph_bucketing."""
+        from common.python.benchmark_metrics import compute_speculative_decoding_metrics
+        return compute_speculative_decoding_metrics(
+            draft_tokens=getattr(self, '_draft_tokens', 10),
+            accepted_tokens=getattr(self, '_accepted_tokens', 8),
+            draft_time_ms=getattr(self, '_draft_ms', 1.0),
+            verify_time_ms=getattr(self, '_verify_ms', 1.0),
+            num_rounds=getattr(self, '_num_rounds', 1),
+        )
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(iterations=1, warmup=0, enable_profiling=False)

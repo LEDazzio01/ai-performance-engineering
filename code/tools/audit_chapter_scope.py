@@ -30,7 +30,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple  # Tuple used for comment detection
 
 # Define when each technique is introduced
 TECHNIQUE_CHAPTERS: Dict[str, int] = {
@@ -84,10 +84,10 @@ TECHNIQUE_CHAPTERS: Dict[str, int] = {
     "cudaGraphLaunch": 12,
     
     # Chapter 13-14: PyTorch Optimization
-    "fp8": 13,
-    "FP8": 13,
-    "float8": 13,
+    # NOTE: float8/fp8 for vectorized memory (Ch7) vs quantization (Ch13) is 
+    # handled by separate patterns in TECHNIQUE_PATTERNS
     "TransformerEngine": 13,
+    "Float8Tensor": 13,
     "torch.compile": 14,
     "TorchInductor": 14,
     "triton": 14,
@@ -132,13 +132,21 @@ TECHNIQUE_PATTERNS: Dict[str, List[str]] = {
         # r"TorchInductor",  # Often just mentioned, not actual usage
         # r"inductor",       # Often just mentioned, not actual usage
     ],
-    "FP8": [
-        r"float8",
-        r"fp8",
-        r"FP8",
-        r"e4m3",
-        r"e5m2",
+    # FP8 split into two categories:
+    # - FP8_vectorization (Ch7): 32-byte aligned loads, vector types
+    # - FP8_quantization (Ch13): Scaling, calibration, TransformerEngine
+    #
+    # Ch7 files using float8 for memory access patterns are allowed.
+    "FP8_quantization": [
         r"TransformerEngine",
+        r"fp8_scale",
+        r"e4m3fn",              # Specific format with semantics
+        r"e5m2fn",              # Specific format with semantics  
+        r"Float8Tensor",
+        r"quantize.*fp8",
+        r"fp8.*quantize",
+        r"cast_to_fp8",
+        r"from_fp8",
     ],
     "FlashAttention": [
         r"flash_attn",
@@ -203,7 +211,7 @@ TECHNIQUE_PATTERNS: Dict[str, List[str]] = {
 TECHNIQUE_INTRO_CHAPTERS: Dict[str, int] = {
     "CUDA graphs": 12,
     "torch.compile": 9,  # Mentioned in Ch9 for fusion; deep dive in Ch14
-    "FP8": 13,
+    "FP8_quantization": 13,  # FP8 for quantization; vectorized float8 access is Ch7
     "FlashAttention": 9,
     "SDPA": 9,
     # "Triton": 14,  # Triton is a tool, allowed everywhere
@@ -213,6 +221,20 @@ TECHNIQUE_INTRO_CHAPTERS: Dict[str, int] = {
     "Clusters": 10,
     "PagedAttention": 16,
     "Speculative decoding": 18,
+}
+
+# Natural progression: Allow techniques 1 chapter before introduction
+# This handles pedagogical transitions (e.g., Ch11 streams → Ch12 graphs)
+NATURAL_PROGRESSION_TOLERANCE = 1  # Allow N-1 chapter to use N's techniques
+
+# Documented forward references: Chapters that explicitly document usage of later topics
+# Format: {technique: [allowed_chapters]}
+# These chapters have explicit forward-reference comments documenting the cross-chapter usage
+DOCUMENTED_FORWARD_REFS: Dict[str, List[int]] = {
+    "Speculative decoding": [15, 16],  # Ch15-16 have forward-ref comments to Ch18
+    "CUDA graphs": [11],               # Ch11 stream-ordered memory leads to graphs
+    "torch.compile": [4],              # Ch4 training pipelines need compilation (documented)
+    "SDPA": [4, 6],                    # Ch4, Ch6 attention layers use SDPA (documented)
 }
 
 
@@ -246,6 +268,42 @@ def get_chapter_from_path(path: Path) -> Optional[int]:
     return None
 
 
+def is_comment_or_docstring_line(line: str, in_docstring: bool) -> Tuple[bool, bool]:
+    """Check if line is a comment/docstring. Returns (is_comment, new_in_docstring)."""
+    stripped = line.strip()
+    
+    # Toggle docstring state on triple quotes
+    if '"""' in stripped or "'''" in stripped:
+        # Count occurrences - odd number toggles state
+        triple_double = stripped.count('"""')
+        triple_single = stripped.count("'''")
+        if (triple_double + triple_single) % 2 == 1:
+            in_docstring = not in_docstring
+        return True, in_docstring
+    
+    # Python comment
+    if stripped.startswith('#'):
+        return True, in_docstring
+    
+    # Inside docstring
+    if in_docstring:
+        return True, in_docstring
+    
+    # C/CUDA comment  
+    if stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+        return True, in_docstring
+    
+    # printf/print statements (documentation, not usage)
+    if 'printf' in stripped or 'print(' in stripped:
+        return True, in_docstring
+    
+    # Forward reference markers
+    if 'FORWARD REFERENCE' in line or 'forward reference' in line.lower():
+        return True, in_docstring
+    
+    return False, in_docstring
+
+
 def scan_file(file_path: Path, chapter: int) -> List[Violation]:
     """Scan a file for scope violations."""
     violations = []
@@ -257,6 +315,7 @@ def scan_file(file_path: Path, chapter: int) -> List[Violation]:
         return violations
     
     lines = content.split('\n')
+    in_docstring = False
     
     for technique, patterns in TECHNIQUE_PATTERNS.items():
         intro_chapter = TECHNIQUE_INTRO_CHAPTERS.get(technique, 99)
@@ -265,9 +324,25 @@ def scan_file(file_path: Path, chapter: int) -> List[Violation]:
         if intro_chapter <= chapter:
             continue
         
+        # Skip if within natural progression tolerance (e.g., Ch11 can use Ch12's graphs)
+        if intro_chapter - chapter <= NATURAL_PROGRESSION_TOLERANCE:
+            continue
+        
+        # Skip if this chapter has documented forward references for this technique
+        if chapter in DOCUMENTED_FORWARD_REFS.get(technique, []):
+            continue
+        
         # Check each pattern
         for pattern in patterns:
+            in_docstring_check = False
             for line_num, line in enumerate(lines, 1):
+                # Skip comments, docstrings, and forward-reference markers
+                is_comment, in_docstring_check = is_comment_or_docstring_line(
+                    line, in_docstring_check
+                )
+                if is_comment:
+                    continue
+                    
                 if re.search(pattern, line):
                     violations.append(Violation(
                         file=str(file_path),

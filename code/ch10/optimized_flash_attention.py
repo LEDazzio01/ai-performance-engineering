@@ -237,18 +237,12 @@ class OptimizedFlashAttentionBenchmark(BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return roofline analysis metrics."""
-        # Estimate problem size for roofline analysis
-        n = getattr(self, 'N', 0) or getattr(self, 'hidden_dim', 0) or 4096
-        batch = getattr(self, 'batch_size', 1) or getattr(self, 'batch', 1)
-        # Simple FLOP estimate for linear layers
-        flops = 2.0 * batch * n * n  # Rough estimate
-        bytes_moved = batch * n * 4.0  # Input/output bytes
-        arithmetic_intensity = flops / max(bytes_moved, 1.0)
-        return {
-    "flash_attention.estimated_flops": flops,
-    "flash_attention.estimated_bytes": bytes_moved,
-    "flash_attention.arithmetic_intensity": arithmetic_intensity,
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_pipeline_metrics
+        return compute_pipeline_metrics(
+            num_stages=getattr(self, 'num_stages', 4),
+            stage_times_ms=getattr(self, '_stage_times_ms', [1.0]),
+        )
 }
 
     def validate_result(self) -> Optional[str]:

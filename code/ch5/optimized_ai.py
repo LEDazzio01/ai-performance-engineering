@@ -62,12 +62,14 @@ class OptimizedAIBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return memory transfer metrics for bandwidth analysis."""
-        bytes_moved = getattr(self, 'N', 0) * 4  # Estimate: elements * 4 bytes
-        return {
-            "ai.bytes_transferred": float(bytes_moved),
-            "ai.transfer_type": 0.0,  # 0=pcie, 1=nvlink, 2=hbm
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_storage_io_metrics
+        return compute_storage_io_metrics(
+            bytes_read=getattr(self, '_bytes_read', 0.0),
+            bytes_written=getattr(self, '_bytes_written', 0.0),
+            read_time_ms=getattr(self, '_read_time_ms', 1.0),
+            write_time_ms=getattr(self, '_write_time_ms', 1.0),
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.model is None or self.static_input is None:

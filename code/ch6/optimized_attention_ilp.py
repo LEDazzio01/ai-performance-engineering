@@ -1,4 +1,15 @@
-"""optimized_attention_ilp.py - Optimized attention with high ILP."""
+"""optimized_attention_ilp.py - Optimized attention with high ILP.
+
+Chapter 6: Occupancy and Instruction-Level Parallelism
+
+Demonstrates ILP optimization via streaming chunks and concurrent execution.
+
+FORWARD REFERENCE: This file uses F.scaled_dot_product_attention (SDPA),
+which is covered in depth in Chapter 9 (arithmetic intensity, FlashAttention).
+Here we use it to demonstrate ILP benefits from fused attention operations.
+See ch9/baseline_sdpa_attention.py and ch9/optimized_sdpa_attention.py for
+detailed SDPA analysis comparing unfused vs fused attention kernels.
+"""
 
 from __future__ import annotations
 
@@ -99,11 +110,12 @@ class OptimizedAttentionILPBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return kernel fundamentals metrics."""
-        return {
-            "attention_ilp.elements": float(getattr(self, 'N', 0)),
-            "attention_ilp.iterations": float(getattr(self, 'repeats', 1)),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_kernel_fundamentals_metrics
+        return compute_kernel_fundamentals_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            num_iterations=1,
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""

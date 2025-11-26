@@ -1,4 +1,17 @@
-"""optimized_warp_divergence_ilp.py - Optimized ILP avoiding warp divergence."""
+"""optimized_warp_divergence_ilp.py - Optimized ILP avoiding warp divergence.
+
+Chapter 6: Occupancy and Instruction-Level Parallelism
+
+Demonstrates how to avoid warp divergence using branchless operations.
+The baseline (baseline_warp_divergence_ilp.py) uses conditional indexing
+which causes warp divergence. This optimized version uses torch.compile
+to convert branches into predicated/branchless operations.
+
+FORWARD REFERENCE: This file uses torch.compile (TorchInductor), which is
+covered in depth in Chapter 14. Here we use it to demonstrate the ILP
+benefits of eliminating warp divergence through compiler optimization.
+See ch14/*compile*.py for detailed torch.compile analysis.
+"""
 
 from __future__ import annotations
 
@@ -134,11 +147,12 @@ class OptimizedWarpDivergenceILPBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return kernel fundamentals metrics."""
-        return {
-            "warp_divergence_ilp.elements": float(getattr(self, 'N', 0)),
-            "warp_divergence_ilp.iterations": float(getattr(self, 'repeats', 1)),
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_kernel_fundamentals_metrics
+        return compute_kernel_fundamentals_metrics(
+            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
+            num_iterations=1,
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.output is None:

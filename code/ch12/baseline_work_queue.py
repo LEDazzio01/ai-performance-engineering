@@ -92,11 +92,14 @@ class BaselineWorkQueueBenchmark(BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return CUDA graph metrics."""
-        return {
-            "work_queue.num_iterations": float(getattr(self, 'iterations', 1) or getattr(self, 'num_iterations', 1)),
-            "work_queue.uses_graph": 0.0,  # 0=baseline (no graph), 1=optimized
-        }
+        """Return domain-specific metrics using standardized helper."""
+        from common.python.benchmark_metrics import compute_graph_metrics
+        return compute_graph_metrics(
+            baseline_launch_overhead_us=getattr(self, '_baseline_launch_us', 10.0),
+            graph_launch_overhead_us=getattr(self, '_graph_launch_us', 1.0),
+            num_nodes=getattr(self, 'num_nodes', 10),
+            num_iterations=getattr(self, 'num_iterations', 100),
+        )
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
