@@ -24,7 +24,7 @@ class OptimizedClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_cluster_group_single_cta",
             friendly_name="Optimized Cluster Group (Single CTA)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=60,
         )
 

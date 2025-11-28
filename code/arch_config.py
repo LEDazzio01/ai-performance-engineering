@@ -611,6 +611,15 @@ def configure_optimizations() -> None:
     _install_symmetric_memory_shim()
     ensure_triton_compat()
     _OPTIMIZATIONS_APPLIED = True
+    
+    # Optionally pre-warm CUDA extensions in background
+    # Enable via: export PREWARM_CUDA_EXTENSIONS=1
+    if os.environ.get("PREWARM_CUDA_EXTENSIONS", "0") == "1":
+        try:
+            from common.python.extension_prewarm import prewarm_extensions
+            prewarm_extensions(background=True)
+        except ImportError:
+            pass  # Prewarm module not available
 
 
 arch_config = ArchitectureConfig()

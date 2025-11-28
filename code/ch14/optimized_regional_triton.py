@@ -263,7 +263,7 @@ class OptimizedRegionalTritonBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=8,
-            warmup=0,
+            warmup=10,  # Required for Triton JIT - excludes compile overhead from timing
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=300,

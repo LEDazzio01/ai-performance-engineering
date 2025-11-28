@@ -26,8 +26,8 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ch7
 python compare.py --profile none
-python tools/cli/benchmark_cli.py list-targets --chapter ch7
-python tools/cli/benchmark_cli.py run --targets ch7 --profile minimal
+python tools/cli/aisp bench list-targets --chapter ch7
+python tools/cli/aisp bench run --targets ch7 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.

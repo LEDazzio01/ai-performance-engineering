@@ -27,7 +27,7 @@ class OptimizedClusterGroupBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_cluster_group",
             friendly_name="Optimized Cluster Group (DSMEM)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
         )

@@ -143,7 +143,8 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         low_mem = is_smoke_mode()
-        return BenchmarkConfig(iterations=6 if low_mem else 12, warmup=1 if low_mem else 3)
+        # Minimum warmup=5 even in smoke mode to exclude JIT overhead
+        return BenchmarkConfig(iterations=6 if low_mem else 12, warmup=5 if low_mem else 10)
 
     def validate_result(self) -> Optional[str]:
         if not self.host_buffers or self.norm is None:
@@ -159,7 +160,7 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         )
 
     def apply_target_overrides(self, argv: List[str]) -> None:
-        """Handle benchmark_cli --target-extra-arg overrides."""
+        """Handle aisp bench --target-extra-arg overrides."""
         parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument("--apply", action="store_true", help="Apply IRQ/RPS/XPS affinity on setup (root required).")
         parser.add_argument("--reserve", type=int, default=self.reserve_cores, help="Number of local CPUs to reserve for system tasks.")
@@ -293,7 +294,7 @@ if __name__ == "__main__":
     benchmark.preferred_nics = [n for n in (args.nic or []) if n]
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
+        config=BenchmarkConfig(iterations=5, warmup=5),
     )
     result = harness.benchmark(benchmark)
     print(f"\nOptimized rack prep latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

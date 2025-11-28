@@ -79,7 +79,9 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
                 layernorm_cls=TELayerNorm,
                 enable_tmem_epilogue=self._tmem_copy_fn is not None,
                 tmem_copy_fn=self._tmem_copy_fn,
-            ).to(self.device, dtype=self.tensor_dtype)
+                params_dtype=self.tensor_dtype,
+                device=self.device,
+            )
 
         self.prefill_inputs, self.decode_inputs = build_token_batches(
             batch_size=self.batch_size,
@@ -149,7 +151,7 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
         return None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=3, deterministic=False)
+        return BenchmarkConfig(iterations=10, warmup=5, deterministic=False)
 
 
     def get_custom_metrics(self) -> Optional[dict]:
@@ -159,6 +161,11 @@ class BaselineKVCacheBenchmark(BaseBenchmark):
             "kv_cache.seq_len": float(getattr(self, 'seq_len', 0)),
             "kv_cache.hidden_dim": float(getattr(self, 'hidden_dim', 0)),
         }
+
+    def get_optimization_goal(self) -> str:
+        """Memory optimization - lower memory usage is better."""
+        return "memory"
+
 
 def get_benchmark() -> BaseBenchmark:
     return BaselineKVCacheBenchmark()

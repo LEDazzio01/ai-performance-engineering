@@ -79,7 +79,7 @@ class StridedStreamBaseline(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         # Copy + compute per chunk is heavier; keep iteration count modest.
-        return BenchmarkConfig(iterations=20, warmup=4)
+        return BenchmarkConfig(iterations=20, warmup=5)
 
     def validate_result(self) -> str | None:
         if self.host_output is None or self.host_input is None:
@@ -183,7 +183,7 @@ class ConcurrentStreamOptimized(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         # Streams overlap chunked work; fewer iterations keep runtime reasonable.
-        return BenchmarkConfig(iterations=16, warmup=4)
+        return BenchmarkConfig(iterations=16, warmup=5)
 
     def validate_result(self) -> str | None:
         if not self.host_out_chunks:

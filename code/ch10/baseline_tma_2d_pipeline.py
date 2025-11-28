@@ -19,7 +19,7 @@ class BaselineTma2DPipelineBenchmark(CudaBinaryBenchmark):
             binary_name="tma_2d_pipeline_blackwell",
             friendly_name="TMA 2D Pipeline Baseline (Fallback Copies)",
             iterations=1,
-            warmup=0,
+            warmup=5,
             timeout_seconds=90,
             run_args=("--baseline-only",),
             # Fallback path does not require CUDA pipeline APIs.

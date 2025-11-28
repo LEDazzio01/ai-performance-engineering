@@ -256,7 +256,7 @@ class OptimizedGraceCoherentMemoryBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=0, enable_memory_tracking=False)
+        return BenchmarkConfig(iterations=1, warmup=5, enable_memory_tracking=False)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -293,7 +293,7 @@ def run_benchmark(
         mode=BenchmarkMode.TRAINING,
         config=BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             profile_mode=profile,
             use_subprocess=False,
             execution_mode=ExecutionMode.THREAD,

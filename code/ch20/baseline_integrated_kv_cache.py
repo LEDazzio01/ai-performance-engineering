@@ -183,7 +183,7 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=10,
-            warmup=3,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
         )

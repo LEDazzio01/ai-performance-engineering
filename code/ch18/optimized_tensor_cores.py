@@ -80,7 +80,7 @@ class OptimizedTensorCoresBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=20,
-            warmup=3,
+            warmup=5,
         )
     
     def get_custom_metrics(self) -> Optional[dict]:

@@ -27,7 +27,7 @@ This lab demonstrates KV cache compression techniques that enable serving longer
 
 ```bash
 # Compare memory usage
-python -m tools.cli.benchmark_cli compare \
+python -m cli.aisp bench compare \
     labs.kv_optimization.baseline_kv_standard \
     labs.kv_optimization.optimized_kv_fp8_compressed
 

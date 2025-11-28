@@ -19,7 +19,7 @@ class OptimizedFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_flash_attn_tma_micro_pipeline",
             friendly_name="FlashAttn Micro-Pipeline Optimized (cuda::pipeline / TMA)",
             iterations=1,
-            warmup=0,
+            warmup=5,
             timeout_seconds=120,
             run_args=(),
             requires_pipeline_api=True,

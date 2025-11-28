@@ -88,7 +88,7 @@ class OptimizedMoeBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=10,
-            warmup=3,
+            warmup=10,
             use_subprocess=True,
         )
 

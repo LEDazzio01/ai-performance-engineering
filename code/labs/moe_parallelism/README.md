@@ -26,8 +26,8 @@ Provides scenario planning for mixture-of-experts clusters: memory budgeting, ne
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/moe_parallelism
-python tools/cli/benchmark_cli.py run --targets labs/moe_parallelism --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/moe_parallelism
+python -m cli.aisp bench run --targets labs/moe_parallelism --profile minimal
 ```
 - Targets follow the `labs/moe_parallelism:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/moe_parallelism:<workload>="--flag value"` to sweep schedule knobs.
@@ -52,11 +52,11 @@ python labs/moe_parallelism/run_lab.py --spec dgx_a100_175b
 initializes, so every scenario automatically shares the same `ClusterSpec`/`ModelSpec`.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/moe_parallelism --profile minimal` runs every planner pair and drops JSON/Markdown summaries.
+- `python -m cli.aisp bench run --targets labs/moe_parallelism --profile minimal` runs every planner pair and drops JSON/Markdown summaries.
 - `python labs/moe_parallelism/run_lab.py --scenario grouped` prints an actionable plan (experts/GPU, bandwidth needs) for the chosen scenario.
 - `python labs/moe_parallelism/optimized_memory_budget.py --validate` ensures optimized allocations meet the same correctness checks as the baseline.
 - `python labs/moe_parallelism/optimized_moe_vllm_env.py --fabric nvl72` prints tuned exports for dual-rail NVL72 plus small-message NCCL + vLLM smoke tests; swap `--fabric nvlink` for the single-node NVSwitch preset.
-- From the harness, pass flags via `--target-extra-arg labs/moe_parallelism:moe_vllm_env="--model gpt-oss-20b/original/ --tp 8 --pp 3 --max-seqs 4096"` when running `benchmark_cli`; the same map hits both baseline_ and optimized_ variants.
+- From the harness, pass flags via `--target-extra-arg labs/moe_parallelism:moe_vllm_env="--model gpt-oss-20b/original/ --tp 8 --pp 3 --max-seqs 4096"` when running `aisp bench`; the same map hits both baseline_ and optimized_ variants.
 
 ## Notes
 - `plan.py` centralizes scenario definitions so you only update one file when adding a new MoE topology.

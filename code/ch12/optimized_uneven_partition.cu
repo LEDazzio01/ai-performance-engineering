@@ -19,18 +19,18 @@
         }                                                                       \
     } while (0)
 
-__device__ int g_next_segment = 0;
-
+// Use device pointer instead of __device__ variable to avoid cudaMemcpyToSymbol overhead
 __global__ void dynamic_partition_kernel(const float* in,
                                          float* out,
                                          const UnevenSegment* segments,
-                                         int num_segments) {
+                                         int num_segments,
+                                         int* next_segment) {
     __shared__ int shared_segment;
 
     while (true) {
         __syncthreads();
         if (threadIdx.x == 0) {
-            shared_segment = atomicAdd(&g_next_segment, 1);
+            shared_segment = atomicAdd(next_segment, 1);
         }
         __syncthreads();
         int seg_idx = shared_segment;
@@ -44,11 +44,6 @@ __global__ void dynamic_partition_kernel(const float* in,
             out[global_idx] = v * v + 0.5f * v;
         }
     }
-}
-
-static void reset_counter() {
-    int zero = 0;
-    CUDA_CHECK(cudaMemcpyToSymbol(g_next_segment, &zero, sizeof(int)));
 }
 
 int main() {
@@ -67,15 +62,19 @@ int main() {
 
     float *d_in = nullptr, *d_out = nullptr;
     UnevenSegment* d_segments = nullptr;
+    int* d_next_segment = nullptr;  // Device counter to avoid cudaMemcpyToSymbol
     CUDA_CHECK(cudaMalloc(&d_in, elems * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_out, elems * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_segments, segments.size() * sizeof(UnevenSegment)));
+    CUDA_CHECK(cudaMalloc(&d_next_segment, sizeof(int)));
     CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), elems * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_segments, segments.data(), segments.size() * sizeof(UnevenSegment), cudaMemcpyHostToDevice));
 
     auto launch_dynamic = [&]() {
-        reset_counter();
-        dynamic_partition_kernel<<<grid_blocks, block_threads>>>(d_in, d_out, d_segments, static_cast<int>(segments.size()));
+        // Use cudaMemsetAsync instead of cudaMemcpyToSymbol for better performance
+        CUDA_CHECK(cudaMemsetAsync(d_next_segment, 0, sizeof(int)));
+        dynamic_partition_kernel<<<grid_blocks, block_threads>>>(
+            d_in, d_out, d_segments, static_cast<int>(segments.size()), d_next_segment);
     };
 
     for (int i = 0; i < warmup; ++i) {
@@ -111,6 +110,7 @@ int main() {
 
     CUDA_CHECK(cudaEventDestroy(start_evt));
     CUDA_CHECK(cudaEventDestroy(stop_evt));
+    CUDA_CHECK(cudaFree(d_next_segment));
     CUDA_CHECK(cudaFree(d_segments));
     CUDA_CHECK(cudaFree(d_in));
     CUDA_CHECK(cudaFree(d_out));

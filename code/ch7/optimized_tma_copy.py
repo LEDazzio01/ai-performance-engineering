@@ -24,7 +24,7 @@ class OptimizedTMACopyBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_tma_copy",
             friendly_name="Optimized TMA Copy",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

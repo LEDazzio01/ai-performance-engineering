@@ -64,7 +64,7 @@ class BaselineMatmulBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=10,
-            warmup=2,
+            warmup=5,  # Minimum warmup for accurate matmul timing
         )
 
     def get_custom_metrics(self) -> Optional[dict]:

@@ -133,7 +133,7 @@ class OptimizedPersistentDecodeTritonBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=3,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
             enable_ncu=False,
             enable_nsys=False,

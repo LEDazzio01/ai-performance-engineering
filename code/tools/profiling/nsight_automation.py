@@ -97,6 +97,9 @@ class NsightAutomation:
         trace_cuda: bool = True,
         trace_nvtx: bool = True,
         trace_osrt: bool = True,
+        full_timeline: bool = False,
+        trace_forks: bool = True,
+        preset: str = "light",
     ) -> Optional[Path]:
         """Run Nsight Systems profiling.
         
@@ -106,7 +109,13 @@ class NsightAutomation:
             trace_cuda: Trace CUDA API calls
             trace_nvtx: Trace NVTX markers
             trace_osrt: Trace OS runtime
+            full_timeline: If True, include driver/cu/pti traces and richer capture flags
+            trace_forks: If True, trace child processes before exec
         
+        Presets:
+            - light (default): cuda,nvtx,osrt, no sampling/ctx switch.
+            - full: adds cuda-hw, cublas, cusolver, cusparse, cudnn, fork tracing.
+
         Returns:
             output_path: Path to .nsys-rep file, or None if failed
         """
@@ -123,10 +132,45 @@ class NsightAutomation:
             '--force-overwrite', 'true',
         ]
         
+        trace_categories = []
+
+        # Apply preset overrides first
+        preset_normalized = (preset or "light").strip().lower()
+        if preset_normalized == "full":
+            full_timeline = True
+            trace_forks = True
+        elif preset_normalized == "light":
+            full_timeline = False
         if trace_cuda:
-            nsys_cmd.extend(['--trace', 'cuda,nvtx'])
+            trace_categories.append('cuda')
+        if trace_nvtx:
+            trace_categories.append('nvtx')
         if trace_osrt:
-            nsys_cmd.extend(['--trace', 'osrt'])
+            trace_categories.append('osrt')
+        if full_timeline:
+            trace_categories.extend(['cuda-hw', 'cublas', 'cusolver', 'cusparse', 'cudnn'])
+        if trace_categories:
+            # dedupe while preserving order
+            seen = set()
+            deduped = []
+            for cat in trace_categories:
+                if cat not in seen:
+                    seen.add(cat)
+                    deduped.append(cat)
+            nsys_cmd.extend(['--trace', ",".join(deduped)])
+            if full_timeline or preset_normalized == "full":
+                logger.warning("NSYS full timeline enabled: traces will be larger and runs slower. Ensure TMPDIR has ample space.")
+
+        # Prefer no sampling/ctx-switch overhead when hunting source attribution
+        nsys_cmd.extend([
+            '--sample', 'none',
+            '--cpuctxsw', 'none',
+            '--cuda-memory-usage', 'true',
+            '--cuda-um-gpu-page-faults', 'true',
+            '--cuda-um-cpu-page-faults', 'true',
+        ])
+        if trace_forks:
+            nsys_cmd.extend(['--trace-fork-before-exec', 'true'])
         
         nsys_cmd.extend(command)
         
@@ -142,7 +186,20 @@ class NsightAutomation:
             logger.info(f"Nsight Systems trace saved to {output_path}")
             return output_path
         except subprocess.CalledProcessError as e:
+            # Automatic fallback: drop full_timeline categories and retry once
             logger.error(f"Nsight Systems failed: {e.stderr}")
+            if full_timeline or preset_normalized == "full":
+                logger.warning("Retrying NSYS capture with preset=light (reduced trace categories)")
+                return self.profile_nsys(
+                    command,
+                    output_name,
+                    trace_cuda=trace_cuda,
+                    trace_nvtx=trace_nvtx,
+                    trace_osrt=trace_osrt,
+                    full_timeline=False,
+                    trace_forks=False,
+                    preset="light",
+                )
             return None
     
     def profile_ncu(
@@ -278,6 +335,13 @@ Examples:
                        help='Workload type for metric selection')
     parser.add_argument('--kernel-filter', type=str,
                        help='Filter kernels by name pattern')
+    parser.add_argument('--trace-cuda', action='store_true', default=True, help='Trace CUDA API (nsys)')
+    parser.add_argument('--trace-nvtx', action='store_true', default=True, help='Trace NVTX ranges (nsys)')
+    parser.add_argument('--trace-osrt', action='store_true', default=True, help='Trace OS runtime (nsys)')
+    parser.add_argument('--full-timeline', action='store_true', default=False, help='Enable richer NSYS tracing (cuda-hw, cublas, cusolver, cusparse, cudnn)')
+    parser.add_argument('--trace-forks', action='store_true', default=False, help='Trace child processes before exec (nsys)')
+    parser.add_argument('--preset', type=str, default='light', choices=['light', 'full'],
+                        help='NSYS preset: light (default) or full (adds cuda-hw/cublas/cusolver/cusparse/cudnn and fork tracing)')
     parser.add_argument('--batch-config', type=Path,
                        help='JSON config for batch profiling')
     parser.add_argument('command', nargs='*',
@@ -312,7 +376,16 @@ Examples:
         parser.error("Command required (use -- before command)")
     
     if args.tool == 'nsys':
-        output = automation.profile_nsys(args.command, args.output)
+        output = automation.profile_nsys(
+            args.command,
+            args.output,
+            trace_cuda=args.trace_cuda,
+            trace_nvtx=args.trace_nvtx,
+            trace_osrt=args.trace_osrt,
+            full_timeline=args.full_timeline,
+            trace_forks=args.trace_forks,
+            preset=args.preset,
+        )
     elif args.tool == 'ncu':
         output = automation.profile_ncu(
             args.command,
@@ -328,13 +401,12 @@ Examples:
         print(f"Profiling Complete")
         print(f"{'='*60}")
         print(f"Output: {output}")
+        if args.tool == 'nsys':
+            print(f"Preset: {args.preset} (full_timeline={args.full_timeline or args.preset=='full'})")
+            if args.preset == 'full' or args.full_timeline:
+                print("Warning: NSYS full timeline enabled; captures run longer and produce larger traces. Ensure TMPDIR has space.")
         print(f"{'='*60}\n")
 
 
 if __name__ == '__main__':
     main()
-
-
-
-
-

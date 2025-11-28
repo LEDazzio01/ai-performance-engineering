@@ -75,14 +75,6 @@ class OptimizedEndToEndBandwidthBenchmark(BaseBenchmark):
             model = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device).half().eval()
 
             compile_supported, compile_reason = is_torch_compile_supported_on_device()
-            if os.environ.get("AIPERF_DISABLE_TORCH_COMPILE") == "1":
-                compile_supported = False
-                compile_reason = "AIPERF_DISABLE_TORCH_COMPILE=1"
-            elif torch.cuda.is_available():
-                    major, _ = torch.cuda.get_device_capability()
-                    if major >= 12:
-                        compile_supported = False
-                        compile_reason = f"torch.compile disabled on SM{major} for stability"
             if compile_supported:
                 try:
                     compiled_model = torch.compile(model, mode="reduce-overhead")

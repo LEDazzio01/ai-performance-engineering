@@ -95,7 +95,7 @@ class OptimizedGraphBandwidthBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take time

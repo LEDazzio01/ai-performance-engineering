@@ -578,7 +578,7 @@ def build_optimized_bundle(metrics: MetricNames, thresholds: AlertThresholds) ->
 
 
 class OptimizedVLLMMonitoringBenchmark(BaseBenchmark):
-    """Benchmark wrapper so benchmark_cli can emit the bundle."""
+    """Benchmark wrapper so aisp bench can emit the bundle."""
 
     def __init__(self, outdir: Optional[Path] = None, config_path: Optional[Path] = None):
         self._device_override = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -607,7 +607,7 @@ class OptimizedVLLMMonitoringBenchmark(BaseBenchmark):
         self._written = True
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
     def get_custom_metrics(self):
         if not self._written:

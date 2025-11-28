@@ -1,0 +1,31 @@
+{
+  "examples": {
+    "flex_attention": {
+      "example": "flex_attention",
+      "metadata": {
+        "best_optimization": "optimized_flex_attention",
+        "best_optimization_file": "optimized_flex_attention.py",
+        "best_optimization_speedup": 20.355695604086147,
+        "best_optimization_time_ms": 0.39956267178058624,
+        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
+        "updated_at": "2025-11-27T04:03:02.181201"
+      },
+      "metrics": {
+        "baseline_p75_ms": 7.9700798988342285,
+        "baseline_throughput.latency_ms": 8.133376121520996,
+        "baseline_throughput.requests_per_s": 245.90034570121253,
+        "baseline_throughput.tokens_per_s": 251801.95399804163,
+        "baseline_time_ms": 8.133376121520996,
+        "best_optimized_p75_ms": 0.2507520020008087,
+        "best_optimized_speedup": 20.355695604086147,
+        "best_optimized_throughput.latency_ms": 0.39956267178058624,
+        "best_optimized_throughput.requests_per_s": 5005.472586033436,
+        "best_optimized_throughput.tokens_per_s": 5125603.928098238,
+        "best_optimized_time_ms": 0.39956267178058624,
+        "best_speedup": 20.355695604086147
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

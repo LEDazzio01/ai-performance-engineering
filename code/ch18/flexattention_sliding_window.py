@@ -199,7 +199,7 @@ def run_benchmark(
     
     config = BenchmarkConfig(
         iterations=5,
-        warmup=2,
+        warmup=10,
         profile_mode=profile,
     )
     

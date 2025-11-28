@@ -318,7 +318,7 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=12,
-            warmup=2,
+            warmup=5,
             timeout_seconds=300,
             measurement_timeout_seconds=300,
             deterministic=False,

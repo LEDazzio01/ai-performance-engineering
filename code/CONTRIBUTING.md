@@ -90,10 +90,52 @@ def _nvtx_range(self, name: str):
 def get_config(self) -> BenchmarkConfig:
     """Return custom benchmark configuration."""
     return BenchmarkConfig(
-        warmup_iterations=10,
-        benchmark_iterations=100,
+        warmup=10,  # REQUIRED: See Warmup Requirements below
+        iterations=100,
     )
 ```
+
+### ⚠️ CRITICAL: Warmup Requirements
+
+**Warmup iterations are MANDATORY** to ensure accurate benchmark measurements. Low warmup causes JIT/compile overhead to be INCLUDED in timing results, leading to incorrect speedup calculations.
+
+| Feature Used | Minimum Warmup | Recommended Warmup |
+|--------------|----------------|-------------------|
+| Basic CUDA | 5 | 5-10 |
+| torch.compile | 10 | 10-15 |
+| Triton kernels | 10 | 10-15 |
+| CUDA Graphs | 10 | 10-15 |
+
+**Why this matters:**
+- `torch.compile` triggers JIT compilation on the first 1-3 calls
+- Triton kernels compile on first invocation
+- CUDA driver initialization and cuDNN autotuning happen early
+- Memory allocator needs warmup to reach steady state
+
+**The benchmark harness will AUTOMATICALLY raise warmup to minimum (5) if you set it lower, with a warning.**
+
+**DO NOT:**
+```python
+# ❌ BAD - JIT overhead will pollute measurements
+def get_config(self):
+    return BenchmarkConfig(warmup=0, iterations=5)
+
+# ❌ BAD - torch.compile needs more warmup
+def get_config(self):
+    return BenchmarkConfig(warmup=2, iterations=10)
+```
+
+**DO:**
+```python
+# ✓ GOOD - Sufficient warmup for accurate measurements
+def get_config(self):
+    return BenchmarkConfig(warmup=10, iterations=20)
+```
+
+**Validation:**
+- Run `make audit-warmup` to check all benchmarks
+- Pre-commit hook automatically validates warmup settings
+- `make check` includes warmup audit
 
 ---
 
@@ -326,7 +368,7 @@ python scripts/update_custom_metrics.py --validate
 
 ```bash
 # Compare baseline vs optimized
-python -m tools.cli.benchmark_cli compare \
+python -m cli.aisp bench compare \
     ch7.baseline_memory_access \
     ch7.optimized_memory_access
 ```
@@ -386,4 +428,3 @@ Before submitting changes:
 - [ ] Follows `baseline_`/`optimized_` naming
 - [ ] Tests pass (`make test`)
 - [ ] Validation passes (`make check`)
-

@@ -21,7 +21,7 @@ class BaselinePipeline3StageBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_pipeline_3stage",
             friendly_name="2-Stage Pipeline GEMV (Baseline)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

@@ -23,7 +23,7 @@ python -m tools.reporting benchmark_results.json -o report.pdf
 python -m tools.reporting benchmark_results.json -o report.html -f html
 
 # Generate from running dashboard
-python -m tools.reporting http://localhost:8080 -o report.pdf
+python -m tools.reporting http://localhost:6970 -o report.pdf
 
 # Custom title
 python -m tools.reporting data.json -o report.pdf --title "Q4 Performance Report"
@@ -236,7 +236,7 @@ from tools.reporting import generate_report
 
 # Generate PDF from running dashboard
 generate_report(
-    "http://localhost:8080",
+    "http://localhost:6970",
     "report.pdf",
     format="pdf"
 )
@@ -284,6 +284,5 @@ tools/reporting/
 ├── templates.py         # BenchmarkReport, ProfileReport, OptimizationReport
 └── README.md            # This file
 ```
-
 
 

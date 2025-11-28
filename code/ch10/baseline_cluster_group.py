@@ -25,7 +25,7 @@ class BaselineClusterGroupBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_cluster_group",
             friendly_name="Baseline Cluster Group",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
         )

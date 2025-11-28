@@ -2,35 +2,20 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
-from torch.utils.cpp_extension import load
+from common.python.extension_loader_template import load_cuda_extension_v2
 
 try:  # Ensure arch_config clamps TORCH_CUDA_ARCH_LIST before building.
     import arch_config  # noqa: F401
 except ImportError:  # pragma: no cover - optional when module unavailable
     arch_config = None  # type: ignore[assignment]
 
-try:
-    from common.python.build_utils import ensure_clean_build_directory
-except ImportError:
-    def ensure_clean_build_directory(build_dir: Path, max_lock_age_seconds: int = 300) -> None:
-        pass
-
 _MODULE = None
 _BUILD_ERROR: Optional[str] = None
 _EXT_NAME = "blackwell_capstone_tcgen05_inline_ext"
-
-
-def _get_build_dir() -> Path:
-    """Get the torch extension build directory."""
-    base = os.environ.get("TORCH_EXTENSIONS_DIR")
-    repo_root = Path(__file__).resolve().parents[2]
-    if base:
-        return Path(base) / _EXT_NAME
-    return repo_root / ".torch_extensions" / _EXT_NAME
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_tcgen05_module():
@@ -41,22 +26,14 @@ def load_tcgen05_module():
     if _BUILD_ERROR is not None:
         raise RuntimeError(f"tcgen05 inline extension unavailable: {_BUILD_ERROR}")
 
-    repo_root = Path(__file__).resolve().parents[2]
-    te_cutlass_include = repo_root / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
-    upstream_cutlass_include = repo_root / "third_party" / "cutlass" / "include"
-    clang_host = repo_root / "third_party" / "llvm" / "bin" / "clang++"
-    ccbin_flag = f"-ccbin={clang_host}" if clang_host.exists() else None
-    src = repo_root / "labs" / "fullstack_cluster" / "capstone_kernels_tcgen05.cu"
-
-    # Clean stale builds before attempting to load
-    build_dir = _get_build_dir()
-    build_dir.mkdir(parents=True, exist_ok=True)
-    ensure_clean_build_directory(build_dir)
+    te_cutlass = _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
+    upstream_cutlass = _REPO_ROOT / "third_party" / "cutlass" / "include"
+    clang_host = _REPO_ROOT / "third_party" / "llvm" / "bin" / "clang++"
 
     include_flags = []
-    if te_cutlass_include.exists():
-        include_flags.append(f"-I{te_cutlass_include}")
-    include_flags.append(f"-I{upstream_cutlass_include}")
+    if te_cutlass.exists():
+        include_flags.append(f"-I{te_cutlass}")
+    include_flags.append(f"-I{upstream_cutlass}")
 
     extra_cuda_cflags = [
         "-std=c++20",
@@ -64,18 +41,16 @@ def load_tcgen05_module():
         "-lineinfo",
         "-DCUTE_PREFETCH_COPY_ATOM_DISABLED",
     ] + include_flags
-    if ccbin_flag:
-        extra_cuda_cflags.append(ccbin_flag)
-    extra_cflags = ["-std=c++20"]
+    if clang_host.exists():
+        extra_cuda_cflags.append(f"-ccbin={clang_host}")
 
     try:
-        _MODULE = load(
+        _MODULE = load_cuda_extension_v2(
             name=_EXT_NAME,
-            sources=[str(src)],
+            sources=[_REPO_ROOT / "labs" / "fullstack_cluster" / "capstone_kernels_tcgen05.cu"],
             extra_cuda_cflags=extra_cuda_cflags,
-            extra_cflags=extra_cflags,
+            extra_cflags=["-std=c++20"],
             extra_ldflags=["-lcuda"],
-            verbose=False,
         )
     except Exception as exc:  # pragma: no cover - depends on toolchain
         _BUILD_ERROR = (

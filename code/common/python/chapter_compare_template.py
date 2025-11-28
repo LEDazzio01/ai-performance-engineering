@@ -50,7 +50,7 @@ __all__ = ['discover_benchmarks', 'load_benchmark', 'create_standard_metrics', '
 _LAST_LOAD_ERROR: Optional[str] = None
 
 
-def load_benchmark(module_path: Path, timeout_seconds: int = 60) -> Optional[BaseBenchmark]:
+def load_benchmark(module_path: Path, timeout_seconds: int = 120) -> Optional[BaseBenchmark]:
     """Load benchmark from module by calling get_benchmark() function.
     
     Uses threading timeout to prevent hangs during module import or get_benchmark() calls.

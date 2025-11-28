@@ -100,7 +100,7 @@ class BaselineReinitCommBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
         )

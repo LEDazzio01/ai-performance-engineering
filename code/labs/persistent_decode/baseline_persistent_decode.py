@@ -63,7 +63,7 @@ class BaselinePersistentDecodeBenchmark(BaseBenchmark):
         # Keep iterations small; focus on relative speedups and profiling
         return BenchmarkConfig(
             iterations=12,
-            warmup=4,
+            warmup=5,
             use_subprocess=False,
             measurement_timeout_seconds=120,
         )

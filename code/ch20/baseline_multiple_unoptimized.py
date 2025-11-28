@@ -25,13 +25,14 @@ class SimpleModel(nn.Module):
 
 
 class BaselineMultipleUnoptimizedBenchmark(BaseBenchmark):
-    """Baseline combining multiple inefficiencies (FP32, small batch, unfused ops)."""
+    """Baseline combining multiple inefficiencies (FP32, small batch, no compile, no graphs)."""
     
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.x: Optional[torch.Tensor] = None
-        self.batch_size = 32
+        # Baseline: same batch size for fair comparison, but FP32 (no tensor cores)
+        self.batch_size = 128
         self.hidden_dim = 4096
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(

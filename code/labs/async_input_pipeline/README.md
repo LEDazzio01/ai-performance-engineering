@@ -28,7 +28,7 @@ This lab demonstrates how to overlap data loading with GPU computation using PyT
 
 ```bash
 # Compare baseline vs optimized
-python -m tools.cli.benchmark_cli compare \
+python -m cli.aisp bench compare \
     labs.async_input_pipeline.baseline_async_input_pipeline \
     labs.async_input_pipeline.optimized_async_input_pipeline
 

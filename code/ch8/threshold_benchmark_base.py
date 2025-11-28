@@ -21,7 +21,7 @@ THRESHOLD_OUTER_SCALE = 1.25
 
 
 class ThresholdBenchmarkBase(BaseBenchmark):
-    rows: int = 1 << 22  # 4M elements
+    rows: int = 1 << 24  # 16M elements - larger to show memory transfer impact
     threshold: float = 2.5
     nvtx_label: str = "threshold"
 
@@ -102,7 +102,7 @@ class ThresholdBenchmarkBase(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         # Reduce runtime so full benchmark runs avoid harness watchdog on large data sets.
-        return BenchmarkConfig(iterations=10, warmup=3)
+        return BenchmarkConfig(iterations=10, warmup=5)
 
     def validate_result(self) -> Optional[str]:
         if self.extension is None:

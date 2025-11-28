@@ -291,7 +291,7 @@ class OptimizedMXFP8MoEBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=10,
-            warmup=3,
+            warmup=5,
             deterministic=False,
             enable_nvtx=True,
             measurement_timeout_seconds=90,

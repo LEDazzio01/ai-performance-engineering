@@ -1,30 +1,34 @@
-// optimized_float8_vector.cu - 32-byte Vectorized FP8 Loads (Ch7)
+// optimized_float8_vector.cu - Vectorized Loads (Ch7)
 //
-// WHAT: Blackwell supports 32-byte (256-bit) vectorized loads, allowing
-// 32 FP8 values to be loaded in a single instruction.
+// WHAT: float4 vectorized loads - 4 floats (16 bytes) per memory operation.
 //
-// WHY: Wider loads = better memory bandwidth utilization:
-//   - 4 bytes (float): 1 value per load
-//   - 16 bytes (float4): 4 values per load  
-//   - 32 bytes (float8 or 32×FP8): 8 floats or 32 FP8 values per load
+// WHY THIS IS FASTER:
+//   - Each thread issues single 16-byte loads/stores
+//   - 4x fewer memory instructions than scalar
+//   - Saturates HBM bandwidth on modern GPUs
+//   - Memory controller handles fewer, wider requests
 //
-// On Blackwell with HBM3e:
-//   - Peak bandwidth: ~8 TB/s
-//   - Need wide loads to saturate bandwidth
-//   - 32-byte loads are 2x more efficient than 16-byte
+// BOOK CONTEXT (Ch7 - Memory Coalescing & Vectorization):
+//   The book emphasizes vectorized loads as a key optimization:
+//   1. float4 loads issue 128-byte requests per warp (32 threads × 4B = 128B coalesced)
+//      vs scalar which issues 32 separate 4B requests that need coalescing
+//   2. Fewer instructions = higher throughput
+//   3. Better cache line utilization (128B cache lines match float4 × 32 threads)
 //
-// WHEN TO USE:
-//   - FP8 inference (32 FP8 values per 32-byte load)
-//   - Memory-bound kernels on Blackwell
-//   - When data is 32-byte aligned
+// EXPECTED PERFORMANCE:
+//   - ~6 TB/s effective bandwidth (near HBM peak)
+//   - Bandwidth-limited: HBM is the bottleneck, not instructions
+//   - ~2-2.5x faster than scalar baseline
 //
-// REQUIREMENTS:
-//   - SM 100+ (Blackwell) for full benefit
-//   - 32-byte aligned data
-//   - CUDA 12.0+ for FP8 types
+// EDUCATIONAL NOTE ON float8 (32-byte) LOADS:
+//   Going from float4 (16B) to float8 (32B) does NOT improve performance for
+//   simple kernels because HBM bandwidth is already saturated with float4.
+//   32-byte loads help when:
+//   - Processing FP8 data (32 FP8 values per load vs 8)
+//   - Instruction throughput is the bottleneck (complex kernels)
+//   - See optimized_fp8_32byte_loads.cu for FP8 use case
 
 #include <cuda_runtime.h>
-#include <cuda_fp8.h>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -42,57 +46,13 @@
 constexpr int BLOCK_SIZE = 256;
 
 //============================================================================
-// 32-byte aligned vector types
+// Optimized: float4 Vectorized Loads (16 bytes per operation)
+// - Each thread loads/stores 4 floats at once
+// - 4x fewer instructions than scalar
+// - Saturates HBM memory bandwidth
 //============================================================================
 
-// 32-byte vector of 8 floats
-struct alignas(32) float8 {
-    float data[8];
-    
-    __host__ __device__ float& operator[](int i) { return data[i]; }
-    __host__ __device__ const float& operator[](int i) const { return data[i]; }
-};
-
-// 32-byte vector of 32 FP8 values (e4m3 format)
-struct alignas(32) fp8x32 {
-    __nv_fp8_e4m3 data[32];
-    
-    __host__ __device__ __nv_fp8_e4m3& operator[](int i) { return data[i]; }
-    __host__ __device__ const __nv_fp8_e4m3& operator[](int i) const { return data[i]; }
-};
-
-// 16-byte vector for comparison
-struct alignas(16) float4_aligned {
-    float data[4];
-};
-
-//============================================================================
-// Kernel: 32-byte Vectorized Float Loads
-//============================================================================
-
-__global__ void vector_add_float8(
-    const float8* __restrict__ a,
-    const float8* __restrict__ b,
-    float8* __restrict__ c,
-    int n  // number of float8 elements
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        float8 va = a[idx];  // 32-byte load
-        float8 vb = b[idx];  // 32-byte load
-        
-        float8 vc;
-        #pragma unroll
-        for (int i = 0; i < 8; ++i) {
-            vc[i] = va[i] + vb[i];
-        }
-        
-        c[idx] = vc;  // 32-byte store
-    }
-}
-
-// Comparison: 16-byte loads
-__global__ void vector_add_float4(
+__global__ void optimized_vector_add_float4(
     const float4* __restrict__ a,
     const float4* __restrict__ b,
     float4* __restrict__ c,
@@ -100,6 +60,8 @@ __global__ void vector_add_float4(
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
+        // Vectorized loads: 2 × 16-byte loads, 1 × 16-byte store
+        // Per warp: 32 × 16B = 512 bytes per load instruction
         float4 va = a[idx];
         float4 vb = b[idx];
         
@@ -113,97 +75,30 @@ __global__ void vector_add_float4(
     }
 }
 
-// Comparison: scalar loads
-__global__ void vector_add_scalar(
-    const float* __restrict__ a,
-    const float* __restrict__ b,
-    float* __restrict__ c,
-    int n
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        c[idx] = a[idx] + b[idx];
-    }
-}
-
-//============================================================================
-// Kernel: FP8 32-element Vector Loads
-//============================================================================
-
-// Load 32 FP8 values, convert to FP32, add, convert back, store
-__global__ void fp8_vector_add_32x(
-    const fp8x32* __restrict__ a,
-    const fp8x32* __restrict__ b,
-    fp8x32* __restrict__ c,
-    float scale_a,
-    float scale_b,
-    float scale_c,
-    int n
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        // 32-byte loads (32 FP8 values each)
-        fp8x32 va = a[idx];
-        fp8x32 vb = b[idx];
-        
-        fp8x32 vc;
-        
-        // Process in groups of 4 for register efficiency
-        #pragma unroll
-        for (int i = 0; i < 32; i += 4) {
-            float4 fa, fb, fc;
-            
-            // Dequantize FP8 to FP32
-            fa.x = float(va[i]) * scale_a;
-            fa.y = float(va[i+1]) * scale_a;
-            fa.z = float(va[i+2]) * scale_a;
-            fa.w = float(va[i+3]) * scale_a;
-            
-            fb.x = float(vb[i]) * scale_b;
-            fb.y = float(vb[i+1]) * scale_b;
-            fb.z = float(vb[i+2]) * scale_b;
-            fb.w = float(vb[i+3]) * scale_b;
-            
-            // Compute
-            fc.x = fa.x + fb.x;
-            fc.y = fa.y + fb.y;
-            fc.z = fa.z + fb.z;
-            fc.w = fa.w + fb.w;
-            
-            // Quantize FP32 to FP8
-            vc[i] = __nv_fp8_e4m3(fc.x / scale_c);
-            vc[i+1] = __nv_fp8_e4m3(fc.y / scale_c);
-            vc[i+2] = __nv_fp8_e4m3(fc.z / scale_c);
-            vc[i+3] = __nv_fp8_e4m3(fc.w / scale_c);
-        }
-        
-        // 32-byte store
-        c[idx] = vc;
-    }
-}
-
 //============================================================================
 // Benchmark
 //============================================================================
 
-void benchmark_vector_widths() {
+int main() {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
-    printf("32-byte Vectorized Loads Benchmark\n");
-    printf("===================================\n");
+    printf("Optimized: float4 (16-byte) Vectorized Loads\n");
+    printf("=============================================\n");
     printf("Device: %s (SM %d.%d)\n", prop.name, prop.major, prop.minor);
     printf("\n");
     
-    // Large array to saturate bandwidth
+    // Large array to measure bandwidth accurately
     const int N = 128 * 1024 * 1024;  // 128M floats = 512 MB per array
     const size_t bytes = N * sizeof(float);
+    const int num_float4 = N / 4;
     
     printf("Array size: %zu MB per array\n", bytes / (1024 * 1024));
-    printf("Total data movement: %zu MB (2 reads + 1 write)\n\n", 
+    printf("Total data movement: %zu MB (2 reads + 1 write)\n", 
            3 * bytes / (1024 * 1024));
+    printf("Load width: 16 bytes (4 floats per instruction)\n\n");
     
-    // Allocate with 32-byte alignment
+    // Allocate (cudaMalloc guarantees 256-byte alignment, sufficient for float4)
     float *d_a, *d_b, *d_c;
     CUDA_CHECK(cudaMalloc(&d_a, bytes));
     CUDA_CHECK(cudaMalloc(&d_b, bytes));
@@ -221,147 +116,54 @@ void benchmark_vector_widths() {
     const int warmup = 5;
     const int iterations = 20;
     
-    // Benchmark scalar (4-byte)
-    auto benchmark_kernel = [&](const char* name, auto kernel, int elements_per_thread) {
-        int num_elements = N / elements_per_thread;
-        dim3 block(BLOCK_SIZE);
-        dim3 grid((num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        
-        // Clear L2
-        CUDA_CHECK(cudaMemset(d_c, 0, bytes));
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        // Warmup
-        for (int i = 0; i < warmup; ++i) {
-            kernel<<<grid, block>>>(
-                reinterpret_cast<std::remove_reference_t<decltype(*d_a)>*>(d_a),
-                reinterpret_cast<std::remove_reference_t<decltype(*d_b)>*>(d_b),
-                reinterpret_cast<std::remove_reference_t<decltype(*d_c)>*>(d_c),
-                num_elements
-            );
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        // Benchmark
-        CUDA_CHECK(cudaEventRecord(start));
-        for (int i = 0; i < iterations; ++i) {
-            kernel<<<grid, block>>>(
-                reinterpret_cast<std::remove_reference_t<decltype(*d_a)>*>(d_a),
-                reinterpret_cast<std::remove_reference_t<decltype(*d_b)>*>(d_b),
-                reinterpret_cast<std::remove_reference_t<decltype(*d_c)>*>(d_c),
-                num_elements
-            );
-        }
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        
-        float ms;
-        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        ms /= iterations;
-        
-        // Bandwidth: 2 reads + 1 write
-        float bandwidth = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
-        
-        printf("%-20s %8.3f ms  %8.1f GB/s\n", name, ms, bandwidth);
-        return ms;
-    };
+    dim3 block(BLOCK_SIZE);
+    dim3 grid((num_float4 + BLOCK_SIZE - 1) / BLOCK_SIZE);
     
-    printf("%-20s %8s  %10s\n", "Variant", "Time", "Bandwidth");
-    printf("%-20s %8s  %10s\n", "-------", "----", "---------");
+    // Clear L2 cache
+    CUDA_CHECK(cudaMemset(d_c, 0, bytes));
+    CUDA_CHECK(cudaDeviceSynchronize());
     
-    float scalar_ms = benchmark_kernel("Scalar (4B)", vector_add_scalar, 1);
-    
-    // float4 benchmark (need explicit casts for pointer types)
-    float vec4_ms;
-    {
-        const char* name = "float4 (16B)";
-        int num_elements = N / 4;
-        dim3 block(BLOCK_SIZE);
-        dim3 grid((num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        
-        CUDA_CHECK(cudaMemset(d_c, 0, bytes));
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        for (int i = 0; i < warmup; ++i) {
-            vector_add_float4<<<grid, block>>>(
-                reinterpret_cast<const float4*>(d_a),
-                reinterpret_cast<const float4*>(d_b),
-                reinterpret_cast<float4*>(d_c),
-                num_elements
-            );
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        CUDA_CHECK(cudaEventRecord(start));
-        for (int i = 0; i < iterations; ++i) {
-            vector_add_float4<<<grid, block>>>(
-                reinterpret_cast<const float4*>(d_a),
-                reinterpret_cast<const float4*>(d_b),
-                reinterpret_cast<float4*>(d_c),
-                num_elements
-            );
-        }
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        
-        float ms;
-        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        ms /= iterations;
-        float bandwidth = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
-        printf("%-20s %8.3f ms  %8.1f GB/s\n", name, ms, bandwidth);
-        vec4_ms = ms;
+    // Warmup
+    for (int i = 0; i < warmup; ++i) {
+        optimized_vector_add_float4<<<grid, block>>>(
+            reinterpret_cast<float4*>(d_a),
+            reinterpret_cast<float4*>(d_b),
+            reinterpret_cast<float4*>(d_c),
+            num_float4
+        );
     }
+    CUDA_CHECK(cudaDeviceSynchronize());
     
-    // float8 benchmark (need explicit casts for pointer types)
-    float vec8_ms;
-    {
-        const char* name = "float8 (32B)";
-        int num_elements = N / 8;
-        dim3 block(BLOCK_SIZE);
-        dim3 grid((num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        
-        CUDA_CHECK(cudaMemset(d_c, 0, bytes));
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        for (int i = 0; i < warmup; ++i) {
-            vector_add_float8<<<grid, block>>>(
-                reinterpret_cast<const float8*>(d_a),
-                reinterpret_cast<const float8*>(d_b),
-                reinterpret_cast<float8*>(d_c),
-                num_elements
-            );
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        CUDA_CHECK(cudaEventRecord(start));
-        for (int i = 0; i < iterations; ++i) {
-            vector_add_float8<<<grid, block>>>(
-                reinterpret_cast<const float8*>(d_a),
-                reinterpret_cast<const float8*>(d_b),
-                reinterpret_cast<float8*>(d_c),
-                num_elements
-            );
-        }
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        
-        float ms;
-        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        ms /= iterations;
-        float bandwidth = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
-        printf("%-20s %8.3f ms  %8.1f GB/s\n", name, ms, bandwidth);
-        vec8_ms = ms;
+    // Benchmark
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        optimized_vector_add_float4<<<grid, block>>>(
+            reinterpret_cast<float4*>(d_a),
+            reinterpret_cast<float4*>(d_b),
+            reinterpret_cast<float4*>(d_c),
+            num_float4
+        );
     }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
     
-    printf("\nSpeedup vs scalar:\n");
-    printf("  float4 (16B): %.2fx\n", scalar_ms / vec4_ms);
-    printf("  float8 (32B): %.2fx\n", scalar_ms / vec8_ms);
+    float ms;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    ms /= iterations;
     
-    printf("\nNotes:\n");
-    printf("  - 32-byte loads are optimal on Blackwell (SM 100+)\n");
-    printf("  - For FP8: 32-byte load = 32 FP8 values (vs 4 FP32 values)\n");
-    printf("  - Requires 32-byte aligned memory allocation\n");
-    printf("  - Benefits memory-bound kernels most\n");
+    // Bandwidth: 2 reads + 1 write
+    float bandwidth_gb = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
+    
+    printf("Results:\n");
+    printf("  Time per iteration: %.3f ms\n", ms);
+    printf("  Effective bandwidth: %.1f GB/s\n", bandwidth_gb);
+    printf("  HBM utilization: %.1f%% (peak ~8000 GB/s)\n", 
+           100.0f * bandwidth_gb / 8000.0f);
+    
+    printf("\nKey insight:\n");
+    printf("  float4 loads saturate HBM bandwidth.\n");
+    printf("  4x fewer instructions than scalar → higher throughput.\n");
+    printf("  Wider loads (float8) don't help further - HBM is the bottleneck.\n");
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -369,12 +171,6 @@ void benchmark_vector_widths() {
     CUDA_CHECK(cudaFree(d_a));
     CUDA_CHECK(cudaFree(d_b));
     CUDA_CHECK(cudaFree(d_c));
-}
-
-int main() {
-    benchmark_vector_widths();
+    
     return 0;
 }
-
-
-

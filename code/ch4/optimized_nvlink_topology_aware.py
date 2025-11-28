@@ -47,7 +47,9 @@ class OptimizedNvlinkTopologyAwareBenchmark(BaseBenchmark):
         super().__init__()
         self.src: Optional[torch.Tensor] = None
         self.dst: Optional[torch.Tensor] = None
-        self.numel = 10_000_000  # Match baseline payload (≈40 MB float32)
+        # Match baseline: 8M float16 = 16 MB to show topology benefit on same workload
+        self.numel = 8 * 1024 * 1024
+        self.dtype = torch.float16  # Match baseline dtype
         self.src_id = 0
         self.dst_id = 0
         self._workload = WorkloadMetadata(
@@ -68,8 +70,8 @@ class OptimizedNvlinkTopologyAwareBenchmark(BaseBenchmark):
         torch.cuda.device(self.src_id).enable_peer_access(self.dst_id)
         torch.cuda.device(self.dst_id).enable_peer_access(self.src_id)
 
-        self.src = torch.randn(n, device=f"cuda:{self.src_id}", dtype=torch.float32)
-        self.dst = torch.empty(n, device=f"cuda:{self.dst_id}", dtype=torch.float32)
+        self.src = torch.randn(n, device=f"cuda:{self.src_id}", dtype=self.dtype)
+        self.dst = torch.empty(n, device=f"cuda:{self.dst_id}", dtype=self.dtype)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -114,7 +116,7 @@ if __name__ == "__main__":
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=10, warmup=2),
+        config=BenchmarkConfig(iterations=10, warmup=5),
     )
     bench = OptimizedNvlinkTopologyAwareBenchmark()
     result = harness.benchmark(bench)

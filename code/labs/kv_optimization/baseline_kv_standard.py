@@ -25,7 +25,10 @@ logger = get_logger(__name__)
 
 
 class BaselineKVStandard(BaseBenchmark):
-    """Baseline KV cache (BF16, no compression)."""
+    """Baseline KV cache (BF16, no compression).
+    
+    Goal: memory - This benchmark measures memory usage for KV cache.
+    """
 
     def __init__(
         self,
@@ -148,6 +151,10 @@ class BaselineKVStandard(BaseBenchmark):
     def get_custom_metrics(self) -> Dict[str, Any]:
         return self._last_metrics
 
+    def get_optimization_goal(self) -> str:
+        """Memory optimization - lower memory usage is better."""
+        return "memory"
+
     def teardown(self):
         """Clean up."""
         del self.kv_cache
@@ -175,7 +182,7 @@ def run_benchmark(
 
     config = BenchmarkConfig(
         iterations=1,
-        warmup=0,
+        warmup=5,
         profile_mode=profile,
         use_subprocess=False,  # keep metrics available to caller
     )

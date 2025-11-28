@@ -62,7 +62,7 @@ class BaselineGemmBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=20, warmup=4)
+        return BenchmarkConfig(iterations=20, warmup=5)
 
     def get_workload_metadata(self):
         return self._workload

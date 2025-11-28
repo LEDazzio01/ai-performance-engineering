@@ -20,14 +20,14 @@ Ports the four-part Blackwell matmul deep dive into the harness: start with a na
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/blackwell_matmul
-python tools/cli/benchmark_cli.py run --targets labs/blackwell_matmul --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/blackwell_matmul
+python -m cli.aisp bench run --targets labs/blackwell_matmul --profile minimal
 ```
 - Targets follow the `labs/blackwell_matmul:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/blackwell_matmul:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/blackwell_matmul:blackwell_matmul_cluster --profile minimal` delivers higher TFLOP/s than the baseline and emits artifacts under `artifacts/labs_blackwell_matmul*`.
+- `python -m cli.aisp bench run --targets labs/blackwell_matmul:blackwell_matmul_cluster --profile minimal` delivers higher TFLOP/s than the baseline and emits artifacts under `artifacts/labs_blackwell_matmul*`.
 - `python labs/blackwell_matmul/run_blackwell_matmul.py --variant pipeline --size 4096 --roofline-meta artifacts/matmul_meta.csv` saves roofline metadata alongside timings.
 - `python labs/blackwell_matmul/run_blackwell_matmul.py --variant tcgen05_cta2 --size 2048` exercises the tcgen05 tensor-core path with CTA-group::2 multicast and TMEM epilogues (SM100+).
 - DSM-aware variants error out early on GPUs that lack cluster DSMEM support, preventing misleading results.

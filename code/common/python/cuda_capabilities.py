@@ -18,7 +18,7 @@ _force_pipeline: bool = False
 
 
 def set_force_pipeline(force: bool) -> None:
-    """Set the force pipeline flag (replaces AIPERF_FORCE_PIPELINE env var).
+    """Set the force pipeline flag.
     
     Args:
         force: If True, force enable pipeline kernels even on compute capability 12.0+.
@@ -107,8 +107,7 @@ def pipeline_runtime_allowed() -> Tuple[bool, str]:
     supported, reason = pipeline_support_status()
     if not supported:
         return False, reason
-    # Check global flag (set via CLI flag)
-    # Note: AIPERF_FORCE_PIPELINE env var is deprecated - use --force-pipeline CLI flag instead
+    # Check global flag (set via --force-pipeline CLI flag)
     force = _force_pipeline
     major, minor = _get_compute_capability()
     if major >= 12 and not force:

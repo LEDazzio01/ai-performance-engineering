@@ -1,6 +1,5 @@
-"""Unified CLI for benchmark execution and management."""
+"""CLI command implementations live under tools.cli.commands.
 
-from .benchmark_cli import app
+The entrypoint for the CLI has moved to cli/aisp.py (python -m cli.aisp)."""
 
-__all__ = ["app"]
-
+__all__ = []

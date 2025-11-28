@@ -247,7 +247,7 @@ def run_benchmark(
     
     config = BenchmarkConfig(
         iterations=3,
-        warmup=1,
+        warmup=5,
         profile_mode=profile,
     )
     
@@ -314,7 +314,7 @@ class _PlaceholderBenchmark(BaseBenchmark):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
     def benchmark_fn(self) -> None:
         x = torch.randn(256, 256, device=self.device, dtype=torch.float32)

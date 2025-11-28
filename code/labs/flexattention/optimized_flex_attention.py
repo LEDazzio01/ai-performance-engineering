@@ -115,8 +115,8 @@ class OptimizedFlexAttentionBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=6,
-            warmup=3,
+            iterations=10,
+            warmup=10,  # Required for FlexAttention + torch.compile JIT
             use_subprocess=False,
             measurement_timeout_seconds=60,
         )

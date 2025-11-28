@@ -20,10 +20,10 @@ class BaselineStreamOrderedBenchmark(BaseBenchmark):
         self.host_outputs: Optional[list[torch.Tensor]] = None
         self.device_inputs: Optional[list[torch.Tensor]] = None
         self.device_outputs: Optional[list[torch.Tensor]] = None
-        self.batch_size = 64
-        self.hidden_dim = 512
+        self.batch_size = 128
+        self.hidden_dim = 1024
         self.num_streams = 4
-        self.num_requests = 16
+        self.num_requests = 32  # More requests to amortize overhead
 
     def setup(self) -> None:
         torch.manual_seed(42)

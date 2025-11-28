@@ -1,52 +1,48 @@
+#!/usr/bin/env python3
 """Isolated benchmark runner for subprocess-based execution.
 
 Provides robust process isolation for benchmarks with reliable timeout cancellation.
 Benchmarks are executed in a child process that can be killed if it exceeds the timeout.
 Uses Pydantic models for type-safe result serialization.
+
+IMPORTANT: Heavy imports (torch, benchmark_harness, etc.) are DEFERRED to runtime
+to ensure the script can always output valid JSON errors even if imports fail.
 """
 
 from __future__ import annotations
 
+# ONLY import stdlib at module level - everything else is deferred
 import json
 import os
-import signal
-import subprocess
 import sys
-import tempfile
 import traceback
 from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
-# Ensure repo root is importable even when this file is executed via an absolute path
-_REPO_ROOT: Optional[Path] = None
-for parent in Path(__file__).resolve().parents:
-    candidate = parent / "common" / "__init__.py"
-    if candidate.exists():
-        _REPO_ROOT = parent
-        break
-if _REPO_ROOT is None:
-    # Fallback to the directory two levels up (common/python -> repo root)
-    try:
-        _REPO_ROOT = Path(__file__).resolve().parents[2]
-    except IndexError:
-        _REPO_ROOT = Path(__file__).resolve().parent
-repo_root_str = str(_REPO_ROOT)
-if repo_root_str not in sys.path:
-    sys.path.insert(0, repo_root_str)
-
-import torch
-
 if TYPE_CHECKING:
     from common.python.benchmark_models import BenchmarkResult, MemoryStats
 
-# Pydantic is required - fail fast if not available
-from common.python.benchmark_models import BenchmarkResult, MemoryStats
 
-PYDANTIC_AVAILABLE = True
-
-from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkConfig, BenchmarkMode, ExecutionMode
+def _setup_repo_path() -> str:
+    """Ensure repo root is importable even when this file is executed via an absolute path."""
+    repo_root: Optional[Path] = None
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "common" / "__init__.py"
+        if candidate.exists():
+            repo_root = parent
+            break
+    if repo_root is None:
+        # Fallback to the directory two levels up (common/python -> repo root)
+        try:
+            repo_root = Path(__file__).resolve().parents[2]
+        except IndexError:
+            repo_root = Path(__file__).resolve().parent
+    repo_root_str = str(repo_root)
+    if repo_root_str not in sys.path:
+        sys.path.insert(0, repo_root_str)
+    return repo_root_str
 
 
 def run_benchmark_isolated(
@@ -77,6 +73,25 @@ def run_benchmark_isolated(
         "result_json": None,
         "errors": [],
     }
+    
+    # DEFERRED IMPORTS - done here so any failures are caught and reported as JSON
+    try:
+        import torch
+    except ImportError as e:
+        result["errors"].append(f"Failed to import torch: {e}")
+        result["errors"].append(traceback.format_exc())
+        return result
+    
+    try:
+        from common.python.benchmark_models import BenchmarkResult, MemoryStats
+        from common.python.benchmark_harness import (
+            BaseBenchmark, BenchmarkHarness, BenchmarkConfig, 
+            BenchmarkMode, ExecutionMode
+        )
+    except ImportError as e:
+        result["errors"].append(f"Failed to import benchmark harness: {e}")
+        result["errors"].append(traceback.format_exc())
+        return result
     
     try:
         # Add repo root to path so we can import common.python modules
@@ -174,7 +189,7 @@ def run_benchmark_isolated(
             harness.device = torch.device(device)
         
         # Run benchmark - returns Pydantic BenchmarkResult
-        benchmark_result: BenchmarkResult = harness.benchmark(benchmark)
+        benchmark_result = harness.benchmark(benchmark)
         
         # Serialize Pydantic model to JSON
         result["success"] = True
@@ -184,7 +199,7 @@ def run_benchmark_isolated(
         # Specific errors for benchmark discovery/loading
         result["errors"].append(f"Benchmark discovery failed: {type(e).__name__}: {str(e)}")
         result["errors"].append(f"Traceback: {traceback.format_exc()}")
-    except (subprocess.TimeoutExpired, TimeoutError) as e:
+    except TimeoutError as e:
         # Timeout errors
         result["errors"].append(f"Benchmark execution timed out: {str(e)}")
         result["errors"].append(f"Traceback: {traceback.format_exc()}")
@@ -215,6 +230,10 @@ def main():
     - result_json: Serialized BenchmarkResult (Pydantic JSON)
     - errors: List of error messages
     """
+    # Setup repo path first
+    _setup_repo_path()
+    
+    # Read and parse input
     raw_input = sys.stdin.read()
     try:
         input_data = json.loads(raw_input)
@@ -231,7 +250,7 @@ def main():
             "errors": [
                 f"Invalid input: {type(e).__name__}: {str(e)}",
                 traceback.format_exc(),
-                f"Raw input: {raw_input}",
+                f"Raw input: {raw_input[:1000] if len(raw_input) > 1000 else raw_input}",
             ],
         }
         print(json.dumps(error_result))

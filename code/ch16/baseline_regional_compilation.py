@@ -132,7 +132,7 @@ class BaselineRegionalCompilationBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=1,
-            warmup=1,
+            warmup=10,
             setup_timeout_seconds=240,
             measurement_timeout_seconds=240,
             use_subprocess=False,

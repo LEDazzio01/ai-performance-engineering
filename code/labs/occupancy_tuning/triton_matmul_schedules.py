@@ -90,7 +90,7 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
         *,
         size: int = 4096,
         iterations: int = 2,
-        warmup: int = 1,
+        warmup: int = 10,
         dtype: torch.dtype = torch.float16,
         use_compile: bool = True,
     ) -> None:

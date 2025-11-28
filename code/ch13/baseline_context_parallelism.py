@@ -268,7 +268,7 @@ def get_benchmark() -> BaseBenchmark:
     if is_smoke_mode():
         class _SkipBenchmark(BaseBenchmark):
             def get_config(self) -> BenchmarkConfig:
-                return BenchmarkConfig(iterations=1, warmup=0)
+                return BenchmarkConfig(iterations=1, warmup=5)
 
             def benchmark_fn(self) -> None:
                 raise RuntimeError("SKIPPED: context_parallelism is a manual multi-GPU demo")

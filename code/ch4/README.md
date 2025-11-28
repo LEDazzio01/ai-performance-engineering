@@ -25,8 +25,8 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ch4
 python compare.py --profile none
-python tools/cli/benchmark_cli.py list-targets --chapter ch4
-python tools/cli/benchmark_cli.py run --targets ch4 --profile minimal
+python tools/cli/aisp bench list-targets --chapter ch4
+python tools/cli/aisp bench run --targets ch4 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
@@ -39,7 +39,7 @@ python tools/cli/benchmark_cli.py run --targets ch4 --profile minimal
 ## Notes
 - `symmetric_memory_*` helpers hold user-space allocators for pooling KV-cache lines across GPUs without NVSwitch penalties.
 - Use `nccl_blackwell_config.py` to seed NCCL env vars (min NRings, IB mapping) before launching multi-node tests.
-- `baseline_nvshmem_ibgda_microbench.py` / `optimized_nvshmem_ibgda_microbench.py` wrap the C++ IBGDA microbenchmark; run with `python tools/cli/benchmark_cli.py run --targets ch4:nvshmem_ibgda_microbench --profile none` once NVSHMEM is installed.
+- `baseline_nvshmem_ibgda_microbench.py` / `optimized_nvshmem_ibgda_microbench.py` wrap the C++ IBGDA microbenchmark; run with `python tools/cli/aisp bench run --targets ch4:nvshmem_ibgda_microbench --profile none` once NVSHMEM is installed.
 
 ### NVSHMEM IBGDA (GPUDirect Async) quick reference
 - Why: lets SMs ring NIC doorbells directly, removing the CPU proxy; blog data shows up to 9.5× higher throughput for sub-1 KiB puts and ~180 MOPS for register-level `nvshmem_p`.

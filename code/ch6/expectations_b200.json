@@ -57,19 +57,19 @@
       "metadata": {
         "best_optimization": "tensors",
         "best_optimization_file": "optimized_add_tensors.cu",
-        "best_optimization_speedup": 1.2140058548523627,
-        "best_optimization_time_ms": 849.9703499934791,
-        "git_commit": "f646d69853794d032292098502313153b54fff3d",
-        "updated_at": "2025-11-26T04:01:43.605464"
+        "best_optimization_speedup": 1.2088764554704496,
+        "best_optimization_time_ms": 344.85436933270347,
+        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
+        "updated_at": "2025-11-27T20:11:11.802918"
       },
       "metrics": {
-        "baseline_p75_ms": 1001.844534999691,
-        "baseline_p90_ms": 1001.844534999691,
-        "baseline_time_ms": 1031.8689813429955,
-        "best_optimized_p75_ms": 840.7642639940605,
-        "best_optimized_p90_ms": 840.7642639940605,
+        "baseline_p75_ms": 418.81673701573163,
+        "baseline_p90_ms": 418.81673701573163,
+        "baseline_time_ms": 416.8863276524159,
+        "best_optimized_p75_ms": 341.93684096680954,
+        "best_optimized_p90_ms": 341.93684096680954,
         "best_optimized_speedup": 1.1704113271464136,
-        "best_optimized_time_ms": 849.9703499934791,
+        "best_optimized_time_ms": 344.85436933270347,
         "best_speedup": 1.1704113271464136
       },
       "type": "cuda"
@@ -183,19 +183,19 @@
       "metadata": {
         "best_optimization": "conflicts",
         "best_optimization_file": "optimized_bank_conflicts.cu",
-        "best_optimization_speedup": 1.1374258342683985,
-        "best_optimization_time_ms": 845.7102403335739,
-        "git_commit": "f646d69853794d032292098502313153b54fff3d",
-        "updated_at": "2025-11-26T03:57:30.120425"
+        "best_optimization_speedup": 1.401358150901213,
+        "best_optimization_time_ms": 343.01874031856033,
+        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
+        "updated_at": "2025-11-27T20:11:09.410793"
       },
       "metrics": {
-        "baseline_p75_ms": 997.2333639743738,
-        "baseline_p90_ms": 997.2333639743738,
-        "baseline_time_ms": 961.932675660743,
-        "best_optimized_p75_ms": 850.5725119903218,
-        "best_optimized_p90_ms": 850.5725119903218,
+        "baseline_p75_ms": 477.05418698024005,
+        "baseline_p90_ms": 477.05418698024005,
+        "baseline_time_ms": 480.69210765728104,
+        "best_optimized_p75_ms": 357.76583501137793,
+        "best_optimized_p90_ms": 357.76583501137793,
         "best_optimized_speedup": 1.2400943218548341,
-        "best_optimized_time_ms": 845.7102403335739,
+        "best_optimized_time_ms": 343.01874031856033,
         "best_speedup": 1.2400943218548341
       },
       "type": "cuda"

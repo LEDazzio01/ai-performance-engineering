@@ -24,7 +24,7 @@ class BaselineFusedL2NormBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_fused_l2norm",
             friendly_name="Baseline Fused L2 Norm",
             iterations=5,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
         )
 

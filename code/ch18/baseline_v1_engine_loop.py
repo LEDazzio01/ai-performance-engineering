@@ -61,7 +61,7 @@ class BaselineV1EngineLoopBenchmark(BaseBenchmark):
         self.core_client = None
     
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=2)
+        return BenchmarkConfig(iterations=10, warmup=5)
 
     def setup(self) -> None:
         """Set up the mock engine stack."""

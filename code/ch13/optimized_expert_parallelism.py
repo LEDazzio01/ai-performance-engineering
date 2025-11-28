@@ -84,7 +84,7 @@ class OptimizedExpertParallelismBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=20,
-            warmup=3,
+            warmup=5,
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

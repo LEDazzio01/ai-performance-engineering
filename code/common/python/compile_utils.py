@@ -260,18 +260,6 @@ def compile_model(module: torch.nn.Module, **kwargs: Any) -> torch.nn.Module:
     if getattr(module, "_is_compiled_benchmark_module", False):
         return module
 
-    if torch.cuda.is_available():
-        try:
-            major, _ = torch.cuda.get_device_capability()
-        except Exception:
-            major = None
-        if major is not None and major >= 12 and os.environ.get("AIPERF_FORCE_TORCH_COMPILE") != "1":
-            _log_once(
-                "torch.compile skipped on SM>=12 – Triton/Inductor kernels are not yet "
-                "available for this architecture. Set AIPERF_FORCE_TORCH_COMPILE=1 to override."
-            )
-            return module
-
     try:
         compiled = compile_callable(module, **kwargs)
     except Exception as exc:

@@ -111,7 +111,7 @@ class OptimizedDockerBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=20, warmup=4)
+        return BenchmarkConfig(iterations=20, warmup=5)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -136,7 +136,7 @@ if __name__ == "__main__":
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
+        config=BenchmarkConfig(iterations=5, warmup=5),
     )
     result = harness.benchmark(get_benchmark())
     print(f"\nOptimized Docker latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

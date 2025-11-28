@@ -42,7 +42,7 @@ class BaselineMoeValidationBenchmark(BaseBenchmark):
         )
 
     def apply_target_overrides(self, argv: list[str]) -> None:
-        """Allow benchmark_cli --target-extra-arg to override config."""
+        """Allow aisp bench --target-extra-arg to override config."""
         parser = argparse.ArgumentParser(add_help=False)
         parser.add_argument("--vocab-size", type=int)
         parser.add_argument("--hidden-size", type=int)

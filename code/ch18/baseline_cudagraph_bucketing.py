@@ -85,7 +85,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
 
 class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
-    """Benchmark wrapper so the simulator can run via benchmark_cli."""
+    """Benchmark wrapper so the simulator can run via aisp bench."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -126,7 +126,7 @@ class BaselineCUDAGraphBucketingBenchmark(BaseBenchmark):
         )
 
     def get_config(self) -> Optional[BenchmarkConfig]:
-        return BenchmarkConfig(iterations=1, warmup=0, enable_profiling=False)
+        return BenchmarkConfig(iterations=1, warmup=5, enable_profiling=False)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -19,10 +19,10 @@ Benchmarks cuDNN fused scaled-dot-product attention against Flash and math backe
 Use the benchmark harness to sweep backends.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/cudnn_sdpa_bench
-python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend cudnn"
-python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend flash"
-python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend math"
+python -m cli.aisp bench list-targets --chapter labs/cudnn_sdpa_bench
+python -m cli.aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend cudnn"
+python -m cli.aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend flash"
+python -m cli.aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp="--backend math"
 ```
 - `--backend` is CLI-only; env vars are ignored by design.
 

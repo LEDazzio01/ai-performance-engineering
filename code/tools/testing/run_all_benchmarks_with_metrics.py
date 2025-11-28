@@ -205,7 +205,7 @@ if torch.cuda.is_available():
 
 benchmark.teardown()
 """)
-    wrapper_script.close()
+        wrapper_script.close()
         
         ncu_command = [
             "ncu",

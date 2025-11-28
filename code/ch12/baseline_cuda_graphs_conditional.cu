@@ -49,10 +49,8 @@ int main() {
     
     size_t bytes = N * sizeof(float);
     float *d_data = nullptr;
-    int *d_condition = nullptr;
     
     CUDA_CHECK(cudaMalloc(&d_data, bytes));
-    CUDA_CHECK(cudaMalloc(&d_condition, sizeof(int)));
     
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
@@ -66,17 +64,25 @@ int main() {
     constexpr int ITERS = 1000;
     constexpr float THRESHOLD = 1.5f;
     
+    int *d_condition = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_condition, sizeof(int)));
+    
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
     
+    // Baseline: host-side conditional dispatch with D2H synchronization
+    // This demonstrates the cost of host-device synchronization
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < ITERS; ++i) {
+        // Evaluate condition on device
         predicate_kernel<<<1, 1>>>(d_condition, d_data, N, THRESHOLD);
         
+        // D2H copy forces synchronization (this is the bottleneck!)
         int h_condition = 0;
         CUDA_CHECK(cudaMemcpy(&h_condition, d_condition, sizeof(int), cudaMemcpyDeviceToHost));
         
+        // Host-side conditional dispatch
         if (h_condition) {
             expensive_kernel<<<grid, block>>>(d_data, N, 1.01f);
         } else {
@@ -89,12 +95,12 @@ int main() {
     float ms = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
     
-    std::printf("Baseline (standard with D2H copy): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
+    std::printf("Baseline (individual kernel launches): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
-    CUDA_CHECK(cudaFree(d_data));
     CUDA_CHECK(cudaFree(d_condition));
+    CUDA_CHECK(cudaFree(d_data));
     
     return 0;
 }

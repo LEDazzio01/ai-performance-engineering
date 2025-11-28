@@ -118,7 +118,7 @@ class OptimizedDdpNvlinkOverlapBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=5, warmup=1)
+        return BenchmarkConfig(iterations=5, warmup=5)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     from common.python.benchmark_harness import BenchmarkHarness, BenchmarkMode
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=2, warmup=0),
+        config=BenchmarkConfig(iterations=2, warmup=5),
     )
     bench = OptimizedDdpNvlinkOverlapBenchmark()
     result = harness.benchmark(bench)

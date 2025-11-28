@@ -60,7 +60,7 @@ class BaselineStorageCpuBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=10,
-            warmup=2,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
         )

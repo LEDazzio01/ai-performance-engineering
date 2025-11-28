@@ -3,13 +3,61 @@
 This module provides a single source of truth for all default values used
 throughout the benchmark harness, enabling easy configuration via environment
 variables and configuration files.
+
+CRITICAL: Warmup iterations are REQUIRED to ensure JIT/compile overhead is NOT
+included in measurements. torch.compile, Triton kernels, and CUDA JIT all require
+warmup to reach steady-state performance.
 """
 
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import List, Optional
+
+
+# =============================================================================
+# WARMUP REQUIREMENTS - DO NOT CHANGE WITHOUT UNDERSTANDING THE IMPLICATIONS
+# =============================================================================
+# These constants ensure accurate benchmark measurements by excluding JIT overhead.
+# torch.compile typically needs 1-3 calls to fully compile, but we use higher values
+# to account for:
+#   - Multiple recompilations for dynamic shapes
+#   - Triton kernel JIT compilation
+#   - CUDA driver initialization
+#   - cuDNN autotuning
+#   - Memory allocator warmup
+
+MINIMUM_WARMUP_ITERATIONS = 5  # Absolute minimum for ANY benchmark
+RECOMMENDED_WARMUP_TORCH_COMPILE = 10  # For benchmarks using torch.compile
+RECOMMENDED_WARMUP_TRITON = 10  # For benchmarks using Triton kernels
+RECOMMENDED_WARMUP_CUDA_GRAPHS = 10  # For benchmarks using CUDA graphs
+DEFAULT_WARMUP_ITERATIONS = 10  # Standard default for all benchmarks
+
+
+def validate_warmup(warmup: int, context: str = "") -> int:
+    """Validate warmup iterations and warn if too low.
+    
+    Args:
+        warmup: Requested warmup iterations
+        context: Optional context for warning messages (e.g., benchmark name)
+        
+    Returns:
+        Validated warmup value (raised to minimum if necessary)
+    """
+    if warmup < MINIMUM_WARMUP_ITERATIONS:
+        ctx_str = f" for {context}" if context else ""
+        warnings.warn(
+            f"Warmup iterations ({warmup}){ctx_str} is below minimum ({MINIMUM_WARMUP_ITERATIONS}). "
+            f"This may include JIT/compile overhead in measurements, causing inaccurate results. "
+            f"Automatically raising to {MINIMUM_WARMUP_ITERATIONS}. "
+            f"If you intentionally need warmup=0, add internal warmup in setup() instead.",
+            UserWarning,
+            stacklevel=3
+        )
+        return MINIMUM_WARMUP_ITERATIONS
+    return warmup
 
 
 @dataclass
@@ -20,11 +68,14 @@ class BenchmarkDefaults:
     or via CLI flags (e.g., --iterations, --warmup, --profile).
     
     Note: Environment variables are no longer supported. Use CLI flags instead.
+    
+    IMPORTANT: Warmup iterations should NEVER be set below MINIMUM_WARMUP_ITERATIONS
+    to ensure JIT/compile overhead is excluded from measurements.
     """
     
     # Execution defaults
     iterations: int = 100
-    warmup: int = 10
+    warmup: int = DEFAULT_WARMUP_ITERATIONS  # Use constant for consistency
     min_run_time_ms: float = 100.0
     
     # Statistics defaults
@@ -59,14 +110,15 @@ class BenchmarkDefaults:
     seed: Optional[int] = 1337
     
     # Timeout defaults (in seconds)
-    setup_timeout_seconds: Optional[int] = 120
+    # Increased setup timeout for CUDA JIT compilation (can take 60+ seconds)
+    setup_timeout_seconds: Optional[int] = 300
     warmup_timeout_seconds: Optional[int] = None  # Defaults to measurement_timeout
     # Allow slow first-time compilations in subprocess isolation.
     measurement_timeout_seconds: int = 1200
     profiling_timeout_seconds: Optional[int] = None  # Defaults to max(nsys, ncu)
-    nsys_timeout_seconds: int = 120
-    ncu_timeout_seconds: int = 180
-    proton_timeout_seconds: int = 120
+    nsys_timeout_seconds: int = 180
+    ncu_timeout_seconds: int = 300
+    proton_timeout_seconds: int = 180
     timeout_multiplier: float = 3.0
     ncu_sampling_interval: int = 75000
     
@@ -88,13 +140,18 @@ class BenchmarkDefaults:
 
     @classmethod
     def for_smoke(cls, smoke: bool) -> BenchmarkDefaults:
-        """Return defaults optionally tuned for smoke-test mode."""
+        """Return defaults optionally tuned for smoke-test mode.
+        
+        Note: Even in smoke mode, warmup is kept at minimum (5) to ensure
+        JIT/compile overhead is excluded from measurements. This is critical
+        for accurate results even in quick validation runs.
+        """
         defaults = cls()
         if smoke:
             defaults.use_subprocess = False  # avoid doubling RSS with isolation
             defaults.execution_mode = "thread"
             defaults.iterations = 10
-            defaults.warmup = 2
+            defaults.warmup = MINIMUM_WARMUP_ITERATIONS  # Never go below minimum!
             defaults.min_run_time_ms = 10.0
             defaults.timeout_multiplier = 1.0
         return defaults
@@ -155,3 +212,30 @@ def set_defaults(defaults: BenchmarkDefaults) -> None:
     """Set the global BenchmarkDefaults instance (useful for testing)."""
     global _defaults
     _defaults = defaults
+
+
+def get_minimum_warmup() -> int:
+    """Get the minimum allowed warmup iterations."""
+    return MINIMUM_WARMUP_ITERATIONS
+
+
+def get_recommended_warmup(uses_torch_compile: bool = False, 
+                            uses_triton: bool = False,
+                            uses_cuda_graphs: bool = False) -> int:
+    """Get recommended warmup iterations based on features used.
+    
+    Args:
+        uses_torch_compile: Whether benchmark uses torch.compile
+        uses_triton: Whether benchmark uses Triton kernels
+        uses_cuda_graphs: Whether benchmark uses CUDA graphs
+        
+    Returns:
+        Recommended warmup iterations
+    """
+    if uses_torch_compile:
+        return RECOMMENDED_WARMUP_TORCH_COMPILE
+    if uses_triton:
+        return RECOMMENDED_WARMUP_TRITON
+    if uses_cuda_graphs:
+        return RECOMMENDED_WARMUP_CUDA_GRAPHS
+    return DEFAULT_WARMUP_ITERATIONS

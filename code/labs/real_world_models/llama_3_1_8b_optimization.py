@@ -135,14 +135,17 @@ class Llama31_8B_Optimization:
             for _ in range(4)  # Use 4 layers for faster benchmarking
         ]).to(self.device).to(torch.bfloat16)
         
-        # Apply torch.compile if requested
+        # Apply torch.compile if requested - compile each layer individually
         if self.use_compile:
             logger.info("Compiling model with torch.compile...")
-            self.layers = torch.compile(
-                self.layers,
-                mode="max-autotune",  # Best for Blackwell
-                fullgraph=True,
-            )
+            compiled_layers = []
+            for i, layer in enumerate(self.layers):
+                compiled_layers.append(torch.compile(
+                    layer,
+                    mode="max-autotune",  # Best for Blackwell
+                    fullgraph=True,
+                ))
+            self.layers = nn.ModuleList(compiled_layers)
         
         # Create input
         self.input = torch.randn(
@@ -160,7 +163,7 @@ class Llama31_8B_Optimization:
         torch.cuda.synchronize()
         start = time.perf_counter()
         
-        # Forward pass
+        # Forward pass through all layers
         x = self.input
         for layer in self.layers:
             x = layer(x)
@@ -207,7 +210,7 @@ def run_benchmark(
     
     config = BenchmarkConfig(
         iterations=5,
-        warmup=2,  # Warmup for compile
+        warmup=10,  # Warmup for compile
         profile_mode=profile,
     )
     

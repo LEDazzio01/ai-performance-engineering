@@ -24,7 +24,7 @@ class BaselineDynamicRouterVllmBenchmark(BaseBenchmark):
         self._summary = run_vllm_routing("baseline", cli_args=vllm_runner._CLI_ARGS)
 
     def get_config(self) -> Optional[BenchmarkConfig]:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return self._summary or None

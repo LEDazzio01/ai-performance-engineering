@@ -24,7 +24,7 @@ class OptimizedDoubleBufferedPipelineBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_double_buffered_pipeline",
             friendly_name="Optimized Double-buffered Pipeline",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             requires_pipeline_api=True,
             time_regex=r"TIME_MS:\s*([0-9.]+)",

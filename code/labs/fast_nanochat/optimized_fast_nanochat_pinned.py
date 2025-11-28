@@ -15,11 +15,14 @@ from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig
 def get_benchmark() -> NanoChatBenchmark:
     cfg = NanoChatConfig(
         batch_size=8,
-        prompt_tokens=1024,
-        decode_tokens=256,
-        hidden_size=2048,
+        prompt_tokens=256,   # Match baseline for fair comparison
+        decode_tokens=64,    # Match baseline for fair comparison
+        hidden_size=1024,    # Match baseline for fair comparison
         use_pinned_host=True,
+        use_copy_stream=True,  # Enable copy stream for async H2D transfers
         label="optimized_fast_nanochat_pinned",
+        iterations=12,
+        warmup=15,
     )
     return attach_benchmark_metadata(NanoChatBenchmark(cfg), __file__)
 

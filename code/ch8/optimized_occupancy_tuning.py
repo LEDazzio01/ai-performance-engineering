@@ -13,18 +13,24 @@ from ch8.baseline_occupancy_tuning import OccupancyBinaryBenchmark
 
 
 class OptimizedOccupancyTuningBenchmark(OccupancyBinaryBenchmark):
-    """Use unroll to raise ILP and hide latency at block=256."""
+    """Optimize occupancy: larger block (256), unroll (8), no heavy smem.
+    
+    Baseline artificially depresses occupancy with 45KB smem and small block.
+    This optimized version removes that constraint and uses ILP via unrolling.
+    """
 
     def __init__(self) -> None:
         super().__init__(
-            friendly_name="Occupancy Tuning (block=256, unroll=8, inner=16)",
+            friendly_name="Occupancy Tuning (block=256, unroll=8, no smem)",
             run_args=[
                 "--block-size",
                 "256",
+                "--smem-bytes",
+                "0",  # No heavy smem - allows higher occupancy
                 "--unroll",
-                "8",
+                "8",  # ILP via loop unrolling
                 "--inner-iters",
-                "16",
+                "1",  # Same work as baseline
                 "--reps",
                 "60",
             ],

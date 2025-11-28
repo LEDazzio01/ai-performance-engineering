@@ -246,7 +246,7 @@ class OptimizedVLLMDecodeGraphsBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=8,
-            warmup=2,
+            warmup=5,
             percentiles=[50, 75, 90, 99],
         )
 

@@ -96,7 +96,7 @@ def get_benchmark() -> BaseBenchmark:
 if __name__ == "__main__":
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=10, warmup=2),
+        config=BenchmarkConfig(iterations=10, warmup=5),
     )
     result = harness.benchmark(get_benchmark())
     print(f"\nOptimized NCCL latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

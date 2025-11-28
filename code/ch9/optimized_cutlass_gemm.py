@@ -24,7 +24,7 @@ class OptimizedCutlassGemmBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_cutlass_gemm",
             friendly_name="Optimized CUTLASS GEMM",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

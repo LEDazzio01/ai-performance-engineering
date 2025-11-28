@@ -15,15 +15,17 @@ from labs.fast_nanochat.nanochat_common import NanoChatBenchmark, NanoChatConfig
 def get_benchmark() -> NanoChatBenchmark:
     cfg = NanoChatConfig(
         batch_size=8,
-        prompt_tokens=1024,
-        decode_tokens=256,
-        hidden_size=2048,
+        prompt_tokens=256,   # Match optimized config for fair comparison
+        decode_tokens=64,    # Match optimized config for fair comparison
+        hidden_size=1024,    # Match optimized config for fair comparison
         use_pinned_host=False,
         use_copy_stream=False,
         use_compute_stream=False,
         use_cuda_graphs=False,
         use_torch_compile=False,
         label="baseline_fast_nanochat",
+        iterations=12,       # Match optimized iterations
+        warmup=15,           # Match optimized warmup
     )
     return attach_benchmark_metadata(NanoChatBenchmark(cfg), __file__)
 

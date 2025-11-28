@@ -21,8 +21,8 @@ Applies the course-wide optimization patterns to representative models (Llama 3.
 Use the benchmark harness for quick comparisons or drive the scripts directly.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/real_world_models
-python tools/cli/benchmark_cli.py run --targets labs/real_world_models --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/real_world_models
+python -m cli.aisp bench run --targets labs/real_world_models --profile minimal
 # Direct runs
 python labs/real_world_models/llama_3_1_8b_optimization.py --seq-length 8192 --use-compile
 python labs/real_world_models/deepseek_r1_moe_optimization.py --num-experts 64 --top-k 6 --batch-size 4

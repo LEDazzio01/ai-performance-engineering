@@ -474,12 +474,12 @@ class FP8PerChannelDemoBenchmark(BaseBenchmark):
             device=str(self.device),
         )
         # Warmup
-        _ = self.demo_benchmark.measure_throughput(num_warmup=3, num_iterations=3)
+        _ = self.demo_benchmark.measure_throughput(num_warmup=5, num_iterations=3)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         """Benchmark: Per-channel FP8 forward pass."""
-        results = self.demo_benchmark.measure_throughput(num_warmup=0, num_iterations=1)
+        results = self.demo_benchmark.measure_throughput(num_warmup=5, num_iterations=1)
         self._last = results.get("per_channel", {}).get("elapsed_ms", 0.0)
         self._synchronize()
 

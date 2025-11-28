@@ -74,7 +74,8 @@ class OptimizedArithmeticIntensityBenchmark(BaseBenchmark):
 
     def _fast_matmul(self) -> None:
         assert self.A is not None and self.B is not None and self.C is not None
-        self.C = torch.matmul(self.A, self.B)
+        # Use out= parameter to avoid allocation overhead on each iteration
+        torch.matmul(self.A, self.B, out=self.C)
     
     def benchmark_fn(self) -> None:
         """Function to benchmark - high arithmetic intensity (compute-bound)."""

@@ -21,7 +21,7 @@ class BaselineWarpSpecPingPongBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_warp_spec_pingpong",
             friendly_name="Standard Warp Specialization (Baseline)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

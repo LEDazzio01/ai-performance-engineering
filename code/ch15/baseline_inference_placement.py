@@ -59,7 +59,7 @@ class _PlacementBenchmark(BaseBenchmark):
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             measurement_timeout_seconds=60,
             timeout_multiplier=2.0,
         )

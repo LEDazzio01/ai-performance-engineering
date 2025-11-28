@@ -365,6 +365,12 @@ class BenchmarkConfig:
         if self.target_extra_args is None:
             self.target_extra_args = {}
         
+        # CRITICAL: Validate and enforce minimum warmup iterations
+        # This ensures JIT/compile overhead is NEVER included in measurements.
+        # See common/python/benchmark_defaults.py for rationale.
+        from common.python.benchmark_defaults import validate_warmup, MINIMUM_WARMUP_ITERATIONS
+        self.warmup = validate_warmup(self.warmup, context="BenchmarkConfig")
+        
         if self.enable_nvtx is None:
             # Auto-enable NVTX whenever profiling is requested (for nsys traces)
             self.enable_nvtx = self.enable_profiling
@@ -598,6 +604,83 @@ class BaseBenchmark:
             None if validation passes, or error message string if validation fails
         """
         return None
+
+    def skip_input_verification(self) -> bool:
+        """Return True to skip input equivalence verification for this benchmark.
+        
+        Override this in benchmarks where input verification is not applicable
+        (e.g., benchmarks that intentionally use different input sizes to test
+        scaling behavior, or informational benchmarks).
+        
+        Returns:
+            False by default (verification enabled)
+        """
+        return False
+
+    def skip_output_verification(self) -> bool:
+        """Return True to skip output correctness verification for this benchmark.
+        
+        Override this in benchmarks where output verification is not applicable
+        (e.g., benchmarks that produce non-deterministic outputs, or benchmarks
+        that test different algorithms with legitimately different results).
+        
+        Returns:
+            False by default (verification enabled)
+        """
+        return False
+
+    def get_input_signature(self) -> Optional[Dict[str, Any]]:
+        """Return a signature describing this benchmark's input workload.
+        
+        Used by the harness to verify that baseline and optimized benchmarks
+        operate on equivalent workloads. Without this verification, performance
+        comparisons are meaningless.
+        
+        The signature should capture all parameters that affect workload size:
+        - Tensor shapes (batch_size, seq_len, hidden_size, etc.)
+        - Model parameters (num_layers, num_heads, etc.)
+        - Any other configuration that affects computational work
+        
+        Default implementation infers from common attributes. Override for
+        custom workload descriptions.
+        
+        Returns:
+            Dict describing the input workload, or None if inference fails
+        """
+        signature: Dict[str, Any] = {}
+        
+        # Common workload attributes to capture
+        workload_attrs = [
+            # Tensor dimensions
+            "batch_size", "B", "seq_len", "seq_length", "sequence_length",
+            "hidden_size", "hidden_dim", "d_model", "embed_dim",
+            "num_heads", "n_heads", "nheads",
+            "num_layers", "n_layers", "nlayers",
+            "vocab_size", "num_classes",
+            # Matrix dimensions
+            "M", "N", "K", "m", "n", "k",
+            # Image dimensions
+            "height", "width", "channels", "H", "W", "C",
+            # Other common params
+            "num_tokens", "num_samples", "num_elements",
+            "input_size", "output_size",
+        ]
+        
+        for attr in workload_attrs:
+            if hasattr(self, attr):
+                value = getattr(self, attr)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    signature[attr] = value
+        
+        # Also capture tensor shapes if available
+        for attr in ["data", "input", "x", "inputs", "input_tensor"]:
+            if hasattr(self, attr):
+                tensor = getattr(self, attr)
+                if hasattr(tensor, "shape"):
+                    signature[f"{attr}_shape"] = tuple(tensor.shape)
+                    signature[f"{attr}_dtype"] = str(tensor.dtype) if hasattr(tensor, "dtype") else None
+        
+        return signature if signature else None
 
     def _verify_kernel(
         self,
@@ -955,6 +1038,21 @@ class BenchmarkHarness:
             )
         
         return seed_info
+
+    @contextmanager
+    def _nvtx_range(self, name: str):
+        """Context manager for NVTX ranges with automatic enable/disable.
+        
+        Args:
+            name: Name for the NVTX range
+        """
+        from common.python.nvtx_helper import nvtx_range, get_nvtx_enabled
+        
+        config = self.config
+        enable_nvtx = get_nvtx_enabled(config) if config else False
+        
+        with nvtx_range(name, enable=enable_nvtx):
+            yield
 
     def _world_size_hint(self, config: BenchmarkConfig) -> Optional[int]:
         """Best-effort world size estimation from config."""
@@ -1624,7 +1722,7 @@ class BenchmarkHarness:
                 preexec_fn=os.setsid  # Create new process group for reliable killing
             )
             
-            # Send input JSON
+            # Send input JSON and wait for result
             input_json = json.dumps(input_data)
             stdout, stderr = process.communicate(input=input_json, timeout=measurement_timeout)
             
@@ -2652,6 +2750,7 @@ class BenchmarkHarness:
         # Some benchmarks (e.g., external CUDA binaries) report their own timing.
         benchmark_obj = getattr(fn, "__self__", None)
         use_reported_time = bool(getattr(benchmark_obj, "use_reported_time", False))
+        range_name = getattr(config, "name", None) or getattr(fn, "__name__", "benchmark_fn")
         
         is_cuda = self.device.type == "cuda"
         
@@ -2669,8 +2768,9 @@ class BenchmarkHarness:
             for _ in range(config.iterations):
                 # Record start event (non-blocking)
                 start_event.record()
-                # Execute function under test - may return inference timing data
-                result = fn()
+                # Execute function under test with NVTX
+                with self._nvtx_range(range_name):
+                    result = fn()
                 # Record end event (non-blocking)
                 end_event.record()
                 # Synchronize only the end event (not device-wide) for accurate timing
@@ -2693,7 +2793,8 @@ class BenchmarkHarness:
             # CPU: use high-resolution timer
             for _ in range(config.iterations):
                 start_time = time.perf_counter()
-                result = fn()
+                with self._nvtx_range(range_name):
+                    result = fn()
                 end_time = time.perf_counter()
                 elapsed_ms = (end_time - start_time) * 1000
                 if use_reported_time:
@@ -2721,8 +2822,10 @@ class BenchmarkHarness:
     def _warmup(self, fn: Callable, warmup_iterations: int) -> None:
         """Perform warmup iterations."""
         is_cuda = self.device.type == "cuda"
+        range_name = getattr(fn, "__name__", "warmup")
         for _ in range(warmup_iterations):
-            fn()
+            with self._nvtx_range(f"{range_name}_warmup"):
+                fn()
         if is_cuda:
             torch.cuda.synchronize(self.device)
     

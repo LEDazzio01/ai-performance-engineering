@@ -57,6 +57,19 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
     def validate_result(self) -> Optional[str]:
         return super().validate_result()
 
+    def get_custom_metrics(self) -> Optional[dict]:
+        """Return NVFP4-specific metrics."""
+        metrics = super().get_custom_metrics() or {}
+        metrics.update({
+            "kv_cache.nvfp4_active": 1.0 if self.nvfp4_active else 0.0,
+            "kv_cache.compression_ratio": 4.0 if self.nvfp4_active else 2.0,  # NVFP4=4x, FP8=2x
+        })
+        return metrics
+
+    def get_optimization_goal(self) -> str:
+        """Memory optimization - lower memory usage is better."""
+        return "memory"
+
 
 def get_benchmark() -> BaselineKVCacheBenchmark:
     return OptimizedKVCacheNVFP4Benchmark()

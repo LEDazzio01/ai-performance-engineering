@@ -82,7 +82,7 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         # Keep short; this is primarily for profiling with --profile / nsys
         return BenchmarkConfig(
             iterations=8,
-            warmup=2,
+            warmup=5,
             use_subprocess=False,
             measurement_timeout_seconds=120,
         )

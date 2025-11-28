@@ -29,21 +29,19 @@ __global__ void gemm_naive_kernel(
     }
 
     double sum = 0.0;
-    // Simulate repeatedly streaming the same tiles from global memory by
-    // re-reading the entire K dimension twice before writing the result.
-    for (int pass = 0; pass < 2; ++pass) {
-        for (int kk = 0; kk < K; ++kk) {
-            sum += static_cast<double>(A[row * K + kk]) *
-                   static_cast<double>(B[kk * N + col]);
-        }
+    // Standard global memory GEMM - read A and B rows/columns from global memory
+    for (int kk = 0; kk < K; ++kk) {
+        sum += static_cast<double>(A[row * K + kk]) *
+               static_cast<double>(B[kk * N + col]);
     }
-    C[row * N + col] = static_cast<float>(sum * 0.5);
+    C[row * N + col] = static_cast<float>(sum);
 }
 
 int main() {
-    const int M = 1024;
-    const int N = 1024;
-    const int K = 1024;
+    // Larger matrices to show double-buffering benefit
+    const int M = 2048;
+    const int N = 2048;
+    const int K = 2048;
     const size_t bytes_A = static_cast<size_t>(M) * K * sizeof(float);
     const size_t bytes_B = static_cast<size_t>(K) * N * sizeof(float);
     const size_t bytes_C = static_cast<size_t>(M) * N * sizeof(float);

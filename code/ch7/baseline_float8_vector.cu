@@ -1,17 +1,29 @@
-// baseline_float8_vector.cu - Scalar/float4 Loads (Ch7)
+// baseline_float8_vector.cu - Scalar Loads (Ch7)
 //
-// WHAT: Standard scalar and float4 (16-byte) vectorized loads.
-// No 32-byte vectorization.
+// WHAT: Naive scalar loads - 1 float (4 bytes) per memory operation.
 //
 // WHY THIS IS SLOWER:
-//   - Scalar: 1 float (4 bytes) per load instruction
-//   - float4: 4 floats (16 bytes) per load instruction
-//   - On Blackwell with HBM3e (~8 TB/s), wider loads needed to saturate bandwidth
+//   - Each thread issues individual 4-byte loads/stores
+//   - Memory controller must handle many small requests
+//   - Instruction-limited: too many load/store instructions
+//   - Does NOT saturate HBM bandwidth on modern GPUs
+//
+// BOOK CONTEXT (Ch7 - Memory Coalescing & Vectorization):
+//   The book discusses memory coalescing and vectorized loads as key optimizations.
+//   Scalar loads waste memory bandwidth because:
+//   1. Each warp issues 32 separate 4-byte requests
+//   2. Memory controller must coalesce them (overhead)
+//   3. Cache lines are 128 bytes, but we only use 4 bytes per request initially
+//
+// EXPECTED PERFORMANCE:
+//   - ~2.5-3 TB/s effective bandwidth (well below HBM peak of 8 TB/s)
+//   - Limited by instruction throughput, not memory bandwidth
 //
 // COMPARE WITH: optimized_float8_vector.cu
-//   - Optimized uses 32-byte (float8) loads
-//   - 8 floats per load instruction
-//   - Better bandwidth utilization on Blackwell
+//   - Uses float4 (16-byte) vectorized loads
+//   - 4 floats per load instruction → fewer instructions
+//   - Saturates HBM bandwidth at ~6 TB/s
+//   - Expected speedup: ~2-2.5x
 
 #include <cuda_runtime.h>
 #include <cstdio>
@@ -31,7 +43,10 @@
 constexpr int BLOCK_SIZE = 256;
 
 //============================================================================
-// Baseline: Scalar Loads (4 bytes)
+// Baseline: Scalar Loads (4 bytes per operation)
+// - Each thread loads/stores individual floats
+// - Memory controller must coalesce 32 × 4-byte requests per warp
+// - Instruction-limited: many load/store instructions
 //============================================================================
 
 __global__ void baseline_vector_add_scalar(
@@ -42,32 +57,9 @@ __global__ void baseline_vector_add_scalar(
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        c[idx] = a[idx] + b[idx];  // Two 4-byte loads, one 4-byte store
-    }
-}
-
-//============================================================================
-// Baseline: float4 Loads (16 bytes)
-//============================================================================
-
-__global__ void baseline_vector_add_float4(
-    const float4* __restrict__ a,
-    const float4* __restrict__ b,
-    float4* __restrict__ c,
-    int n
-) {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        float4 va = a[idx];  // 16-byte load
-        float4 vb = b[idx];  // 16-byte load
-        
-        float4 vc;
-        vc.x = va.x + vb.x;
-        vc.y = va.y + vb.y;
-        vc.z = va.z + vb.z;
-        vc.w = va.w + vb.w;
-        
-        c[idx] = vc;  // 16-byte store
+        // Scalar loads: 2 × 4-byte loads, 1 × 4-byte store
+        // Per warp: 32 × 4B = 128 bytes, but issued as 32 separate requests
+        c[idx] = a[idx] + b[idx];
     }
 }
 
@@ -79,18 +71,19 @@ int main() {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
-    printf("Baseline Vectorized Loads (Scalar + float4)\n");
-    printf("===========================================\n");
+    printf("Baseline: Scalar (4-byte) Loads\n");
+    printf("================================\n");
     printf("Device: %s (SM %d.%d)\n", prop.name, prop.major, prop.minor);
     printf("\n");
     
-    // Large array to saturate bandwidth
+    // Large array to measure bandwidth accurately
     const int N = 128 * 1024 * 1024;  // 128M floats = 512 MB per array
     const size_t bytes = N * sizeof(float);
     
     printf("Array size: %zu MB per array\n", bytes / (1024 * 1024));
-    printf("Total data movement: %zu MB (2 reads + 1 write)\n\n", 
+    printf("Total data movement: %zu MB (2 reads + 1 write)\n", 
            3 * bytes / (1024 * 1024));
+    printf("Load width: 4 bytes (1 float per instruction)\n\n");
     
     // Allocate
     float *d_a, *d_b, *d_c;
@@ -110,91 +103,44 @@ int main() {
     const int warmup = 5;
     const int iterations = 20;
     
-    //========================================================================
-    // Benchmark Scalar
-    //========================================================================
-    printf("%-20s %8s  %10s\n", "Variant", "Time", "Bandwidth");
-    printf("%-20s %8s  %10s\n", "-------", "----", "---------");
+    dim3 block(BLOCK_SIZE);
+    dim3 grid((N + BLOCK_SIZE - 1) / BLOCK_SIZE);
     
-    {
-        dim3 block(BLOCK_SIZE);
-        dim3 grid((N + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        
-        // Clear L2
-        CUDA_CHECK(cudaMemset(d_c, 0, bytes));
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        // Warmup
-        for (int i = 0; i < warmup; ++i) {
-            baseline_vector_add_scalar<<<grid, block>>>(d_a, d_b, d_c, N);
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        // Benchmark
-        CUDA_CHECK(cudaEventRecord(start));
-        for (int i = 0; i < iterations; ++i) {
-            baseline_vector_add_scalar<<<grid, block>>>(d_a, d_b, d_c, N);
-        }
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        
-        float ms;
-        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        ms /= iterations;
-        
-        float bandwidth = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
-        printf("%-20s %8.3f ms  %8.1f GB/s\n", "Scalar (4B)", ms, bandwidth);
+    // Clear L2 cache
+    CUDA_CHECK(cudaMemset(d_c, 0, bytes));
+    CUDA_CHECK(cudaDeviceSynchronize());
+    
+    // Warmup
+    for (int i = 0; i < warmup; ++i) {
+        baseline_vector_add_scalar<<<grid, block>>>(d_a, d_b, d_c, N);
     }
+    CUDA_CHECK(cudaDeviceSynchronize());
     
-    //========================================================================
-    // Benchmark float4
-    //========================================================================
-    {
-        int num_float4 = N / 4;
-        dim3 block(BLOCK_SIZE);
-        dim3 grid((num_float4 + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        
-        // Clear L2
-        CUDA_CHECK(cudaMemset(d_c, 0, bytes));
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        // Warmup
-        for (int i = 0; i < warmup; ++i) {
-            baseline_vector_add_float4<<<grid, block>>>(
-                reinterpret_cast<float4*>(d_a),
-                reinterpret_cast<float4*>(d_b),
-                reinterpret_cast<float4*>(d_c),
-                num_float4
-            );
-        }
-        CUDA_CHECK(cudaDeviceSynchronize());
-        
-        // Benchmark
-        CUDA_CHECK(cudaEventRecord(start));
-        for (int i = 0; i < iterations; ++i) {
-            baseline_vector_add_float4<<<grid, block>>>(
-                reinterpret_cast<float4*>(d_a),
-                reinterpret_cast<float4*>(d_b),
-                reinterpret_cast<float4*>(d_c),
-                num_float4
-            );
-        }
-        CUDA_CHECK(cudaEventRecord(stop));
-        CUDA_CHECK(cudaEventSynchronize(stop));
-        
-        float ms;
-        CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-        ms /= iterations;
-        
-        float bandwidth = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
-        printf("%-20s %8.3f ms  %8.1f GB/s\n", "float4 (16B)", ms, bandwidth);
+    // Benchmark
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        baseline_vector_add_scalar<<<grid, block>>>(d_a, d_b, d_c, N);
     }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
     
-    printf("\nNotes:\n");
-    printf("  - Scalar: 4 bytes per load (1 float)\n");
-    printf("  - float4: 16 bytes per load (4 floats)\n");
-    printf("  - Compare with optimized_float8_vector for 32-byte loads\n");
-    printf("  - 32-byte loads are optimal on Blackwell (SM 100+)\n");
+    float ms;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    ms /= iterations;
+    
+    // Bandwidth: 2 reads + 1 write
+    float bandwidth_gb = (3.0f * bytes) / (ms / 1000.0f) / 1e9f;
+    
+    printf("Results:\n");
+    printf("  Time per iteration: %.3f ms\n", ms);
+    printf("  Effective bandwidth: %.1f GB/s\n", bandwidth_gb);
+    printf("  HBM utilization: %.1f%% (peak ~8000 GB/s)\n", 
+           100.0f * bandwidth_gb / 8000.0f);
+    
+    printf("\nKey insight:\n");
+    printf("  Scalar loads are instruction-limited, not bandwidth-limited.\n");
+    printf("  Many small loads → high instruction overhead.\n");
+    printf("  See optimized_float8_vector.cu for vectorized loads.\n");
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -205,6 +151,3 @@ int main() {
     
     return 0;
 }
-
-
-

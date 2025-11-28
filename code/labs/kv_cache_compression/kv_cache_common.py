@@ -75,6 +75,8 @@ class KVCacheAttention(nn.Module):
         layernorm_cls: Type[nn.Module],
         enable_tmem_epilogue: bool = False,
         tmem_copy_fn: Optional[Callable[[torch.Tensor], None]] = None,
+        params_dtype: torch.dtype = torch.bfloat16,
+        device: Optional[torch.device] = None,
     ) -> None:
         super().__init__()
         if hidden_dim % num_heads != 0:
@@ -83,9 +85,21 @@ class KVCacheAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.scale = (self.head_dim**-0.5)
-        self.ln = layernorm_cls(hidden_dim)
-        self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True)
-        self.proj = linear_cls(hidden_dim, hidden_dim, bias=True)
+        # TELayerNorm needs params_dtype too
+        try:
+            self.ln = layernorm_cls(hidden_dim, params_dtype=params_dtype, device=device)
+        except TypeError:
+            self.ln = layernorm_cls(hidden_dim)
+        # For TELinear, pass params_dtype and device to avoid dtype mismatch
+        try:
+            self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True, 
+                                  params_dtype=params_dtype, device=device)
+            self.proj = linear_cls(hidden_dim, hidden_dim, bias=True,
+                                   params_dtype=params_dtype, device=device)
+        except TypeError:
+            # Fall back for standard nn.Linear which doesn't accept params_dtype
+            self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True)
+            self.proj = linear_cls(hidden_dim, hidden_dim, bias=True)
         self.enable_tmem_epilogue = enable_tmem_epilogue
         self._tmem_copy_fn = tmem_copy_fn
 

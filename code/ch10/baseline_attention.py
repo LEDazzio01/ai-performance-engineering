@@ -1,4 +1,15 @@
-"""baseline_attention.py - Baseline attention without tensor cores."""
+"""baseline_attention.py - Naive attention implementation (baseline).
+
+Chapter 10: Blackwell Software Optimizations
+
+This baseline demonstrates a naive attention implementation with:
+- Explicit Q, K, V matrix multiplications
+- Softmax with explicit exp/sum operations
+- Multiple separate kernel launches
+- No memory-efficient attention algorithms
+
+The naive approach has O(n²) memory complexity and poor cache efficiency.
+"""
 
 from __future__ import annotations
 
@@ -11,32 +22,38 @@ from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 
 class BaselineAttentionBenchmark(BaseBenchmark):
-    """Standard FP32 multi-head attention (no tensor core acceleration)."""
+    """Naive attention with explicit matrix operations."""
 
     def __init__(self):
         super().__init__()
-        self.model: Optional[nn.Module] = None
-        self.input: Optional[torch.Tensor] = None
-        self.batch_size = 4
-        self.seq_len = 128
-        self.hidden_dim = 256
-        self.num_heads = 8
+        self.query: Optional[torch.Tensor] = None
+        self.key: Optional[torch.Tensor] = None
+        self.value: Optional[torch.Tensor] = None
+        # Larger sizes to show optimization benefits
+        self.batch_size = 16
+        self.seq_len = 512
+        self.hidden_dim = 1024
+        self.num_heads = 16
+        self.head_dim = self.hidden_dim // self.num_heads
+        self.scale = 1.0 / (self.head_dim ** 0.5)
 
     def setup(self) -> None:
         torch.manual_seed(42)
-        self.model = nn.MultiheadAttention(
-            embed_dim=self.hidden_dim,
-            num_heads=self.num_heads,
-            batch_first=True,
-        ).to(self.device).eval()
-
-        self.input = torch.randn(
-            self.batch_size,
-            self.seq_len,
-            self.hidden_dim,
-            device=self.device,
-            dtype=torch.float32,
+        
+        # Create Q, K, V tensors in FP32 (no tensor cores)
+        self.query = torch.randn(
+            self.batch_size, self.num_heads, self.seq_len, self.head_dim,
+            device=self.device, dtype=torch.float32
         )
+        self.key = torch.randn(
+            self.batch_size, self.num_heads, self.seq_len, self.head_dim,
+            device=self.device, dtype=torch.float32
+        )
+        self.value = torch.randn(
+            self.batch_size, self.num_heads, self.seq_len, self.head_dim,
+            device=self.device, dtype=torch.float32
+        )
+        
         self._synchronize()
         tokens = float(self.batch_size * self.seq_len)
         self.register_workload_metadata(
@@ -45,23 +62,44 @@ class BaselineAttentionBenchmark(BaseBenchmark):
         )
 
     def benchmark_fn(self) -> None:
-        assert self.model is not None
-        assert self.input is not None
-        with self._nvtx_range("baseline_attention"):
+        """Benchmark: Naive attention with explicit operations.
+        
+        Naive approach:
+        1. Compute attention scores: QK^T (O(n²) memory)
+        2. Scale scores
+        3. Apply softmax (materializes full attention matrix)
+        4. Compute output: Attention @ V
+        
+        This creates a full n×n attention matrix, causing:
+        - O(n²) memory usage
+        - Poor cache locality
+        - Multiple kernel launches
+        """
+        with self._nvtx_range("baseline_attention_naive"):
             with torch.no_grad():
-                _output, _ = self.model(self.input, self.input, self.input)
+                # Naive: Explicit matrix multiplications
+                # Q @ K^T -> (batch, heads, seq, seq) attention matrix
+                attn_scores = torch.matmul(self.query, self.key.transpose(-2, -1))
+                attn_scores = attn_scores * self.scale
+                
+                # Softmax over last dimension (materializes full attention matrix)
+                attn_weights = torch.softmax(attn_scores, dim=-1)
+                
+                # Attention @ V -> output
+                _output = torch.matmul(attn_weights, self.value)
         self._synchronize()
 
     def teardown(self) -> None:
-        self.model = None
-        self.input = None
+        self.query = None
+        self.key = None
+        self.value = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=50, warmup=5)
+        return BenchmarkConfig(iterations=50, warmup=10)
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
+        """Return domain-specific metrics."""
         from common.python.benchmark_metrics import compute_pipeline_metrics
         return compute_pipeline_metrics(
             num_stages=getattr(self, 'num_stages', 4),
@@ -69,10 +107,8 @@ class BaselineAttentionBenchmark(BaseBenchmark):
         )
 
     def validate_result(self) -> Optional[str]:
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None:
-            return "Input not initialized"
+        if self.query is None or self.key is None or self.value is None:
+            return "Tensors not initialized"
         return None
 
 

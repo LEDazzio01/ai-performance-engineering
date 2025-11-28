@@ -49,9 +49,9 @@
 #
 # After running this script, you can:
 #   - Run examples: python3 ch1/performance_basics.py
-#   - Drive the benchmark suite: python tools/cli/benchmark_cli.py run
+#   - Drive the benchmark suite: python tools/cli/aisp bench run
 #   - Capture peak performance: python tools/benchmarking/benchmark_peak.py
-#   - Verify examples: python tools/cli/benchmark_cli.py verify
+#   - Verify examples: python tools/cli/aisp bench verify
 #
 
 set -e  # Exit on any error
@@ -124,12 +124,36 @@ if [ "${VLLM_WHEEL_ARCH}" = "arm64" ]; then
     VLLM_WHEEL_ARCH="aarch64"
 fi
 VLLM_WHEEL_PATTERN="${VLLM_WHEEL_PATTERN:-${VLLM_WHEEL_DIR}/vllm-*-${PYTHON_ABI_TAG}-${PYTHON_ABI_TAG}-linux_${VLLM_WHEEL_ARCH}.whl}"
+# =============================================================================
+# DEPENDENCY VERSION PINS (update together, test after changes)
+# Run: python scripts/check_upstream_versions.py --check-te-cutlass
+# Source of truth for pinned versions lives here (dependency_versions.json removed)
+# =============================================================================
+#
+# CUTLASS 4.3.0 - Required for SM100a (Blackwell) support
+#   - Provides: tmem_allocator_sm100.hpp, mma_sm100_umma.hpp, copy_traits_sm100.hpp
+#   - Commit e67e63c331d6 is post-release with corrected version.h
+#
+# TransformerEngine v2.9 - Stable release with CUDA 13 wheels
+#   - IMPORTANT: TE v2.9 still bundles CUTLASS 4.2.0 (commit 57e3cfb47a2d)
+#   - CUTLASS 4.2.0 LACKS SM100a headers - symlink workaround REQUIRED
+#   - We replace TE's bundled CUTLASS with our 4.3.0 via symlink
+#   - Check: make verify-cutlass
+#
+# When to remove symlink workaround:
+#   - When TE bundles CUTLASS >= 4.3.0 with SM100a headers
+#   - Run: python scripts/check_upstream_versions.py --check-te-cutlass
+#   - If "TE main bundles: CUTLASS 4.3.0+" appears, symlink may be removable
+#
 TE_REPO_URL="${TE_REPO_URL:-https://github.com/NVIDIA/TransformerEngine.git}"
-TE_GIT_COMMIT="${TE_GIT_COMMIT:-f8cb598c9f3af2bc512a051abec75590b25f54c4}"
+# TE v2.9 release (2025-11-11) - stable release with CUDA 13 support
+TE_GIT_COMMIT="${TE_GIT_COMMIT:-70f536662ae1f11f8ee3dc9acc63ee28127c64a8}"
+TE_VERSION="v2.9"
+TE_BUNDLED_CUTLASS_VERSION="4.2.0"  # What TE bundles (needs symlink override)
 TE_SRC_DIR="${TE_SRC_DIR:-${THIRD_PARTY_DIR}/TransformerEngine}"
 CUTLASS_REPO_URL="${CUTLASS_REPO_URL:-https://github.com/NVIDIA/cutlass.git}"
-# Use the 4.3.0 commit (no public tag available)
-CUTLASS_REF="${CUTLASS_REF:-8cd5bef43a2b0d3f9846b026c271593c6e4a8e8a}"
+# CUTLASS 4.3.0 - post-release commit with corrected version.h
+CUTLASS_REF="${CUTLASS_REF:-e67e63c331d6d5ceb552aa8f7e5f5efb26565a1e}"
 CUTLASS_TARGET_VERSION="${CUTLASS_TARGET_VERSION:-4.3.0}"
 CUTLASS_SRC_DIR="${CUTLASS_SRC_DIR:-${THIRD_PARTY_DIR}/cutlass}"
 PIP_ROOT_USER_ACTION="ignore"
@@ -1771,11 +1795,45 @@ git -C "${TE_SRC_DIR}" checkout "${TE_GIT_COMMIT}" >/dev/null 2>&1 || true
 git -C "${TE_SRC_DIR}" submodule sync --recursive >/dev/null 2>&1 || true
 git -C "${TE_SRC_DIR}" submodule update --init --recursive >/dev/null 2>&1 || true
 
-# Point TE's bundled cutlass to the top-level CUTLASS (4.3.0 commit) to avoid missing headers
+# =============================================================================
+# CRITICAL: CUTLASS Version Override for Blackwell (SM100a) Support
+# =============================================================================
+# TransformerEngine ${TE_VERSION} bundles CUTLASS ${TE_BUNDLED_CUTLASS_VERSION} which LACKS SM100a headers.
+# We MUST replace TE's bundled CUTLASS with our standalone CUTLASS ${CUTLASS_TARGET_VERSION}.
+#
+# Required SM100a headers (only in CUTLASS 4.3.0+):
+#   - cute/arch/tmem_allocator_sm100.hpp
+#   - cute/arch/mma_sm100_umma.hpp
+#   - cute/atom/copy_traits_sm100.hpp
+#
+# Without this symlink: Blackwell builds WILL FAIL with "missing header" errors.
+# Verification: make verify-cutlass
+# Check if still needed: python scripts/check_upstream_versions.py --check-te-cutlass
+# =============================================================================
+echo "  CUTLASS version override for SM100a (Blackwell) support:"
+echo "    TE ${TE_VERSION} bundles: CUTLASS ${TE_BUNDLED_CUTLASS_VERSION} (missing SM100a headers)"
+echo "    Standalone CUTLASS:   ${CUTLASS_TARGET_VERSION} (has SM100a headers)"
+echo "  Creating symlink to override TE's bundled CUTLASS..."
+
 if [ -d "${TE_SRC_DIR}/3rdparty/cutlass" ] || [ -L "${TE_SRC_DIR}/3rdparty/cutlass" ]; then
     rm -rf "${TE_SRC_DIR}/3rdparty/cutlass"
 fi
 ln -s "${CUTLASS_SRC_DIR}" "${TE_SRC_DIR}/3rdparty/cutlass"
+
+# Verify the symlink is correct and SM100a headers exist
+if [ ! -L "${TE_SRC_DIR}/3rdparty/cutlass" ]; then
+    echo "ERROR: Failed to create CUTLASS symlink for TransformerEngine"
+    echo "       This will cause Blackwell builds to fail!"
+    echo "       Try: ./scripts/fix_cutlass_symlink.sh"
+    exit 1
+fi
+if [ ! -f "${TE_SRC_DIR}/3rdparty/cutlass/include/cute/arch/tmem_allocator_sm100.hpp" ]; then
+    echo "ERROR: CUTLASS SM100a headers missing after symlink - Blackwell builds will fail"
+    echo "       Expected: ${TE_SRC_DIR}/3rdparty/cutlass/include/cute/arch/tmem_allocator_sm100.hpp"
+    echo "       Try: ./scripts/install_cutlass.sh && ./scripts/fix_cutlass_symlink.sh"
+    exit 1
+fi
+echo "  ✓ TE CUTLASS symlinked: ${TE_BUNDLED_CUTLASS_VERSION} → ${CUTLASS_TARGET_VERSION} (SM100a ready)"
 
 pip_install --no-input --upgrade --ignore-installed pybind11
 

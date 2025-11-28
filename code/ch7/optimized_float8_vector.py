@@ -21,7 +21,7 @@ class OptimizedFloat8VectorBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_float8_vector",
             friendly_name="32-byte Vectorized Loads",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

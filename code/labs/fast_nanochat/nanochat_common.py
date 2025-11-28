@@ -84,7 +84,7 @@ class NanoChatConfig:
     graph_full_iteration: bool = False
     use_torch_compile: bool = False
     iterations: int = 8
-    warmup: int = 3
+    warmup: int = 10
     label: str = "fast_nanochat"
 
 

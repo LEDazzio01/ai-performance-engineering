@@ -129,7 +129,7 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
         # Keep iterations modest to make sweeps quick.
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             timeout_seconds=120,
             measurement_timeout_seconds=120,
             use_subprocess=False,

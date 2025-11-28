@@ -239,23 +239,13 @@ void benchmark_cache_policies() {
         
         // Warmup
         for (int i = 0; i < warmup; ++i) {
-            kernel<<<g, block>>>(
-                reinterpret_cast<std::remove_pointer_t<decltype(d_a)>*>(d_a),
-                reinterpret_cast<std::remove_pointer_t<decltype(d_b)>*>(d_b),
-                reinterpret_cast<std::remove_pointer_t<decltype(d_c)>*>(d_c),
-                n / elem_per_thread
-            );
+            kernel<<<g, block>>>(d_a, d_b, d_c, n / elem_per_thread);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
         
         CUDA_CHECK(cudaEventRecord(start));
         for (int i = 0; i < iterations; ++i) {
-            kernel<<<g, block>>>(
-                reinterpret_cast<std::remove_pointer_t<decltype(d_a)>*>(d_a),
-                reinterpret_cast<std::remove_pointer_t<decltype(d_b)>*>(d_b),
-                reinterpret_cast<std::remove_pointer_t<decltype(d_c)>*>(d_c),
-                n / elem_per_thread
-            );
+            kernel<<<g, block>>>(d_a, d_b, d_c, n / elem_per_thread);
         }
         CUDA_CHECK(cudaEventRecord(stop));
         CUDA_CHECK(cudaEventSynchronize(stop));

@@ -109,11 +109,17 @@ void dsmem_cluster_reduction_kernel(
     
     // Shared memory for reductions
     __shared__ float smem_reduce[32];  // For warp results
-    __shared__ float smem_cluster[CLUSTER_SIZE];  // For cluster reduction
+    __shared__ float smem_cluster_sum;  // For cluster-level atomic aggregation
     
     // Global offset for this cluster
     const int cluster_offset = cluster_id * elements_per_cluster;
     const int block_offset = cluster_offset + cluster_rank * ELEMENTS_PER_BLOCK;
+    
+    // Initialize cluster accumulator (only leader does this)
+    if (cluster_rank == 0 && tid == 0) {
+        smem_cluster_sum = 0.0f;
+    }
+    cluster.sync();
     
     //========================================================================
     // STEP 1: Each CTA reduces its chunk
@@ -132,32 +138,23 @@ void dsmem_cluster_reduction_kernel(
     float block_sum = block_reduce_sum(local_sum, smem_reduce);
     
     //========================================================================
-    // STEP 2: Write block result to cluster-visible shared memory
+    // STEP 2: Aggregate block results via cluster-visible atomic
+    // Using atomicAdd to cluster leader's smem_cluster_sum via DSMEM
     //========================================================================
     if (tid == 0) {
-        smem_cluster[cluster_rank] = block_sum;
+        // Get pointer to leader's (rank 0) shared memory
+        float* leader_sum = cluster.map_shared_rank(&smem_cluster_sum, 0);
+        atomicAdd(leader_sum, block_sum);
     }
     
-    // Synchronize entire cluster
+    // Synchronize entire cluster to ensure all blocks have contributed
     cluster.sync();
     
     //========================================================================
-    // STEP 3: Cluster leader reads all block results via DSMEM
+    // STEP 3: Cluster leader writes final result to global memory
     //========================================================================
-    if (cluster_rank == 0) {
-        float cluster_sum = smem_cluster[0];  // Own result
-        
-        // Read from peer CTAs via DSMEM
-        #pragma unroll
-        for (int peer = 1; peer < CLUSTER_SIZE; ++peer) {
-            float* peer_smem = cluster.map_shared_rank(smem_cluster, peer);
-            cluster_sum += peer_smem[peer];
-        }
-        
-        // Single atomic add to global output
-        if (tid == 0) {
-            atomicAdd(&output[cluster_id], cluster_sum);
-        }
+    if (cluster_rank == 0 && tid == 0) {
+        output[cluster_id] = smem_cluster_sum;
     }
     
 #else
@@ -253,7 +250,8 @@ int main() {
     
     const bool has_clusters = prop.major >= 9;
     if (!has_clusters) {
-        printf("\nNote: DSMEM requires SM 9.0+. Running fallback kernel.\n");
+        printf("\nSKIP: DSMEM requires SM 9.0+ (current: SM %d.%d)\n", prop.major, prop.minor);
+        return 0;  // Skip gracefully, no fallback
     }
     
     // Problem size
@@ -323,26 +321,47 @@ int main() {
     
     //========================================================================
     // Benchmark DSMEM Cluster Reduction
+    // Note: Uses cluster.sync() for distributed shared memory communication
     //========================================================================
     printf("\nDSMEM Cluster Reduction:\n");
     
     CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
     
-    // Note: Full cluster launch would use cudaLaunchAttributeClusterDimension
-    // This simplified version uses the fallback path
+    // Configure cluster launch attributes
+    cudaLaunchAttribute launchAttr[1];
+    launchAttr[0].id = cudaLaunchAttributeClusterDimension;
+    launchAttr[0].val.clusterDim.x = CLUSTER_SIZE;
+    launchAttr[0].val.clusterDim.y = 1;
+    launchAttr[0].val.clusterDim.z = 1;
+    
+    cudaLaunchConfig_t config = {};
+    config.gridDim = dim3(num_blocks, 1, 1);
+    config.blockDim = dim3(BLOCK_SIZE, 1, 1);
+    config.dynamicSmemBytes = 0;
+    config.stream = nullptr;
+    config.attrs = launchAttr;
+    config.numAttrs = 1;
+    
+    int N_arg = N;
+    int epc_arg = elements_per_cluster;
+    
+    // Launch with cluster structure
     for (int i = 0; i < warmup; ++i) {
-        dsmem_cluster_reduction_kernel<<<num_blocks, BLOCK_SIZE>>>(
-            d_input, d_output, N, elements_per_cluster);
+        CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
+        CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel, 
+            d_input, d_output, N_arg, epc_arg));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
-        dsmem_cluster_reduction_kernel<<<num_blocks, BLOCK_SIZE>>>(
-            d_input, d_output, N, elements_per_cluster);
+        CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
+        CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel,
+            d_input, d_output, N_arg, epc_arg));
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
+    printf("  (Using cluster launch with CLUSTER_SIZE=%d)\n", CLUSTER_SIZE);
     
     float ms_dsmem;
     CUDA_CHECK(cudaEventElapsedTime(&ms_dsmem, start, stop));

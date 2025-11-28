@@ -76,8 +76,8 @@ def _chapter_run_commands(slug: str) -> RunSection:
     commands = [
         f"cd {slug}",
         "python compare.py --profile none",
-        f"python tools/cli/benchmark_cli.py list-targets --chapter {slug}",
-        f"python tools/cli/benchmark_cli.py run --targets {slug} --profile minimal",
+        f"python tools/cli/aisp bench list-targets --chapter {slug}",
+        f"python tools/cli/aisp bench run --targets {slug} --profile minimal",
     ]
     notes = [
         "Override `--profile` or `--iterations` per workload when capturing Nsight traces.",
@@ -90,8 +90,8 @@ def _lab_run_commands(slug: str) -> RunSection:
     """Default run commands for a lab that is exposed through the CLI."""
     commands = [
         "cd ai-performance-engineering",
-        f"python tools/cli/benchmark_cli.py list-targets --chapter {slug}",
-        f"python tools/cli/benchmark_cli.py run --targets {slug} --profile minimal",
+        f"python tools/cli/aisp bench list-targets --chapter {slug}",
+        f"python tools/cli/aisp bench run --targets {slug} --profile minimal",
     ]
     notes = [
         f"Targets follow the `{slug}:<workload>` naming convention listed by `list-targets`.",
@@ -162,7 +162,7 @@ ENTRIES["README.md"] = Entry(
         ("`ch1` - `ch20`", "One directory per chapter with baseline/optimized benchmarks, workload configs, and `compare.py` harness entrypoints."),
         ("`labs/`", "Deep-dive labs for matmul, routing, FlexAttention, MoE, persistent decode, distributed training, and more."),
         ("`common/python/`", "Shared benchmark harness, logging, workload metadata, and profiling utilities used by every chapter."),
-        ("`tools/cli/benchmark_cli.py`", "Typer-based CLI for running, profiling, and verifying targets with reproducible artifacts."),
+        ("`tools/cli/aisp bench`", "Typer-based CLI for running, profiling, and verifying targets with reproducible artifacts."),
         ("`docs/` + `scripts/`", "Operational guides, profiling workflows, and setup/reset helpers (`setup.sh`, `cleanup.py`, `reset-gpu.sh`)."),
     ],
     run=RunSection(
@@ -170,8 +170,8 @@ ENTRIES["README.md"] = Entry(
             "cd ai-performance-engineering",
             "python3 -m venv .venv && source .venv/bin/activate",
             "pip install -r requirements_latest.txt",
-            "python tools/cli/benchmark_cli.py list-targets --chapter ch1",
-            "python tools/cli/benchmark_cli.py run --targets ch1 --profile minimal",
+            "python tools/cli/aisp bench list-targets --chapter ch1",
+            "python tools/cli/aisp bench run --targets ch1 --profile minimal",
         ],
         notes=[
             "`setup.sh` installs system prerequisites (drivers, CUDA, Nsight) and should be rerun after driver upgrades.",
@@ -182,7 +182,7 @@ ENTRIES["README.md"] = Entry(
     validation=[
         "`pytest tests/integration` succeeds to confirm harness discovery and CLI plumbing.",
         "`python tools/benchmarking/benchmark_peak.py` reports TFLOP/s, bandwidth, and NVLink numbers close to the published ceilings.",
-        "`python tools/cli/benchmark_cli.py verify --targets all` completes without regressions before refreshing expectation files.",
+        "`python tools/cli/aisp bench verify --targets all` completes without regressions before refreshing expectation files.",
     ],
     notes=[
         "`tools/profiling/profile.sh` and `ncu_template.ini` capture Nsight traces with consistent metric sets.",
@@ -857,7 +857,7 @@ ENTRIES["labs/blackwell_matmul"] = lab_entry(
         ("`grace_blackwell_extension.py`, `grace_blackwell_kernels.cu`", "PyTorch extension and CUDA kernels implementing the baseline and optimized kernels."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/blackwell_matmul:blackwell_matmul_cluster --profile minimal` delivers higher TFLOP/s than the baseline and emits artifacts under `artifacts/labs_blackwell_matmul*`.",
+        "`python tools/cli/aisp bench run --targets labs/blackwell_matmul:blackwell_matmul_cluster --profile minimal` delivers higher TFLOP/s than the baseline and emits artifacts under `artifacts/labs_blackwell_matmul*`.",
         "`python labs/blackwell_matmul/run_blackwell_matmul.py --variant pipeline --size 4096 --roofline-meta artifacts/matmul_meta.csv` saves roofline metadata alongside timings.",
         "DSM-aware variants error out early on GPUs that lack cluster DSMEM support, preventing misleading results.",
     ],
@@ -926,9 +926,9 @@ ENTRIES["labs/cudnn_sdpa_bench"] = lab_entry(
         ("`expectations_gb10.json`", "Current golden timings on GB10 for regression checking."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend cudnn\"` captures cuDNN with Nsight traces.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend flash\"` compares the Flash path against cuDNN.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend math\"` sanity-checks the math backend where fused kernels are unsupported.",
+        "`python tools/cli/aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --profile minimal --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend cudnn\"` captures cuDNN with Nsight traces.",
+        "`python tools/cli/aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend flash\"` compares the Flash path against cuDNN.",
+        "`python tools/cli/aisp bench run --targets labs/cudnn_sdpa_bench:flash_sdp --target-extra-arg labs/cudnn_sdpa_bench:flash_sdp=\"--backend math\"` sanity-checks the math backend where fused kernels are unsupported.",
     ],
     notes=[
         "Backend selection is CLI-only; environment variables are intentionally ignored.",
@@ -958,10 +958,10 @@ ENTRIES["labs/dynamic_router"] = lab_entry(
     ],
     validation=[
         "`python labs/dynamic_router/driver.py --mode baseline` vs `--mode optimized` shows lower TTFT variance and higher TPOT for the optimized policy.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router --profile minimal` records artifacts comparing baseline/optimized harness runs.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dynamic_router_vllm --target-extra-arg labs/dynamic_router:dynamic_router_vllm=\"--model /path/to/model --decode-gpus 0,1\"` succeeds on hosts with at least two GPUs and a local model copy.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:dual_pool_vllm --target-extra-arg labs/dynamic_router:dual_pool_vllm=\"--model /path/to/model --prefill-gpus 0 --decode-gpus 1\"` contrasts shared versus dual pools and emits per-pool TTFT and queue depth.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/dynamic_router:topology_probe` captures GPU↔NUMA mappings and distance matrices for consumption by the router.",
+        "`python tools/cli/aisp bench run --targets labs/dynamic_router --profile minimal` records artifacts comparing baseline/optimized harness runs.",
+        "`python tools/cli/aisp bench run --targets labs/dynamic_router:dynamic_router_vllm --target-extra-arg labs/dynamic_router:dynamic_router_vllm=\"--model /path/to/model --decode-gpus 0,1\"` succeeds on hosts with at least two GPUs and a local model copy.",
+        "`python tools/cli/aisp bench run --targets labs/dynamic_router:dual_pool_vllm --target-extra-arg labs/dynamic_router:dual_pool_vllm=\"--model /path/to/model --prefill-gpus 0 --decode-gpus 1\"` contrasts shared versus dual pools and emits per-pool TTFT and queue depth.",
+        "`python tools/cli/aisp bench run --targets labs/dynamic_router:topology_probe` captures GPU↔NUMA mappings and distance matrices for consumption by the router.",
     ],
     notes=[
         "`driver.py` accepts knobs such as `--prefill-gpus`, `--decode-gpus`, and `--migration-budget` to stress different regimes.",
@@ -989,9 +989,9 @@ ENTRIES["labs/flexattention"] = lab_entry(
         ("`flexattention_common.py`, `expectations_gb10.json`", "Shared input builders, score modifiers, and regression thresholds."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.",
-        "`BLOCK_SIZE=64 DOC_SPAN=128 python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.",
-        "`python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.",
+        "`python tools/cli/aisp bench run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.",
+        "`BLOCK_SIZE=64 DOC_SPAN=128 python tools/cli/aisp bench run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.",
+        "`python tools/cli/aisp bench run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.",
     ],
     notes=[
         "Environment variables such as `BLOCK_SIZE`, `DOC_SPAN`, and `TORCH_COMPILE_MODE` are read at runtime for quick experiments.",
@@ -1019,7 +1019,7 @@ ENTRIES["labs/fullstack_cluster"] = lab_entry(
         ("`run_lab_fullstack_cluster.py`, `gpu_requirements.py`, `expectations_gb10.json`", "Standalone runner, hardware requirement helper, and expectation file."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/fullstack_cluster --profile minimal` records per-phase metrics for the entire scenario suite.",
+        "`python tools/cli/aisp bench run --targets labs/fullstack_cluster --profile minimal` records per-phase metrics for the entire scenario suite.",
         "`python labs/fullstack_cluster/run_lab_fullstack_cluster.py --size 2048` builds the extension on first run and prints baseline vs optimized TFLOP/s.",
         "KF-specific kernels skip gracefully on hardware lacking tcgen05 or DSMEM, ensuring CI signal stays meaningful.",
     ],
@@ -1050,7 +1050,7 @@ ENTRIES["labs/moe_cuda"] = lab_entry(
         ("`expectations_gb10.json`, `__init__.py`", "Metadata and module exports needed by the harness."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.",
+        "`python tools/cli/aisp bench run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.",
         "`python labs/moe_cuda/optimized_decode_attention_math.py --validate` compares the CUDA path to the math reference and fails loudly if drift is detected.",
         "KV transfer graphs print latency breakdowns showing overlap improvements relative to the baseline script.",
     ],
@@ -1081,7 +1081,7 @@ ENTRIES["labs/moe_parallelism"] = lab_entry(
         ("`benchmarking.py`, `run_lab.py`, `__init__.py`", "Lab driver, Typer CLI, and exports used by the harness."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/moe_parallelism --profile minimal` runs every planner pair and drops JSON/Markdown summaries.",
+        "`python tools/cli/aisp bench run --targets labs/moe_parallelism --profile minimal` runs every planner pair and drops JSON/Markdown summaries.",
         "`python labs/moe_parallelism/run_lab.py --scenario grouped` prints an actionable plan (experts/GPU, bandwidth needs) for the chosen scenario.",
         "`python labs/moe_parallelism/optimized_memory_budget.py --validate` ensures optimized allocations meet the same correctness checks as the baseline.",
     ],
@@ -1110,7 +1110,7 @@ ENTRIES["labs/occupancy_tuning"] = lab_entry(
         ("`sweep_schedules.py`", "Utility for enumerating candidate schedules and logging throughput/occupancy to `artifacts/`."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/occupancy_tuning --profile minimal` executes every schedule defined in the lab.",
+        "`python tools/cli/aisp bench run --targets labs/occupancy_tuning --profile minimal` executes every schedule defined in the lab.",
         "`python labs/occupancy_tuning/sweep_schedules.py --output artifacts/occupancy_tuning.csv` enumerates schedules and highlights the top performer.",
         "`python labs/occupancy_tuning/optimized_proton_matmul_bm128_bn128_bk32_nw8.py --validate` compares outputs against the baseline to ensure correctness.",
     ],
@@ -1140,7 +1140,7 @@ ENTRIES["labs/persistent_decode"] = lab_entry(
         ("`persistent_decode_common.py`, `tma_extension.py`, `expectations_gb10.json`", "Shared helpers, CUDA extension wrappers, and expectation thresholds."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.",
+        "`python tools/cli/aisp bench run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.",
         "`python labs/persistent_decode/optimized_persistent_decode_graphs.py --iterations 50` shows lower launch overhead than `baseline_persistent_decode.py`.",
         "`python labs/persistent_decode/optimized_native_tma_prefill_decode.py --validate` matches the math reference while reporting achieved memory throughput.",
         "`python labs/persistent_decode/kv_locality_microbench.py` surfaces H2D copy time deltas for pageable vs pinned slabs; add `QUICK=1` for a short smoke run.",
@@ -1172,7 +1172,7 @@ ENTRIES["labs/train_distributed"] = lab_entry(
         ("`training_utils/`, `utils.py`, `__init__.py`", "Shared launch utilities, argument parsing, and harness exports."),
     ],
     validation=[
-        "`python tools/cli/benchmark_cli.py run --targets labs/train_distributed --profile minimal` runs every distributed configuration registered with the harness.",
+        "`python tools/cli/aisp bench run --targets labs/train_distributed --profile minimal` runs every distributed configuration registered with the harness.",
         "`python labs/train_distributed/train_fsdp.py --validate` confirms numerical parity between FSDP shards and the baseline DDP path.",
         "`python labs/train_distributed/optimized_zero3.py --summary` shows reduced peak memory vs the baseline script.",
     ],

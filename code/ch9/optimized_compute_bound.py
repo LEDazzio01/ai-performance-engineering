@@ -155,8 +155,8 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=5,
-            warmup=1,
+            iterations=10,
+            warmup=5,  # Minimum warmup to exclude CUDA JIT overhead
             enable_memory_tracking=False,
             enable_profiling=False,
         )

@@ -1,13 +1,19 @@
-"""optimized_multiple_unoptimized.py - All optimizations combined."""
+"""optimized_multiple_unoptimized.py - All optimizations combined.
+
+Chapter 20 demonstrates stacking multiple optimizations:
+1. FP16 precision for tensor core acceleration
+2. torch.compile for kernel fusion
+3. CUDA graphs for reduced launch overhead
+"""
 
 from __future__ import annotations
 
 from typing import Optional
 import os
+import warnings
 
 import torch
 import torch.nn as nn
-import warnings
 
 try:
     import ch20.arch_config  # noqa: F401 - Apply chapter defaults
@@ -46,7 +52,8 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         self.x: Optional[torch.Tensor] = None
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.x_capture: Optional[torch.Tensor] = None
-        self.batch_size = 32
+        # Larger batch size to amortize compile/graph overhead
+        self.batch_size = 128
         self.hidden_dim = 4096
         self._inductor_cfg_state: Optional[InductorCudagraphState] = None
         tokens = self.batch_size * self.hidden_dim
@@ -61,52 +68,61 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
             if torch.cuda.is_available():
                 torch.backends.cudnn.benchmark = True
                 torch.backends.cudnn.deterministic = False
+            
+            # Optimization 1: FP16 for tensor cores
             self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).half().eval()
             
+            # Optimization 2: torch.compile for kernel fusion
             self.model = compile_model(
                 self.model,
                 mode="reduce-overhead",
                 fullgraph=False,
                 dynamic=False,
             )
+            
+            # Warmup compile
             test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-            for _ in range(3):
+            for _ in range(10):
                 with torch.no_grad():
                     _ = self.model(test_input)
             torch.cuda.synchronize()
             
             self.x = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
             
+            # Extended warmup for stable compilation
             for _ in range(50):
                 with torch.no_grad():
                     _ = self.model(self.x)
             torch.cuda.synchronize()
             
+            # Optimization 3: CUDA graph capture
             self.graph = None
             self.x_capture = None
             try:
                 graph = torch.cuda.CUDAGraph()
                 self.x_capture = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-                graph_warmups = 5
-                for _ in range(graph_warmups):
+                
+                # Pre-graph warmup
+                for _ in range(5):
                     with torch.no_grad():
                         _ = self.model(self.x_capture)
                 torch.cuda.synchronize()
                 
+                # Capture graph
                 with torch.cuda.graph(graph):
                     with torch.no_grad():
                         _ = self.model(self.x_capture)
                 torch.cuda.synchronize()
                 
-                graph_replays = 10
-                for _ in range(graph_replays):
+                # Validate graph replay
+                for _ in range(10):
                     graph.replay()
                 torch.cuda.synchronize()
                 self.graph = graph
             except RuntimeError as e:
                 if "Cannot prepare for replay during capturing stage" in str(e):
                     warnings.warn(
-                        "TorchInductor already uses CUDA graphs on this platform; skipping manual CUDA graph capture.",
+                        "TorchInductor already uses CUDA graphs on this platform; skipping manual capture.",
                         RuntimeWarning,
                     )
                     self.graph = None
@@ -124,8 +140,10 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         with self._nvtx_range("multiple_techniques_optimized"):
             with torch.no_grad():
                 if self.graph is None:
+                    # Use compiled model
                     _ = self.model(self.x)
                 else:
+                    # Use CUDA graph replay (fastest)
                     self.graph.replay()
             self._synchronize()
     
@@ -141,7 +159,7 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=200,
-            warmup=10,
+            warmup=50,  # Extra warmup for compile/graph stability
             use_subprocess=True,
         )
     
@@ -149,14 +167,12 @@ class OptimizedAllTechniquesBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from common.python.benchmark_metrics import compute_ai_optimization_metrics
-        return compute_ai_optimization_metrics(
-            original_time_ms=getattr(self, '_original_ms', 10.0),
-            ai_optimized_time_ms=getattr(self, '_optimized_ms', 5.0),
-            suggestions_applied=getattr(self, '_suggestions_applied', 1),
-            suggestions_total=getattr(self, '_suggestions_total', 1),
-        )
+        """Return optimization stack metrics."""
+        return {
+            "ch20.uses_fp16": 1.0,
+            "ch20.uses_compile": 1.0,
+            "ch20.uses_cuda_graph": 1.0 if self.graph is not None else 0.0,
+        }
 
     def validate_result(self) -> Optional[str]:
         if self.model is None:

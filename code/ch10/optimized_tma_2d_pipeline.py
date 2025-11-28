@@ -19,7 +19,7 @@ class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
             binary_name="tma_2d_pipeline_blackwell",
             friendly_name="TMA 2D Pipeline Optimized (Tensor Memory Accelerator)",
             iterations=1,
-            warmup=0,
+            warmup=5,
             timeout_seconds=90,
             run_args=(),
             requires_pipeline_api=True,

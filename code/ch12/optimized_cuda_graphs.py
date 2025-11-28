@@ -30,8 +30,8 @@ class OptimizedCudaGraphsBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.data = None
-        self.N = 1 << 18  # Match baseline problem size.
-        self.iterations = 200
+        self.N = 1 << 20  # 1M elements - large enough for meaningful work
+        self.iterations = 500  # More iterations to amortize graph capture cost
         self._extension = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -80,7 +80,7 @@ class OptimizedCudaGraphsBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take time

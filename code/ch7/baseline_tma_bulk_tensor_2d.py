@@ -24,7 +24,7 @@ class BaselineTMABulkTensor2D(CudaBinaryBenchmark):
             binary_name="baseline_tma_bulk_tensor_2d",
             friendly_name="Baseline 2D tensor copy (manual)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

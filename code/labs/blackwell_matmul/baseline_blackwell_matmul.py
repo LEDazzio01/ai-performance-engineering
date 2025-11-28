@@ -27,7 +27,7 @@ class BaselineGraceBlackwellBenchmark(GraceBlackwellMatmulBenchmark):
             label="grace_blackwell_matmul_baseline",
             size=size,
             iterations=3,
-            warmup=1,
+            warmup=5,
             descriptor=descriptor,
             reference_runner=None,
         )

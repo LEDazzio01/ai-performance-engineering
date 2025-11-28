@@ -20,16 +20,16 @@ Mirrors the FlexAttention CuTe DSL walkthrough: run eager vs compiled FlexAttent
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/flexattention
-python tools/cli/benchmark_cli.py run --targets labs/flexattention --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/flexattention
+python -m cli.aisp bench run --targets labs/flexattention --profile minimal
 ```
 - Targets follow the `labs/flexattention:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/flexattention:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.
-- `BLOCK_SIZE=64 DOC_SPAN=128 python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.
-- `python tools/cli/benchmark_cli.py run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.
+- `python -m cli.aisp bench run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.
+- `BLOCK_SIZE=64 DOC_SPAN=128 python -m cli.aisp bench run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.
+- `python -m cli.aisp bench run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.
 
 ## Notes
 - Environment variables such as `BLOCK_SIZE`, `DOC_SPAN`, and `TORCH_COMPILE_MODE` are read at runtime for quick experiments.

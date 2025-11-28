@@ -33,7 +33,7 @@ class Tcgen05GraceBlackwellBenchmark(GraceBlackwellMatmulBenchmark):
             label="grace_blackwell_matmul_tcgen05",
             size=size,
             iterations=5,
-            warmup=2,
+            warmup=5,
             descriptor=descriptor,
             reference_runner=baseline_blackwell_matmul,
         )
@@ -52,7 +52,7 @@ class Tcgen05Cta2GraceBlackwellBenchmark(GraceBlackwellMatmulBenchmark):
             label="grace_blackwell_matmul_tcgen05_cta2",
             size=size,
             iterations=5,
-            warmup=2,
+            warmup=5,
             descriptor=descriptor,
             reference_runner=baseline_blackwell_matmul,
         )

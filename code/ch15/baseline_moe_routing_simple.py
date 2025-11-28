@@ -127,7 +127,7 @@ def run_benchmark(
     )
     benchmark.setup()
     
-    config = BenchmarkConfig(iterations=10, warmup=2, profile_mode=profile)
+    config = BenchmarkConfig(iterations=10, warmup=5, profile_mode=profile)
     harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
     
     result = harness.benchmark(benchmark.run, name="baseline_moe_routing")

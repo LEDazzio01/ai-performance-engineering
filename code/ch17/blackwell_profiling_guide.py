@@ -300,7 +300,7 @@ def profile_with_pytorch_profiler(
         profile_memory=profile_memory,
         with_stack=with_stack,
         on_trace_ready=profiler.tensorboard_trace_handler(output_dir),
-        schedule=profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+        schedule=profiler.schedule(wait=1, warmup=5, active=3, repeat=1),
     ) as prof:
         for _ in range(5):
             fn()

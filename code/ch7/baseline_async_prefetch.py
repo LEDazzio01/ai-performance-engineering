@@ -24,7 +24,7 @@ class BaselineAsyncPrefetchBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_async_prefetch",
             friendly_name="Baseline Async Prefetch",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

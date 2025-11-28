@@ -24,7 +24,7 @@ class OptimizedAsyncPrefetchBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_async_prefetch",
             friendly_name="Optimized Async Prefetch",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
             # time_regex uses default TIME_MS pattern from CUDA output
         )

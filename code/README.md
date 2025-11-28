@@ -20,8 +20,10 @@ python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {tor
 python ch7/optimized_memory_access.py
 
 # Or use the CLI
-python tools/cli/benchmark_cli.py run --targets ch7 --profile minimal
+python -m cli.aisp bench run --targets ch7 --profile minimal
 ```
+
+> Canonical CLI: use `aisp` for everything. No other CLI wrappers are maintained.
 
 ---
 
@@ -60,16 +62,16 @@ python ch7/optimized_memory_access.py
 ### Using the CLI
 ```bash
 # List available targets
-python tools/cli/benchmark_cli.py list-targets --chapter ch7
+python -m cli.aisp bench list-targets --chapter ch7
 
 # Run with profiling
-python tools/cli/benchmark_cli.py run --targets ch7 --profile minimal
+python -m cli.aisp bench run --targets ch7 --profile minimal
 
 # Compare baseline vs optimized
-python -m tools.cli.benchmark_cli compare ch7.baseline_memory_access ch7.optimized_memory_access
+python -m cli.aisp bench compare ch7.baseline_memory_access ch7.optimized_memory_access
 
 # Quick verification (lightweight smoke test)
-python -m tools.cli.benchmark_cli verify --targets ch7
+python -m cli.aisp bench verify --targets ch7
 ```
 
 ### Using the Harness Directly
@@ -97,6 +99,14 @@ ncu -o kernel_analysis python ch7/optimized_memory_access.py
 nsys-ui timeline.nsys-rep
 ncu-ui kernel_analysis.ncu-rep
 ```
+
+---
+
+## MCP Integration (aisp MCP server)
+
+- Start the server with `python -m tools.mcp.server --serve` (or via `mcp.json`); clients should consume the `application/json` content entry from MCP responses.
+- `isError` mirrors the payload `status` field returned in the JSON envelope.
+- Response trimming is generous by default; tune via env vars without code changes: `AISP_MCP_PREVIEW_LIMIT` (max chars) and `AISP_MCP_PREVIEW_ITEMS` (max list/dict items).
 
 ---
 
@@ -172,7 +182,7 @@ Memory tracking is **always enabled** globally—individual benchmarks cannot di
 
 ```bash
 # View memory data in results
-python -m tools.cli.benchmark_cli analyze
+python -m cli.aisp bench analyze
 
 # Memory-focused benchmarks show savings prominently
 # Example: Gradient checkpointing shows "💾 57% memory saved"
@@ -190,8 +200,8 @@ python tools/dashboard/server.py --port 8100
 
 ### Interactive TUI
 ```bash
-python -m tools.cli.benchmark_cli tui          # Rich curses interface
-python -m tools.cli.benchmark_cli tui --simple # Basic menu
+python -m cli.aisp bench tui          # Rich curses interface
+python -m cli.aisp bench tui --simple # Basic menu
 ```
 
 ### Analysis Commands
@@ -207,23 +217,23 @@ python -m tools.cli.benchmark_cli tui --simple # Basic menu
 
 ```bash
 # What-If: "What optimizations fit my 24GB VRAM and 100ms latency budget?"
-python -m tools.cli.benchmark_cli whatif --vram 24 --latency 100
+python -m cli.aisp bench whatif --vram 24 --latency 100
 
 # Stacking: "Which optimizations can I combine?"
-python -m tools.cli.benchmark_cli stacking
+python -m cli.aisp bench stacking
 
 # Cost: "What's the $/operation impact on different GPUs?"
-python -m tools.cli.benchmark_cli cost --gpu H100
-python -m tools.cli.benchmark_cli cost --gpu A100 --top 10
+python -m cli.aisp bench cost --gpu H100
+python -m cli.aisp bench cost --gpu A100 --top 10
 
 # Power: "What's most energy efficient?"
-python -m tools.cli.benchmark_cli power
+python -m cli.aisp bench power
 
 # Scaling: "How do these scale with workload size?"
-python -m tools.cli.benchmark_cli scaling
+python -m cli.aisp bench scaling
 
 # Full analysis with Pareto frontier
-python -m tools.cli.benchmark_cli analyze
+python -m cli.aisp bench analyze
 ```
 
 ### GPU Pricing
@@ -266,15 +276,15 @@ curl http://localhost:8100/api/analysis/tradeoffs | jq .
 
 ```bash
 # KV cache sizing
-python tools/cli/benchmark_cli.py utils --tool kv-cache -- \
+python tools/cli/aisp bench utils --tool kv-cache -- \
     --layers 80 --hidden 8192 --tokens 4096 --batch 8 --dtype fp8
 
 # Cost per token
-python tools/cli/benchmark_cli.py utils --tool cost-per-token -- \
+python tools/cli/aisp bench utils --tool cost-per-token -- \
     --avg-power 800 --throughput 1500 --electricity-cost 0.16
 
 # Hardware probe
-python tools/cli/benchmark_cli.py utils --tool probe-hw
+python tools/cli/aisp bench utils --tool probe-hw
 ```
 
 ---

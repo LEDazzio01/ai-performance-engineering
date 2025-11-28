@@ -19,6 +19,7 @@
 // - CUDA 12.4+ for conditional graph nodes
 // - SM 9.0+ (Hopper/Blackwell) for best performance
 
+#include <cuda.h>  // For CUDA_VERSION
 #include <cuda_runtime.h>
 #include <cstdio>
 #include <cstdlib>

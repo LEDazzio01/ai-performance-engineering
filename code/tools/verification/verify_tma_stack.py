@@ -62,11 +62,8 @@ def _build_tma_extension(use_tmem: bool) -> Any:
     suffix = "tmem" if use_tmem else "basic"
     name = f"tma_stack_check_{suffix}_{arch.replace('.', '_').replace(';', '_') or 'default'}"
     include_paths: list[str] = []
-    te_cutlass = PROJECT_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
     upstream_cutlass = PROJECT_ROOT / "third_party" / "cutlass" / "include"
     if use_tmem:
-        if os.getenv("AIPERF_USE_TE_CUTLASS") == "1" and te_cutlass.exists():
-            include_paths.append(str(te_cutlass))
         include_paths.append(str(upstream_cutlass))
 
     cuda_src = r"""

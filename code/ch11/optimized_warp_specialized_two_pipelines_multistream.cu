@@ -17,8 +17,14 @@ constexpr int kPipelineStages = 2;
 constexpr int kTileElems = 1024;
 constexpr bool kHasCuda13Pipeline = true;
 
-__device__ void compute_stage(const float* a, const float* b, float* c, int thread_idx, int stride) {
-    for (int idx = thread_idx; idx < kTileElems; idx += stride) {
+__device__ void compute_stage(const float* a, const float* b, float* c, int warp_id, int lane) {
+    // Compute warps are 1-4 (4 warps = 128 threads)
+    // Map thread to element: warp_local_id = warp_id - 1 (0-3), lane = 0-31
+    // Thread index within compute group: (warp_id - 1) * 32 + lane
+    int compute_thread_idx = (warp_id - 1) * kWarpSize + lane;
+    int compute_threads = 4 * kWarpSize;  // 128 threads in compute warps
+    
+    for (int idx = compute_thread_idx; idx < kTileElems; idx += compute_threads) {
         float x = a[idx];
         float y = b[idx];
         float acc = x + y;
@@ -85,7 +91,7 @@ void warp_specialized_kernel_two_pipelines_multistream(const float* __restrict__
         block.sync();
 
         if (warp_id >= 1 && warp_id <= 4) {
-            compute_stage(a_ptr, b_ptr, c_ptr, threadIdx.x, blockDim.x);
+            compute_stage(a_ptr, b_ptr, c_ptr, warp_id, lane);
         }
 
         block.sync();

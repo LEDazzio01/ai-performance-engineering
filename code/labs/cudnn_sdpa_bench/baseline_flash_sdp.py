@@ -154,7 +154,7 @@ class FlashSDPLabBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=1,
-            warmup=1,
+            warmup=5,
             enable_profiling=False,
             enable_nsys=False,
             enable_ncu=False,

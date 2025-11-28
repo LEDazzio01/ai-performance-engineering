@@ -173,7 +173,7 @@ class OptimizedOverlapDdpBenchmark(BaseBenchmark):
         """Return benchmark configuration (smoke-fast)."""
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
         )

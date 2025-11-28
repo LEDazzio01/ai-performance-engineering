@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -198,13 +197,9 @@ def _entry_to_capabilities(entry: Dict[str, Any]) -> HardwareCapabilities:
     tensor_cores = entry.get("tensor_cores") or (
         "5th Gen" if entry.get("architecture", "").startswith("blackwell") else "Hopper/Ampere"
     )
-    force_tma = os.environ.get("AIPERF_FORCE_TMA_SUPPORTED")
     tma_supported_flag = bool(entry.get("tma", {}).get("supported", False))
     tma_compiler_supported_flag = bool(entry.get("tma", {}).get("compiler_support", False))
-    if force_tma:
-        tma_supported_flag = True
-        tma_compiler_supported_flag = True
-    elif tma_supported_flag and not tma_compiler_supported_flag:
+    if tma_supported_flag and not tma_compiler_supported_flag:
         # Older cache entries recorded hardware-level support even when the
         # current toolchain rejects TMA (e.g. GB10 / sm_121). Clamp the value
         # so logs, guards, and human-readable reports stay consistent.

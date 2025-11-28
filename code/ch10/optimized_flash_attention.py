@@ -191,16 +191,17 @@ class OptimizedFlashAttentionBenchmark(BaseBenchmark):
         
         torch.manual_seed(42)
         
+        # Use FP16 for tensor core acceleration
         self.model = TiledAttentionModule(
             hidden_dim=self.hidden_dim,
             num_heads=self.num_heads,
             dropout=0.0,
-        ).to(self.device).eval()
+        ).to(self.device).half().eval()
         
-        # Input tensor
+        # Input tensor in FP16
         self.input = torch.randn(
             self.batch_size, self.seq_len, self.hidden_dim,
-            device=self.device, dtype=torch.float32
+            device=self.device, dtype=torch.float16
         )
         
         # Warmup with tiled backend

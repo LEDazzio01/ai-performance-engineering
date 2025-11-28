@@ -19,7 +19,7 @@ class BaselineFlashAttnTmaMicroPipelineBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_flash_attn_tma_micro_pipeline",
             friendly_name="FlashAttn Micro-Pipeline Baseline (blocking copies)",
             iterations=1,
-            warmup=0,
+            warmup=5,
             timeout_seconds=120,
             run_args=(),
             # Require pipeline-capable/TMA GPUs to keep A/B runs aligned; SKIP otherwise.

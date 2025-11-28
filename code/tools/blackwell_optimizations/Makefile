@@ -4,7 +4,7 @@
 NVCC = nvcc
 ARCH = -gencode arch=compute_100,code=sm_100
 CXXFLAGS = -std=c++20 -O3
-NVCCFLAGS = $(ARCH) $(CXXFLAGS) -lcuda -lcudart
+NVCCFLAGS = $(ARCH) $(CXXFLAGS) -lcuda -lcudart -lineinfo
 
 # Blackwell-specific flags
 BLACKWELL_FLAGS = -DENABLE_BLACKWELL=1
@@ -60,4 +60,3 @@ run_all: all
 	@./test_all_features || true
 
 .PHONY: all clean run_all
-

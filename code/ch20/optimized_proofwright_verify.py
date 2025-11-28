@@ -443,7 +443,7 @@ class OptimizedProofwrightBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=10,
-            warmup=2,
+            warmup=5,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -511,7 +511,7 @@ def main() -> None:
     
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=10, warmup=2)
+        config=BenchmarkConfig(iterations=10, warmup=5)
     )
     benchmark = OptimizedProofwrightBenchmark()
     result = harness.benchmark(benchmark)

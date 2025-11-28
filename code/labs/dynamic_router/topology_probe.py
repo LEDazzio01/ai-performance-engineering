@@ -28,7 +28,7 @@ class TopologyProbeBenchmark(BaseBenchmark):
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         # Single-shot capture
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         if self.snapshot is None:

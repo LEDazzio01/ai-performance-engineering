@@ -4,17 +4,19 @@
 
 #include <cuda_runtime.h>
 
+// CUTLASS includes
 #include <cutlass/arch/barrier.h>
 #include <cutlass/half.h>
 
-#include <cute/algorithm/axpby.hpp>
+// CuTe includes - main header first (includes all base algorithms)
+#include <cute/tensor.hpp>
+
+// SM100 (Blackwell) specific headers - must come AFTER cute/tensor.hpp
 #include <cute/arch/copy_sm90_tma.hpp>
 #include <cute/arch/mma_sm100_umma.hpp>
 #include <cute/arch/tmem_allocator_sm100.hpp>
 #include <cute/atom/copy_traits_sm90_tma.hpp>
-#include <cute/atom/mma_atom.hpp>
-#include <cute/numeric/integral_constant.hpp>
-#include <cute/tensor.hpp>
+#include <cute/atom/mma_traits_sm100.hpp>
 
 using namespace cute;
 
@@ -184,16 +186,18 @@ __global__ void gemm_device(ATensor mA,
 
 torch::Tensor run_tcgen05_matmul(torch::Tensor a, torch::Tensor b) {
   TORCH_CHECK(a.dim() == 2 && b.dim() == 2, "expected 2D inputs");
-  TORCH_CHECK(a.size(1) == b.size(0), "incompatible matmul shapes");
+  TORCH_CHECK(a.size(1) == b.size(0), "incompatible matmul shapes: A[M,K] @ B[K,N]");
   TORCH_CHECK(a.dtype() == torch::kFloat16 && b.dtype() == torch::kFloat16,
               "tcgen05 kernel expects float16 tensors");
   TORCH_CHECK(a.is_cuda() && b.is_cuda(), "tensors must be CUDA tensors");
 
   auto a_contig = a.contiguous();
-  auto b_contig = b.contiguous();
+  // B is KxN in standard notation, but UMMA expects NxK layout (K-major)
+  // So we transpose B to get NxK layout
+  auto b_transposed = b.t().contiguous();
   auto m = a_contig.size(0);
   auto k = a_contig.size(1);
-  auto n = b_contig.size(1);
+  auto n = b_transposed.size(0);  // After transpose, B is NxK
 
   auto options = a.options().dtype(torch::kFloat32);
   auto c_buffer = torch::zeros({m, n}, options);
@@ -219,10 +223,10 @@ torch::Tensor run_tcgen05_matmul(torch::Tensor a, torch::Tensor b) {
                         make_shape(size<1>(mma_tiler), size<2>(mma_tiler)));
 
   auto sA_layout =
-      tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeA>{},
+      UMMA::tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeA>{},
                         mma_shape_A);
   auto sB_layout =
-      tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeB>{},
+      UMMA::tile_to_mma_shape(UMMA::Layout_K_SW128_Atom<TypeB>{},
                         mma_shape_B);
 
   using SharedStorageT =
@@ -234,7 +238,7 @@ torch::Tensor run_tcgen05_matmul(torch::Tensor a, torch::Tensor b) {
       make_layout(make_shape(m, k), make_stride(k, Int<1>{})));
   Tensor mB = make_tensor(
       make_gmem_ptr(reinterpret_cast<TypeB const*>(
-          b_contig.data_ptr<at::Half>())),
+          b_transposed.data_ptr<at::Half>())),
       make_layout(make_shape(n, k), make_stride(k, Int<1>{})));
   Tensor mC = make_tensor(
       make_gmem_ptr(c_buffer.data_ptr<TypeC>()),

@@ -73,7 +73,8 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         low_mem = is_smoke_mode()
-        return BenchmarkConfig(iterations=6 if low_mem else 12, warmup=1 if low_mem else 3)
+        # Minimum warmup=5 even in smoke mode to exclude JIT overhead
+        return BenchmarkConfig(iterations=6 if low_mem else 12, warmup=5 if low_mem else 10)
 
     def validate_result(self) -> Optional[str]:
         if self.host_batch is None or self.norm is None:
@@ -95,7 +96,7 @@ if __name__ == "__main__":
     benchmark = get_benchmark()
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
+        config=BenchmarkConfig(iterations=5, warmup=5),
     )
     result = harness.benchmark(benchmark)
     print(f"\nBaseline rack prep latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

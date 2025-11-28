@@ -20,7 +20,7 @@ class BaselineCapstoneGemmTCGen05Benchmark(CapstoneMatmulBenchmark):
             runner=baseline_matmul_non_tcgen05,
             label="capstone_baseline_tcgen05_inline",
             iterations=1,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             validate_against_baseline=False,
         )

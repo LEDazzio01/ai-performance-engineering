@@ -137,14 +137,15 @@ void tma_multicast_gemm_kernel(
         cluster.sync();
         
         // Non-leader CTAs read B_tile from leader's shared memory via DSMEM
-        float* leader_B_smem = cluster.map_shared_rank(B_smem, 0);
+        // map_shared_rank returns a pointer to the same array type as B_smem
+        auto leader_B_smem = cluster.map_shared_rank(B_smem, 0);
         
         // Copy from leader to local (simulating TMA multicast result)
         if (cluster_rank != 0) {
             for (int i = tid; i < TILE_K * TILE_N; i += blockDim.x) {
                 int kk = i / TILE_N;
                 int nn = i % TILE_N;
-                B_smem[kk][nn] = leader_B_smem[kk * (TILE_N + 4) + nn];
+                B_smem[kk][nn] = leader_B_smem[kk][nn];
             }
         }
         

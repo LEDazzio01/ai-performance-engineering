@@ -21,7 +21,7 @@ class BaselineDSMEMReductionBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_dsmem_reduction",
             friendly_name="Two-Pass Reduction (Baseline)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

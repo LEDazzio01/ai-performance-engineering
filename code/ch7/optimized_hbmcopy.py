@@ -24,7 +24,7 @@ class OptimizedHBMCopyBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_hbm_copy",
             friendly_name="Optimized HBM Copy",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
         )
 

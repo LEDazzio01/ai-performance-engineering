@@ -70,7 +70,7 @@ class BaselinePipelineParallelismBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=20,
-            warmup=3,
+            warmup=5,
         )
     
     def validate_result(self) -> Optional[str]:

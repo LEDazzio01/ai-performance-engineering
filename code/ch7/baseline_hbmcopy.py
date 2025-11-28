@@ -24,7 +24,7 @@ class BaselineHBMCopyBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_hbm_copy",
             friendly_name="Baseline HBM Copy",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
         )
 

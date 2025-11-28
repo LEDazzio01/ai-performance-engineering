@@ -110,7 +110,7 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
         )
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=4, warmup=1)
+        return BenchmarkConfig(iterations=4, warmup=5)
 
 
 class BaselineDisaggregatedInferenceBenchmark(_DisaggregatedInferenceBenchmark):

@@ -85,7 +85,7 @@ def get_benchmark():
         def setup(self):  # pragma: no cover - skip in quick runs
             raise RuntimeError("SKIPPED: baseline_persistent_matmul_tma is manual-only in low-memory sweeps")
         def benchmark_fn(self): pass
-        def get_config(self): return BenchmarkConfig(iterations=1, warmup=0)
+        def get_config(self): return BenchmarkConfig(iterations=5, warmup=5)  # Minimum warmup required
     return _SkipBenchmark()
 
     def get_custom_metrics(self) -> Optional[dict]:

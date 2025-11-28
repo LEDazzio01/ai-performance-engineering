@@ -30,7 +30,7 @@ class ClusterGraceBlackwellBenchmark(GraceBlackwellMatmulBenchmark):
             label="grace_blackwell_matmul_cluster",
             size=size,
             iterations=5,
-            warmup=2,
+            warmup=5,
             descriptor=descriptor,
             reference_runner=baseline_blackwell_matmul,
         )

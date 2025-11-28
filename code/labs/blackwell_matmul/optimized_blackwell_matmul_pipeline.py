@@ -47,7 +47,7 @@ class PipelineGraceBlackwellBenchmark(GraceBlackwellMatmulBenchmark):
             label="grace_blackwell_matmul_pipeline",
             size=size,
             iterations=7,
-            warmup=2,
+            warmup=10,
             descriptor=descriptor,
             reference_runner=baseline_blackwell_matmul,
         )

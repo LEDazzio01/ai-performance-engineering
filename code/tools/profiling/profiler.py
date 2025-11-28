@@ -192,6 +192,7 @@ class UnifiedProfiler:
                 with_stack=self.with_stack,
                 with_flops=self.with_flops,
                 with_modules=self.with_modules,
+                profile_memory=True,
                 on_trace_ready=lambda p: p.export_chrome_trace(str(trace_path)) if self.enable_trace else None,
             ) as prof:
                 
@@ -530,6 +531,5 @@ class UnifiedProfiler:
                 })
         
         return sorted(changes, key=lambda x: abs(x.get('diff_us', x.get('baseline_us', 0))), reverse=True)[:20]
-
 
 

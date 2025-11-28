@@ -29,7 +29,7 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
         size: int = 2048,
         k_size: Optional[int] = None,
         iterations: int = 5,
-        warmup: int = 1,
+        warmup: int = 5,
         timeout_seconds: int = 600,
         descriptor: Optional[FeatureDescriptor] = None,
         reference_runner: Optional[TensorRunner] = None,

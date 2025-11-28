@@ -9,6 +9,7 @@ third_party/vllm-src/
 third_party/te_sm100a_env.sh
 .env
 .env.local
+.env.bak
 config/.env
 config/.env.local
 benchmark_test_results.json

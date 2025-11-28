@@ -31,7 +31,7 @@ class TmaGraceBlackwellBenchmark(GraceBlackwellMatmulBenchmark):
             label="grace_blackwell_matmul_tma",
             size=size,
             iterations=5,
-            warmup=2,
+            warmup=5,
             descriptor=descriptor,
             reference_runner=optimized_blackwell_matmul_pseudo,
         )

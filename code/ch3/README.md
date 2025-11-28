@@ -25,8 +25,8 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ch3
 python compare.py --profile none
-python tools/cli/benchmark_cli.py list-targets --chapter ch3
-python tools/cli/benchmark_cli.py run --targets ch3 --profile minimal
+python tools/cli/aisp bench list-targets --chapter ch3
+python tools/cli/aisp bench run --targets ch3 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
@@ -39,7 +39,7 @@ python tools/cli/benchmark_cli.py run --targets ch3 --profile minimal
 
 ## Notes
 - Rack prep quickstart (NIC/GPU/NUMA): select NIC order with repeated `--nic`, run the baseline to capture the pageable, topology-unaware reference, then run `optimized_rack_prep.py` (dry-run by default) to print IRQ/RPS/XPS changes. Use `--apply` for host writes and validate via the printed affinity report.
-- Via `benchmark_cli`, pass per-target flags with `--target-extra-arg` to tune NICs and reserved CPUs: `python tools/cli/benchmark_cli.py run --targets ch3:rack_prep --target-extra-arg 'ch3:rack_prep=--apply --reserve 2 --nic enp193s0f0np0'`.
+- Via `aisp bench`, pass per-target flags with `--target-extra-arg` to tune NICs and reserved CPUs: `python tools/cli/aisp bench run --targets ch3:rack_prep --target-extra-arg 'ch3:rack_prep=--apply --reserve 2 --nic enp193s0f0np0'`.
 - System scripts assume sudo when applying host settings; keep them dry-run on shared/dev hosts.
 
 ## Validation Checklist

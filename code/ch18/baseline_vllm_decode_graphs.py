@@ -246,7 +246,7 @@ class VLLMDecodeGraphsBenchmark(BaseBenchmark):
         # Keep iterations modest—the kernel is compiled once and re-used.
         return BenchmarkConfig(
             iterations=8,
-            warmup=2,
+            warmup=5,
             percentiles=[50, 75, 90, 99],
         )
 

@@ -80,7 +80,7 @@ if __name__ == "__main__":
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=10, warmup=2),
+        config=BenchmarkConfig(iterations=10, warmup=5),
     )
     bench = BaselineNvlinkTopologyBlindBenchmark()
     result = harness.benchmark(bench)

@@ -48,4 +48,21 @@ repos:
       - id: check-merge-conflict
       - id: check-case-conflict
       - id: detect-private-key
+  
+  # Custom benchmark validation hooks
+  - repo: local
+    hooks:
+      # Benchmark warmup validation - CRITICAL for accurate measurements
+      # Low warmup causes JIT/compile overhead to be included in timing results.
+      - id: check-benchmark-warmup
+        name: Check Benchmark Warmup Settings
+        entry: python scripts/audit_warmup_settings.py
+        language: system
+        types: [python]
+        files: ^(ch\d+|labs)/.*\.py$
+        pass_filenames: false
+        description: >
+          Ensures all benchmarks have sufficient warmup iterations to exclude
+          JIT/compile overhead from measurements. torch.compile, Triton, and
+          CUDA JIT all need warmup to reach steady-state performance.
 

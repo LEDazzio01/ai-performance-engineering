@@ -1,7 +1,12 @@
-"""Baseline sliding window attention - Full O(n²) attention for comparison.
+"""Baseline sliding window attention - Naive O(n²) explicit attention.
 
-This baseline uses standard multi-head attention without any sparsity
-to compare against the optimized sliding window implementation.
+This baseline uses explicit matmul/softmax/matmul operations which have:
+- O(n²) memory for attention scores matrix
+- Multiple kernel launches (matmul, softmax, matmul)
+- No memory optimization
+
+Compare with optimized_sliding_window_bench.py which uses Flash Attention
+via scaled_dot_product_attention for O(n) memory and fused kernels.
 """
 
 from __future__ import annotations
@@ -27,38 +32,28 @@ from common.python.benchmark_harness import (
 )
 
 
-class FullAttentionModule(nn.Module):
-    """Standard full attention (O(n²) complexity) - naive implementation.
+class NaiveAttentionModule(nn.Module):
+    """Naive O(n²) attention using explicit matmul operations.
     
-    This uses explicit matmul/softmax/matmul to demonstrate the O(n²) cost
-    that sliding window attention optimizes away.
+    This is the slow baseline that Flash Attention optimizes.
     """
     
     def __init__(
         self,
         embed_dim: int,
         num_heads: int,
-        dropout: float = 0.0,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        self.dropout = dropout
         self.scale = 1.0 / (self.head_dim ** 0.5)
         
         self.qkv_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=False)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Full attention forward pass with explicit O(n²) computation.
-        
-        Args:
-            x: [batch, seq_len, embed_dim]
-            
-        Returns:
-            output: [batch, seq_len, embed_dim]
-        """
+        """Naive O(n²) attention with explicit matmul operations."""
         B, S, _ = x.shape
         
         # QKV projection
@@ -67,11 +62,10 @@ class FullAttentionModule(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, H, S, D]
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        # Explicit O(n²) attention computation (not using Flash Attention)
-        # scores: [B, H, S, S]
+        # Explicit O(n²) attention - creates full S×S attention matrix
         scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
         
-        # Apply causal mask
+        # Causal mask
         causal_mask = torch.triu(
             torch.ones(S, S, device=x.device, dtype=torch.bool),
             diagonal=1
@@ -82,23 +76,23 @@ class FullAttentionModule(nn.Module):
         attn = F.softmax(scores, dim=-1)
         output = torch.matmul(attn, v)
         
-        # Reshape and output projection
+        # Output projection
         output = output.transpose(1, 2).contiguous().view(B, S, self.embed_dim)
         return self.out_proj(output)
 
 
 class BaselineSlidingWindowBenchmark(BaseBenchmark):
-    """Baseline: Full O(n²) causal attention without sliding window."""
+    """Baseline: Naive O(n²) attention (slow)."""
 
     def __init__(self):
         super().__init__()
         self.model = None
         self.x = None
         self.batch_size = 4
-        self.seq_len = 2048
+        self.seq_len = 4096  # Longer sequence to show difference
         self.embed_dim = 1024
         self.num_heads = 16
-        self.dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        self.dtype = torch.float16  # Use float16 for better Flash Attention support
         self._last = 0.0
         
         tokens = self.batch_size * self.seq_len
@@ -108,10 +102,10 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        """Setup: Initialize full attention model."""
+        """Setup: Initialize naive attention model."""
         torch.manual_seed(42)
         
-        self.model = FullAttentionModule(
+        self.model = NaiveAttentionModule(
             self.embed_dim, self.num_heads
         ).to(self.device, self.dtype).eval()
         
@@ -120,14 +114,14 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
             device=self.device, dtype=self.dtype
         )
         
-        # Warmup
-        for _ in range(3):
+        # Proper warmup to avoid cold cache effects
+        for _ in range(5):
             with torch.no_grad():
                 _ = self.model(self.x)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
-        """Benchmark: Full attention."""
+        """Benchmark: Naive attention."""
         with torch.no_grad():
             output = self.model(self.x)
             self._last = float(output.sum())
@@ -142,25 +136,17 @@ class BaselineSlidingWindowBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         """Return benchmark configuration."""
         return BenchmarkConfig(
-            iterations=50,
-            warmup=10,
+            iterations=20,
+            warmup=5,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from common.python.benchmark_metrics import compute_triton_metrics
-        return compute_triton_metrics(
-            num_elements=getattr(self, 'N', getattr(self, 'num_elements', 1024)),
-            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
-            block_size=getattr(self, 'BLOCK_SIZE', 1024),
-            num_warps=getattr(self, 'num_warps', 4),
-        )
+        return None
 
     def validate_result(self) -> Optional[str]:
-        """Validate benchmark result."""
         if self.model is None or self.x is None:
             return "Model not initialized"
         return None
@@ -178,6 +164,5 @@ if __name__ == '__main__':
         config=benchmark.get_config()
     )
     result = harness.benchmark(benchmark)
-    print(f"\nBaseline Full Attention: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
+    print(f"\nBaseline Naive Attention: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(f"  Config: batch={benchmark.batch_size}, seq={benchmark.seq_len}, dim={benchmark.embed_dim}")
-

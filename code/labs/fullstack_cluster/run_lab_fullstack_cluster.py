@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from labs.fullstack_cluster.capstone_extension import load_capstone_module
 
 
-def _time_kernel(fn, iters: int, timeout_s: float, warmup: int = 1) -> float:
+def _time_kernel(fn, iters: int, timeout_s: float, warmup: int = 5) -> float:
     """Return average runtime (ms) for fn across iters with a wall-clock timeout."""
     for _ in range(max(0, warmup)):
         fn()

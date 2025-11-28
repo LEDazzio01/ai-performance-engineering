@@ -56,7 +56,7 @@ class BaselineNUMAUnawareBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=15, warmup=3)
+        return BenchmarkConfig(iterations=15, warmup=5)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -79,7 +79,7 @@ def get_benchmark() -> BaseBenchmark:
 if __name__ == "__main__":
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
+        config=BenchmarkConfig(iterations=5, warmup=5),
     )
     result = harness.benchmark(get_benchmark())
     print(f"\nBaseline NUMA latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

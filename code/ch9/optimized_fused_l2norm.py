@@ -24,7 +24,7 @@ class OptimizedFusedL2NormBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_fused_l2norm",
             friendly_name="Optimized Fused L2 Norm",
             iterations=5,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
         )
 

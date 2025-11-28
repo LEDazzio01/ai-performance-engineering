@@ -370,6 +370,7 @@ class HTAAnalyzer:
             record_shapes=True,
             with_stack=True,
             with_flops=True,
+            profile_memory=True,
         ) as prof:
             for _ in range(iterations):
                 fn(*args, **kwargs)
@@ -504,6 +505,5 @@ class HTAAnalyzer:
     </script>
 </body>
 </html>'''
-
 
 

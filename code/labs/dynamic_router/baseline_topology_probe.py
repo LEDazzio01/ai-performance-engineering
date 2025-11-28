@@ -9,7 +9,7 @@ from labs.dynamic_router.topology_probe import TopologyProbeBenchmark
 
 
 class BaselineTopologyProbeBenchmark(BaseBenchmark):
-    """Runs the topology probe under benchmark_cli."""
+    """Runs the topology probe under aisp bench."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -24,7 +24,7 @@ class BaselineTopologyProbeBenchmark(BaseBenchmark):
         self._summary = bench.get_custom_metrics() or {}
 
     def get_config(self) -> Optional[BenchmarkConfig]:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         return self._summary or None

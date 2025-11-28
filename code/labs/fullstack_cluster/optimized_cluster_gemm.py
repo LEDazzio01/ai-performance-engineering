@@ -19,7 +19,7 @@ class OptimizedCapstoneGemmBenchmark(CapstoneMatmulBenchmark):
             runner=optimized_matmul,
             label="capstone_optimized",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=300,
             validate_against_baseline=True,
         )

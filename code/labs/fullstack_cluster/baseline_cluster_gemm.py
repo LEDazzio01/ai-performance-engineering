@@ -19,7 +19,7 @@ class BaselineCapstoneGemmBenchmark(CapstoneMatmulBenchmark):
             runner=baseline_matmul,
             label="capstone_baseline",
             iterations=1,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             validate_against_baseline=False,
         )

@@ -50,11 +50,12 @@ class BaselineNVFP4TrainingBenchmark(BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.hidden_dim = 2048
-        self.intermediate_dim = self.hidden_dim * 2
-        self.num_layers = 4
-        self.batch_size = 16
-        self.seq_len = 512
+        # Larger workload to amortize TE overhead and show NVFP4 benefits
+        self.hidden_dim = 4096
+        self.intermediate_dim = self.hidden_dim * 4
+        self.num_layers = 8
+        self.batch_size = 32
+        self.seq_len = 1024
         self.micro_batches = 4
         self.model: Optional[_BF16Trainer] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
@@ -118,7 +119,7 @@ class BaselineNVFP4TrainingBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=8,
-            warmup=2,
+            warmup=5,
             enable_memory_tracking=False,
             deterministic=False,  # allow fastest kernels
             seed=None,  # avoid global seeding that can trip TE/cuRAND

@@ -60,7 +60,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
             binary_name="nvshmem_ibgda_microbench",
             friendly_name=f"nvshmem_ibgda_{mode}",
             iterations=1,
-            warmup=0,
+            warmup=5,
             timeout_seconds=180,
             run_args=args,
             time_regex=None,  # Use harness timing instead of stdout parsing.
@@ -187,7 +187,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
         # Single execution; wall-clock timer is provided by harness.
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             measurement_timeout_seconds=self.timeout_seconds,
             setup_timeout_seconds=60,
             enable_memory_tracking=False,

@@ -201,7 +201,7 @@ class EvalConfig:
     allow_missing_metrics: bool = False
     baseline_scorecard: Optional[Path] = None
 
-    # Flags consumed via benchmark_cli target-extra-arg; no env parsing.
+    # Flags consumed via aisp bench target-extra-arg; no env parsing.
     @staticmethod
     def from_flags(argv: Sequence[str], *, seed: int = 0) -> "EvalConfig":
         parser = argparse.ArgumentParser(add_help=False)

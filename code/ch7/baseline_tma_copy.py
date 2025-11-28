@@ -24,7 +24,7 @@ class BaselineTMACopyBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_tma_copy",
             friendly_name="Baseline TMA Copy",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

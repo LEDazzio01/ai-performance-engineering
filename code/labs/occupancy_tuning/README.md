@@ -20,14 +20,14 @@ Sweeps Triton matmul schedules for ProtonNet-style workloads on Blackwell, compa
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/occupancy_tuning
-python tools/cli/benchmark_cli.py run --targets labs/occupancy_tuning --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/occupancy_tuning
+python -m cli.aisp bench run --targets labs/occupancy_tuning --profile minimal
 ```
 - Targets follow the `labs/occupancy_tuning:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/occupancy_tuning:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/occupancy_tuning --profile minimal` executes every schedule defined in the lab.
+- `python -m cli.aisp bench run --targets labs/occupancy_tuning --profile minimal` executes every schedule defined in the lab.
 - `python labs/occupancy_tuning/sweep_schedules.py --output artifacts/occupancy_tuning.csv` enumerates schedules and highlights the top performer.
 - `python labs/occupancy_tuning/optimized_proton_matmul_bm128_bn128_bk32_nw8.py --validate` compares outputs against the baseline to ensure correctness.
 

@@ -9,7 +9,7 @@ from labs.dynamic_router.driver import simulate
 
 
 class OptimizedDynamicRouterBenchmark(BaseBenchmark):
-    """Runs the optimized (prefill/decode split) routing simulation under benchmark_cli."""
+    """Runs the optimized (prefill/decode split) routing simulation under aisp bench."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -29,7 +29,7 @@ class OptimizedDynamicRouterBenchmark(BaseBenchmark):
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             measurement_timeout_seconds=120,
             timeout_multiplier=3.0,
         )

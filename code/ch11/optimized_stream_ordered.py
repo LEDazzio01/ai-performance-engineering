@@ -24,9 +24,9 @@ class OptimizedStreamOrderedBenchmark(BaseBenchmark):
         self.device_outputs: Optional[list[torch.Tensor]] = None
         self.streams: Optional[list[torch.cuda.Stream]] = None
         self.num_streams = 4
-        self.num_requests = 16
-        self.hidden_dim = 512
-        self.batch_size = 64
+        self.num_requests = 32  # More requests to amortize overhead
+        self.hidden_dim = 1024
+        self.batch_size = 128
         self.static_inputs: Optional[list[torch.Tensor]] = None
         self.static_outputs: Optional[list[torch.Tensor]] = None
         self.graphs: Optional[list[torch.cuda.CUDAGraph]] = None

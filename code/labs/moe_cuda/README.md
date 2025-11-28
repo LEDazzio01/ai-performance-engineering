@@ -22,14 +22,14 @@ Implements mixture-of-experts decode helpers directly in CUDA: decode kernels, K
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/moe_cuda
-python tools/cli/benchmark_cli.py run --targets labs/moe_cuda --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/moe_cuda
+python -m cli.aisp bench run --targets labs/moe_cuda --profile minimal
 ```
 - Targets follow the `labs/moe_cuda:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/moe_cuda:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.
+- `python -m cli.aisp bench run --targets labs/moe_cuda --profile minimal` runs every baseline/optimized pair and captures NVTX traces.
 - `python labs/moe_cuda/optimized_decode_attention_math.py --validate` compares the CUDA path to the math reference and fails loudly if drift is detected.
 - KV transfer graphs print latency breakdowns showing overlap improvements relative to the baseline script.
 

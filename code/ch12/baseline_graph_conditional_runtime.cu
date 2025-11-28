@@ -72,9 +72,9 @@ int main() {
     cudaDeviceProp prop;
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
     
-    std::printf("=" * 70 + "\n");
+    std::printf("======================================================================\n");
     std::printf("Baseline: Graph Conditional Runtime (Host-Side Switching)\n");
-    std::printf("=" * 70 + "\n");
+    std::printf("======================================================================\n");
     std::printf("GPU: %s (SM %d.%d)\n", prop.name, prop.major, prop.minor);
     std::printf("\n");
     

@@ -88,7 +88,7 @@ class ReportGenerator:
         generator.generate_pdf(benchmarks, "report.pdf")
         
         # From dashboard data
-        generator.generate_from_api("http://localhost:8080", "report.pdf")
+        generator.generate_from_api("http://localhost:6970", "report.pdf")
     """
     
     def __init__(self, config: Optional[ReportConfig] = None):
@@ -185,7 +185,7 @@ class ReportGenerator:
         Generate report from dashboard API.
         
         Args:
-            api_url: Base URL of dashboard (e.g., "http://localhost:8080")
+            api_url: Base URL of dashboard (e.g., "http://localhost:6970")
             output_path: Output file path
             format: "pdf" or "html"
         """
@@ -689,6 +689,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 

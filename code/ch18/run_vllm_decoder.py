@@ -734,7 +734,7 @@ class VLLMMoEInferenceBenchmark(BaseBenchmark):
 
     # ------------------------------------------------------------------- configs
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=6, warmup=1)
+        return BenchmarkConfig(iterations=6, warmup=5)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload_metadata

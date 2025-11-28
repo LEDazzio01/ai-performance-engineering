@@ -31,18 +31,25 @@ from common.python.benchmark_harness import (  # noqa: E402
 
 
 class RegionalMLP(nn.Module):
-    """MLP wrapped with torch.compile as the regional hot path."""
+    """MLP with torch.compile for kernel fusion (the regional hot path).
+    
+    This demonstrates Chapter 13's regional compilation strategy:
+    - Only compile the compute-intensive MLP subgraph
+    - Keep attention/layernorm eager for better dynamic shape handling
+    - Get compilation benefits without full-graph recompilation overhead
+    """
 
     def __init__(self, hidden: int, mlp_hidden: int):
         super().__init__()
         self.fc1 = nn.Linear(hidden, mlp_hidden)
         self.fc2 = nn.Linear(mlp_hidden, hidden)
+        # Regional compilation: compile just this hot path
         self._compiled = torch.compile(
             self._forward_impl,
-            backend="aot_eager",
-            fullgraph=False,
-            dynamic=True,
-            mode="default",
+            backend="inductor",
+            fullgraph=True,
+            dynamic=False,
+            mode="reduce-overhead",
         )
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
@@ -86,11 +93,12 @@ class OptimizedRegionalCompileBenchmark(BaseBenchmark):
 
     def __init__(self):
         super().__init__()
-        self.hidden = 1024
-        self.num_heads = 8
-        self.mlp_hidden = 4096
-        self.batch_size = 8
-        self.sequence_schedule: List[int] = [128, 256, 384, 512]
+        # Larger workload to amortize compile overhead and show benefits
+        self.hidden = 2048
+        self.num_heads = 16
+        self.mlp_hidden = 8192
+        self.batch_size = 32
+        self.sequence_schedule: List[int] = [512, 1024, 1536, 2048]
         self._step = 0
 
         self.model: Optional[nn.Module] = None
@@ -147,9 +155,11 @@ class OptimizedRegionalCompileBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
+        # NOTE: warmup=10 is REQUIRED to ensure torch.compile JIT overhead is NOT
+        # included in measurements. The first few calls trigger compilation.
         return BenchmarkConfig(
-            iterations=8,
-            warmup=0,
+            iterations=10,
+            warmup=10,  # Required for torch.compile - excludes JIT overhead from timing
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=300,

@@ -82,7 +82,8 @@ class BaselineDockerBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         low_mem = is_smoke_mode()
-        return BenchmarkConfig(iterations=5 if low_mem else 20, warmup=1 if low_mem else 4)
+        # Minimum warmup=5 even in smoke mode to exclude JIT overhead
+        return BenchmarkConfig(iterations=5 if low_mem else 20, warmup=5 if low_mem else 10)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -107,7 +108,7 @@ if __name__ == "__main__":
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=5, warmup=1),
+        config=BenchmarkConfig(iterations=5, warmup=5),
     )
     result = harness.benchmark(get_benchmark())
     print(f"\nBaseline Docker latency: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

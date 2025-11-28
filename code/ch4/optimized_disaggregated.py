@@ -164,7 +164,7 @@ class OptimizedDisaggregatedBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
         iterations=10,
-            warmup=2,
+            warmup=5,
         )
     
     def get_custom_metrics(self) -> Optional[dict]:

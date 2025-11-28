@@ -63,7 +63,7 @@ class BaselineOptimizerReplicatedBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=2)
+        return BenchmarkConfig(iterations=10, warmup=5)
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
@@ -92,7 +92,7 @@ if __name__ == "__main__":
 
     harness = BenchmarkHarness(
         mode=BenchmarkMode.CUSTOM,
-        config=BenchmarkConfig(iterations=4, warmup=1),
+        config=BenchmarkConfig(iterations=4, warmup=5),
     )
     bench = BaselineOptimizerReplicatedBenchmark()
     result = harness.benchmark(bench)

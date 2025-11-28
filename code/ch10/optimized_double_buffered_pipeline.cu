@@ -142,9 +142,10 @@ __global__ void gemm_double_buffered_kernel(
 }
 
 int main() {
-    const int M = 1024;
-    const int N = 1024;
-    const int K = 1024;
+    // Larger matrices to show double-buffering benefit
+    const int M = 2048;
+    const int N = 2048;
+    const int K = 2048;
     const size_t bytes_A = static_cast<size_t>(M) * K * sizeof(float);
     const size_t bytes_B = static_cast<size_t>(K) * N * sizeof(float);
     const size_t bytes_C = static_cast<size_t>(M) * N * sizeof(float);

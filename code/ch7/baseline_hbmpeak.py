@@ -24,7 +24,7 @@ class BaselineHBMPeakBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_hbm_peak",
             friendly_name="Baseline HBM Peak Bandwidth",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
         )
 

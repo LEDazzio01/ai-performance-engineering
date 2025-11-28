@@ -54,13 +54,12 @@ class FlashAttentionModule(nn.Module):
 
 
 class OptimizedFlashSDPBenchmark(BaseBenchmark):
-    """Uses torch.compile on the Flash SDP block."""
+    """Optimized: Flash SDP attention (hardware-accelerated)."""
 
     def __init__(self):
         super().__init__()
         self.model: Optional[FlashAttentionModule] = None
         self.inputs: Optional[torch.Tensor] = None
-        self.compiled = None
         self.seq_len = 256
         self.batch = 8
         self.hidden = 512
@@ -73,41 +72,39 @@ class OptimizedFlashSDPBenchmark(BaseBenchmark):
     def setup(self) -> None:
         ensure_flash_sdp_available()
         torch.manual_seed(0)
+        # Optimized: Flash SDP with fused kernel
         self.model = FlashAttentionModule(hidden_dim=self.hidden, num_heads=8).to(
             self.device, dtype=torch.float16
         )
         self.inputs = torch.randn(self.batch, self.seq_len, self.hidden, device=self.device, dtype=torch.float16)
-        compiled = torch.compile(self.model, fullgraph=True, dynamic=False)  # type: ignore[arg-type]
-        # Warm compile
-        with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
-            _ = compiled(self.inputs)
+        # Warmup
+        for _ in range(3):
+            _ = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
-        self.compiled = compiled
 
     def benchmark_fn(self) -> None:
-        if self.compiled is None or self.inputs is None:
-            raise RuntimeError("Compiled model not initialized")
+        if self.model is None or self.inputs is None:
+            raise RuntimeError("Model not initialized")
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("flash_sdp_optimized", enable=enable_nvtx):
-            _ = self.compiled(self.inputs)
+            _ = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
 
     def teardown(self) -> None:
         self.model = None
         self.inputs = None
-        self.compiled = None
         torch.cuda.empty_cache()
 
     def validate_result(self) -> Optional[str]:
-        if self.compiled is None or self.inputs is None:
-            return "Compiled model not initialized"
+        if self.model is None or self.inputs is None:
+            return "Model not initialized"
         return None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=1,
-            warmup=1,
+            iterations=10,
+            warmup=5,
             measurement_timeout_seconds=90,
             setup_timeout_seconds=90,
         )

@@ -16,7 +16,7 @@ from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 class _SkipBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -45,6 +45,6 @@ if __name__ == "__main__":
     from common.python.benchmark_harness import BaseBenchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig
 
     benchmark = get_benchmark()
-    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=3, warmup=1))
+    harness = BenchmarkHarness(mode=BenchmarkMode.CUSTOM, config=BenchmarkConfig(iterations=3, warmup=5))
     result = harness.benchmark(benchmark)
     print(f"Prefill/decode baseline (multi-GPU): {result.timing.mean_ms if result.timing else 0.0:.3f} ms")

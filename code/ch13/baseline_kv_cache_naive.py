@@ -170,7 +170,7 @@ class BaselineKVCacheNaiveBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=1,
-            warmup=1,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
             measurement_timeout_seconds=300,

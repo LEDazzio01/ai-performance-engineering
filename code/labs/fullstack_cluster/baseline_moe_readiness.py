@@ -123,7 +123,7 @@ class BaselineMoEReadinessBenchmark(BaseBenchmark):
             launch_via=LaunchVia.TORCHRUN,
             nproc_per_node=2,
             iterations=1,
-            warmup=0,
+            warmup=5,
             multi_gpu_required=True,
             measurement_timeout_seconds=900,
         )

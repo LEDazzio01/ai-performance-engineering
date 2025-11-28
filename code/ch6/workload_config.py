@@ -25,7 +25,7 @@ class Chapter6Workload:
     quantization_elements: int = 16_777_216
 
     ilp_iterations: int = 5
-    ilp_warmup: int = 1
+    ilp_warmup: int = 5
 
 
 WORKLOAD = Chapter6Workload()

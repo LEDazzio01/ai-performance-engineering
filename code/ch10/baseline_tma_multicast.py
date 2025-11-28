@@ -24,7 +24,7 @@ class BaselineTMAMulticastBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_tma_multicast",
             friendly_name="Baseline GEMM (No Multicast)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
         )
 

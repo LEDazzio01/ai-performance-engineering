@@ -163,7 +163,7 @@ class OptimizedPieceGraphsBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=8,
-            warmup=2,
+            warmup=5,
             measurement_timeout_seconds=240,
             setup_timeout_seconds=120,
             use_subprocess=False,

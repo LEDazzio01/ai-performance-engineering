@@ -143,7 +143,7 @@ class BaselineMXFP8MoEBenchmark(BaseBenchmark):
         return None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=8, warmup=2, deterministic=False, enable_nvtx=True)
+        return BenchmarkConfig(iterations=8, warmup=5, deterministic=False, enable_nvtx=True)
 
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Return domain-specific metrics using standardized helper."""

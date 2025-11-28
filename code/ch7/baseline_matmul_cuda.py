@@ -23,7 +23,7 @@ class BaselineMatmulCudaBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_matmul",
             friendly_name="Ch7 Baseline Matmul CUDA",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
         )

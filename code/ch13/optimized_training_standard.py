@@ -202,7 +202,7 @@ class OptimizedTrainingBenchmark(BaseBenchmark):
         """Return benchmark-specific config."""
         return BenchmarkConfig(
             iterations=10,
-            warmup=3,
+            warmup=5,
             enable_memory_tracking=True,
         )
     

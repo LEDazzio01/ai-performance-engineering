@@ -24,7 +24,7 @@ class OptimizedCooperativePersistentBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_cooperative_persistent",
             friendly_name="Optimized Cooperative Persistent",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=180,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
         )

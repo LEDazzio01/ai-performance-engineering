@@ -9,7 +9,7 @@ from labs.dynamic_router.driver import simulate
 
 
 class BaselineDynamicRouterBenchmark(BaseBenchmark):
-    """Runs the baseline (single-pool) routing simulation under benchmark_cli."""
+    """Runs the baseline (single-pool) routing simulation under aisp bench."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -32,7 +32,7 @@ class BaselineDynamicRouterBenchmark(BaseBenchmark):
         # Single iteration; simulation already encapsulates multiple ticks
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             measurement_timeout_seconds=120,
             timeout_multiplier=3.0,
         )

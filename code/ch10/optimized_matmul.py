@@ -74,7 +74,7 @@ class OptimizedTensorCoreBenchmark(BaseBenchmark):
         """Return benchmark-specific config."""
         return BenchmarkConfig(
             iterations=10,
-            warmup=2,
+            warmup=10,  # torch.compile requires extra warmup for JIT
         )
     
     def get_custom_metrics(self) -> Optional[dict]:

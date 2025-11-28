@@ -270,7 +270,7 @@ def run_benchmark(
 
     config = BenchmarkConfig(
         iterations=5,
-        warmup=2,
+        warmup=5,
         profile_mode=profile,
     )
 

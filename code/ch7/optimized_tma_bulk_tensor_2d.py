@@ -24,7 +24,7 @@ class OptimizedTMABulkTensor2D(CudaBinaryBenchmark):
             binary_name="optimized_tma_bulk_tensor_2d",
             friendly_name="Optimized 2D tensor copy (TMA bulk)",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
             require_tma_instructions=True,
         )

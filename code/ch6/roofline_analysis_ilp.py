@@ -125,7 +125,7 @@ class RooflineAnalysisILPBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=1,  # Analysis is deterministic
-            warmup=1,
+            warmup=5,
         )
     
     def get_workload_metadata(self):

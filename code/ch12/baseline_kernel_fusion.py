@@ -32,8 +32,8 @@ class BaselineKernelFusionBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.data = None
-        self.N = 1_000_000
-        self.iterations = 5
+        self.N = 16_000_000  # Larger size to be memory-bound
+        self.iterations = 10
         self._extension = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -80,7 +80,7 @@ class BaselineKernelFusionBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=5,  # Fewer iterations since kernels run internally
-            warmup=1,
+            warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=120,  # CUDA extension compilation can take 60-90 seconds

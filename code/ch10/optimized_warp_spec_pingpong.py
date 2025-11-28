@@ -21,7 +21,7 @@ class OptimizedWarpSpecPingPongBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_warp_spec_pingpong",
             friendly_name="Ping-Pong Warp Specialization",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

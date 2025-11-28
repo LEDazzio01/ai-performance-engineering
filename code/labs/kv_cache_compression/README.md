@@ -22,9 +22,9 @@ Benchmarks a KV-cache heavy attention block using Transformer Engine 2.10 (CUDA 
 Use the benchmark harness to pick targets explicitly.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/kv_cache_compression
-python tools/cli/benchmark_cli.py run --targets labs/kv_cache_compression:kv_cache --profile minimal
-python tools/cli/benchmark_cli.py run --targets labs/kv_cache_compression:kv_cache_nvfp4 --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/kv_cache_compression
+python -m cli.aisp bench run --targets labs/kv_cache_compression:kv_cache --profile minimal
+python -m cli.aisp bench run --targets labs/kv_cache_compression:kv_cache_nvfp4 --profile minimal
 ```
 - Pass `--target-extra-arg labs/kv_cache_compression:kv_cache_nvfp4="--flag value"` to sweep shapes or calibration options.
 

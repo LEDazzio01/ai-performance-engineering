@@ -23,6 +23,7 @@ BASE_TARGETS = baseline_cluster_group optimized_cluster_group \
                baseline_tma_multicast optimized_tma_multicast \
                baseline_pipeline_3stage optimized_pipeline_3stage \
                baseline_dsmem_reduction optimized_dsmem_reduction \
+               optimized_dsmem_cluster_atomic optimized_dsmem_warp_specialized \
                baseline_warp_spec_pingpong optimized_warp_spec_pingpong
 
 # Guard optional demos that are not shipped on every branch.
@@ -125,6 +126,12 @@ baseline_dsmem_reduction$(SUFFIX): baseline_dsmem_reduction.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $<
 
 optimized_dsmem_reduction$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
+optimized_dsmem_cluster_atomic$(SUFFIX): optimized_dsmem_cluster_atomic.cu $(COMMON_HEADERS)
+	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
+
+optimized_dsmem_warp_specialized$(SUFFIX): optimized_dsmem_warp_specialized.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
 
 baseline_warp_spec_pingpong$(SUFFIX): baseline_warp_spec_pingpong.cu $(COMMON_HEADERS)

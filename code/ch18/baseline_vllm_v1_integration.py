@@ -135,7 +135,7 @@ def run_benchmark(
     
     config = BenchmarkConfig(
         iterations=3,
-        warmup=1,
+        warmup=5,
         profile_mode=profile,
     )
     
@@ -198,7 +198,7 @@ class BaselineVLLMV1Benchmark(BaseBenchmark):
         self.integration = None
     
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=3, warmup=1)
+        return BenchmarkConfig(iterations=3, warmup=5)
 
     def setup(self) -> None:
         """Set up the vLLM integration."""
@@ -236,7 +236,7 @@ class _SkipBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         pass
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=0)
+        return BenchmarkConfig(iterations=1, warmup=5)
 
 def get_benchmark() -> BaseBenchmark:
     return _SkipBenchmark()

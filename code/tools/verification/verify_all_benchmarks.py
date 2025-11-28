@@ -12,7 +12,7 @@ NOTE: Distributed benchmarks are ONLY skipped if num_gpus == 1 (single GPU syste
 This is clearly logged when it happens.
 
 Usage:
-    Prefer running via: python tools/cli/benchmark_cli.py verify [--targets ...]
+    Prefer running via: python tools/cli/aisp bench.py verify [--targets ...]
 """
 
 import sys
@@ -631,7 +631,7 @@ def run_verification(target_args: Optional[List[str]] = None) -> int:
 
 def main():
     raise SystemExit(
-        "This entrypoint moved. Run 'python tools/cli/benchmark_cli.py verify [--targets ...]' instead."
+        "This entrypoint moved. Run 'python tools/cli/aisp bench.py verify [--targets ...]' instead."
     )
 
 

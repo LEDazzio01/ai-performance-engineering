@@ -100,4 +100,88 @@ class TestBenchmarkTimeoutMultiplier:
         config = BenchmarkConfig(iterations=999, warmup=99)
         assert config.iterations == 999
         assert config.warmup == 99
+
+
+class TestWarmupEnforcement:
+    """Test warmup minimum enforcement - CRITICAL for accurate measurements.
+    
+    Low warmup causes JIT/compile overhead to be included in measurements,
+    leading to incorrect speedup calculations. The harness must enforce
+    minimum warmup to prevent this.
+    """
+    
+    def test_minimum_warmup_enforced(self):
+        """Test that warmup below minimum is auto-corrected to minimum."""
+        import warnings
+        from common.python.benchmark_defaults import MINIMUM_WARMUP_ITERATIONS
+        
+        # Setting warmup below minimum should trigger warning and auto-correct
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = BenchmarkConfig(warmup=0)
+            
+            # Check warmup was raised to minimum
+            assert config.warmup >= MINIMUM_WARMUP_ITERATIONS, \
+                f"Expected warmup >= {MINIMUM_WARMUP_ITERATIONS}, got {config.warmup}"
+            
+            # Check warning was issued
+            warmup_warnings = [x for x in w if 'warmup' in str(x.message).lower()]
+            assert len(warmup_warnings) > 0, \
+                "Expected warning about low warmup"
+    
+    def test_warmup_at_minimum_is_accepted(self):
+        """Test that warmup exactly at minimum doesn't trigger warning."""
+        import warnings
+        from common.python.benchmark_defaults import MINIMUM_WARMUP_ITERATIONS
+        
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = BenchmarkConfig(warmup=MINIMUM_WARMUP_ITERATIONS)
+            
+            assert config.warmup == MINIMUM_WARMUP_ITERATIONS
+            warmup_warnings = [x for x in w if 'warmup' in str(x.message).lower()]
+            assert len(warmup_warnings) == 0, \
+                "Should not warn when warmup is at minimum"
+    
+    def test_warmup_above_minimum_is_accepted(self):
+        """Test that warmup above minimum is accepted unchanged."""
+        import warnings
+        from common.python.benchmark_defaults import MINIMUM_WARMUP_ITERATIONS
+        
+        high_warmup = MINIMUM_WARMUP_ITERATIONS + 10
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = BenchmarkConfig(warmup=high_warmup)
+            
+            assert config.warmup == high_warmup
+            warmup_warnings = [x for x in w if 'warmup' in str(x.message).lower()]
+            assert len(warmup_warnings) == 0, \
+                "Should not warn when warmup is above minimum"
+    
+    def test_smoke_mode_respects_minimum_warmup(self):
+        """Test that smoke mode doesn't set warmup below minimum."""
+        from common.python.benchmark_defaults import BenchmarkDefaults, MINIMUM_WARMUP_ITERATIONS
+        
+        smoke_defaults = BenchmarkDefaults.for_smoke(smoke=True)
+        assert smoke_defaults.warmup >= MINIMUM_WARMUP_ITERATIONS, \
+            f"Smoke mode warmup ({smoke_defaults.warmup}) must be >= minimum ({MINIMUM_WARMUP_ITERATIONS})"
+    
+    def test_validate_warmup_function(self):
+        """Test the validate_warmup helper function directly."""
+        import warnings
+        from common.python.benchmark_defaults import validate_warmup, MINIMUM_WARMUP_ITERATIONS
+        
+        # Test low warmup is corrected
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = validate_warmup(2, context="test")
+            assert result >= MINIMUM_WARMUP_ITERATIONS
+            assert len(w) > 0  # Warning should be issued
+        
+        # Test valid warmup passes through
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = validate_warmup(10, context="test")
+            assert result == 10
+            assert len(w) == 0  # No warning
     

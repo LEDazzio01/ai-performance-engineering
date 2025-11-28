@@ -24,7 +24,7 @@ class OptimizedTransposePaddedBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_transpose_padded",
             friendly_name="Ch7 Optimized Transpose",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
         )
 

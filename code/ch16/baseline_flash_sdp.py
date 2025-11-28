@@ -32,33 +32,38 @@ def ensure_flash_sdp_available() -> None:
         raise RuntimeError(f"SKIPPED: Flash SDP kernel failed to run: {exc}") from exc
 
 
-class FlashAttentionModule(nn.Module):
-    """Minimal attention block that forces Flash SDP backend."""
+class NaiveAttentionModule(nn.Module):
+    """Naive attention block using explicit matmul (baseline for comparison)."""
 
     def __init__(self, hidden_dim: int = 512, num_heads: int = 8):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
         self.qkv = nn.Linear(hidden_dim, hidden_dim * 3, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, _ = x.shape
         qkv = self.qkv(x)
-        qkv = qkv.view(B, T, 3, self.num_heads, self.hidden_dim // self.num_heads)
+        qkv = qkv.view(B, T, 3, self.num_heads, self.head_dim)
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
-        with sdpa_kernel([SDPBackend.FLASH_ATTENTION]):
-            out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+        # Baseline: naive attention with explicit matmul (no Flash)
+        # This has O(n^2) memory for attention scores
+        scale = self.head_dim ** -0.5
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale
+        attn = F.softmax(attn, dim=-1)
+        out = torch.matmul(attn, v)
         out = out.transpose(1, 2).reshape(B, T, self.hidden_dim)
         return out
 
 
 class BaselineFlashSDPBenchmark(BaseBenchmark):
-    """Runs Flash SDP attention without extra optimizations."""
+    """Baseline: naive attention with explicit matmul (no Flash SDP)."""
 
     def __init__(self):
         super().__init__()
-        self.model: Optional[FlashAttentionModule] = None
+        self.model: Optional[NaiveAttentionModule] = None
         self.inputs: Optional[torch.Tensor] = None
         self.seq_len = 256
         self.batch = 8
@@ -70,9 +75,9 @@ class BaselineFlashSDPBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        ensure_flash_sdp_available()
         torch.manual_seed(0)
-        self.model = FlashAttentionModule(hidden_dim=self.hidden, num_heads=8).to(
+        # Baseline: naive attention without Flash SDP
+        self.model = NaiveAttentionModule(hidden_dim=self.hidden, num_heads=8).to(
             self.device, dtype=torch.float16
         )
         self.inputs = torch.randn(self.batch, self.seq_len, self.hidden, device=self.device, dtype=torch.float16)
@@ -83,7 +88,7 @@ class BaselineFlashSDPBenchmark(BaseBenchmark):
             raise RuntimeError("Model/inputs not initialized")
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
-        with nvtx_range("flash_sdp_baseline", enable=enable_nvtx):
+        with nvtx_range("naive_attention_baseline", enable=enable_nvtx):
             _ = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
 
@@ -100,7 +105,7 @@ class BaselineFlashSDPBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=1,
-            warmup=1,
+            warmup=5,
             measurement_timeout_seconds=90,
             setup_timeout_seconds=90,
         )

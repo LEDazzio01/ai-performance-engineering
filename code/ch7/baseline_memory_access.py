@@ -23,7 +23,7 @@ class BaselineMemoryAccessBenchmark(CudaBinaryBenchmark):
             binary_name="baseline_memory_access",
             friendly_name="Ch7 Baseline Memory Access",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
         )

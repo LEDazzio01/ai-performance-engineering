@@ -1,7 +1,17 @@
 # Lab - Distributed Training Playbook
 
 ## Summary
-Collects distributed-training recipes for Blackwell clusters: DDP, FSDP, ZeRO-1/2/3, symmetric memory, and flash-attention-aware all-reduce handling, all runnable through the harness.
+Collects distributed-training recipes for Blackwell clusters: DDP, FSDP, FSDP2+FP8, ZeRO-1/2/3, symmetric memory, and flash-attention-aware all-reduce handling, all runnable through the harness.
+
+## Standalone vs HuggingFace Scripts
+
+| Script Type | Files | Dependencies | Use Case |
+|-------------|-------|--------------|----------|
+| **Standalone** | `*_standalone.py` | PyTorch only | Quick testing, no downloads |
+| **HuggingFace** | `baseline_fsdp.py`, `optimized_fsdp.py` | transformers, TinyStories | Production-like benchmarks |
+
+> **Quick Start**: Use `baseline_fsdp2_standalone.py` and `optimized_fsdp2_fp8_standalone.py` for immediate
+> FSDP2+FP8 benchmarks without HuggingFace model downloads.
 
 ## Learning Goals
 - Benchmark standard DDP vs optimized overlap-aware variants.
@@ -23,14 +33,14 @@ Collects distributed-training recipes for Blackwell clusters: DDP, FSDP, ZeRO-1/
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/train_distributed
-python tools/cli/benchmark_cli.py run --targets labs/train_distributed --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/train_distributed
+python -m cli.aisp bench run --targets labs/train_distributed --profile minimal
 ```
 - Targets follow the `labs/train_distributed:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/train_distributed:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/train_distributed --profile minimal` runs every distributed configuration registered with the harness.
+- `python -m cli.aisp bench run --targets labs/train_distributed --profile minimal` runs every distributed configuration registered with the harness.
 - `torchrun --standalone --nproc_per_node 1 labs/train_distributed/train_fsdp.py --mode baseline --steps 8 --sequence-length 2048` exercises the BF16 baseline; swap `--mode optimized` to enable the FP8 path (requires `torchao`). Both variants print steps/s, tokens/s, TFLOPs per rank, and peak GPU memory.
 - `python labs/train_distributed/optimized_zero3.py --summary` shows reduced peak memory vs the baseline script.
 
@@ -49,10 +59,10 @@ python tools/cli/benchmark_cli.py run --targets labs/train_distributed --profile
 - Targets: `labs/train_distributed:pipeline_gpipe_2stages`, `labs/train_distributed:1f1b_2stages`, `labs/train_distributed:dualpipe_2stages`, and the V-shape variant `labs/train_distributed:dualpipev_2stages`. Each exposes `baseline_` vs `optimized_` scripts so you can quantify idle bubble reductions with just two GPUs.
 - Harness launch examples:
   ```bash
-  python tools/cli/benchmark_cli.py run --targets labs/train_distributed:pipeline_gpipe_2stages --profile minimal
-  python tools/cli/benchmark_cli.py run --targets labs/train_distributed:1f1b_2stages --profile minimal
-  python tools/cli/benchmark_cli.py run --targets labs/train_distributed:dualpipe_2stages --profile minimal
-  python tools/cli/benchmark_cli.py run --targets labs/train_distributed:dualpipev_2stages --profile minimal
+  python -m cli.aisp bench run --targets labs/train_distributed:pipeline_gpipe_2stages --profile minimal
+  python -m cli.aisp bench run --targets labs/train_distributed:1f1b_2stages --profile minimal
+  python -m cli.aisp bench run --targets labs/train_distributed:dualpipe_2stages --profile minimal
+  python -m cli.aisp bench run --targets labs/train_distributed:dualpipev_2stages --profile minimal
   ```
 - Direct runs (single process controlling four GPUs) let you sweep microbatch knobs and capture telemetry:
   ```bash

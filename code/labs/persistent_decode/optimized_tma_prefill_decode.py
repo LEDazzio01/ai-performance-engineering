@@ -447,7 +447,7 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=8,
-            warmup=2,
+            warmup=10,
             use_subprocess=False,
             measurement_timeout_seconds=120,
         )

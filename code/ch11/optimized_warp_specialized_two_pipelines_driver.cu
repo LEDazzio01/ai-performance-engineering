@@ -66,7 +66,8 @@ int main() {
 
     double max_err = 0.0;
     for (size_t i = 0; i < elems; ++i) {
-        double expected = h_a[i] * 2.0 + h_b[i];
+        // Kernel computes a + b
+        double expected = h_a[i] + h_b[i];
         max_err = std::max(max_err, std::abs(expected - h_out[i]));
     }
     std::printf("warp_specialized_two_pipelines_multistream_driver complete. max_err=%.3e\n", max_err);

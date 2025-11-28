@@ -32,7 +32,7 @@ def profile() -> Dict[str, Any]:
     return profile_template(
         chapter='ch19',
         chapter_dir=chapter_dir,
-        harness_config=BenchmarkConfig(iterations=10, warmup=3),  # Reduced from 20,5
+        harness_config=BenchmarkConfig(iterations=10, warmup=5),  # Reduced from 20,5
     )
 
 

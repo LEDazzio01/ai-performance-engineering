@@ -2,50 +2,25 @@
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
 import torch
-from torch.utils.cpp_extension import load
 
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+from common.python.extension_loader_template import load_cuda_extension_v2
 from common.python.hardware_capabilities import ensure_dsmem_supported  # noqa: E402
-
-try:
-    from common.python.build_utils import ensure_clean_build_directory
-except ImportError:
-    def ensure_clean_build_directory(build_dir: Path, max_lock_age_seconds: int = 300) -> None:
-        pass
 
 _EXT_NAME = "optimized_warp_specialized_two_pipelines_ext"
 
 
-def _get_build_dir() -> Path:
-    """Get the torch extension build directory."""
-    base = os.environ.get("TORCH_EXTENSIONS_DIR")
-    repo_root = Path(__file__).resolve().parents[1]
-    if base:
-        return Path(base) / _EXT_NAME
-    return repo_root / ".torch_extensions" / _EXT_NAME
-
-
 @lru_cache(maxsize=1)
 def _load_optimized_extension():
-    # Clean stale builds before attempting to load
-    build_dir = _get_build_dir()
-    build_dir.mkdir(parents=True, exist_ok=True)
-    ensure_clean_build_directory(build_dir)
-    
-    sources = [
-        Path(__file__).with_name("warp_specialized_multistream_extension.cu"),
-    ]
-    return load(
+    return load_cuda_extension_v2(
         name=_EXT_NAME,
-        sources=[str(src) for src in sources],
+        sources=[Path(__file__).with_name("warp_specialized_multistream_extension.cu")],
         extra_cflags=["-O3"],
         extra_cuda_cflags=["-O3"],
-        verbose=False,
     )
 
 
@@ -62,9 +37,9 @@ class OptimizedDualPipelineBenchmark(BaseBenchmark):
         self.input_b: torch.Tensor | None = None
         self.output: torch.Tensor | None = None
 
-        # Match constants from optimized_warp_specialized_two_pipelines_multistream.cu
+        # Match constants from baseline for fair comparison
         self.tile_elems = 1024
-        self.tiles = 256
+        self.tiles = 128  # Same as baseline for fair comparison
         self.baseline_total_elements = self.tiles * self.tile_elems
 
     def setup(self) -> None:

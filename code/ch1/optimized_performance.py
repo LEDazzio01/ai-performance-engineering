@@ -60,16 +60,12 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
         )
         
         if self.device.type == "cuda":
-            # Optimization: Use FP16 for faster computation
+            # Optimization: Use FP16 for faster computation (tensor cores)
             self.model = self.model.half()
             dtype = torch.float16
             self.model = self.model.to(self.device)
-            self.model = compile_model(
-                self.model,
-                mode="reduce-overhead",
-                fullgraph=False,
-                dynamic=False,
-            )
+            # Skip torch.compile for this small model - overhead exceeds benefit
+            # The speedup comes from FP16 + batch fusion instead
         else:
             self.model = self.model.to(self.device)
             dtype = torch.float32
@@ -133,7 +129,7 @@ class OptimizedPerformanceBatchBenchmark(BaseBenchmark):
         """Return benchmark-specific config."""
         return BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=10,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:

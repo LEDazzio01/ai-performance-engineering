@@ -107,7 +107,7 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
         # Keep iterations small to avoid large host memory pressure during sweeps.
         return BenchmarkConfig(
             iterations=16,
-            warmup=2,
+            warmup=5,
             timeout_seconds=180,
             measurement_timeout_seconds=180,
             use_subprocess=False,

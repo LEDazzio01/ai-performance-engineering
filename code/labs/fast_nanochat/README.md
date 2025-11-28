@@ -25,8 +25,8 @@ Decode-focused microbenchmarks inspired by nanochat that show how common serving
 Use the benchmark harness for repeatable runs and artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/fast_nanochat
-python tools/cli/benchmark_cli.py run --targets labs/fast_nanochat --profile none
+python -m cli.aisp bench list-targets --chapter labs/fast_nanochat
+python -m cli.aisp bench run --targets labs/fast_nanochat --profile none
 ```
 - Target labels: `baseline_fast_nanochat`, `optimized_fast_nanochat_pinned`, `..._streams`, `..._compile`, `..._graph`, `..._graph_full`, `..._fp8`, `..._fp4`, `..._warp_specialized`, `..._8xgpu`.
 - Pass extra flags via `--target-extra-arg labs/fast_nanochat:<target>="--flag value"`.

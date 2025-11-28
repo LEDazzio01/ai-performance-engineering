@@ -137,6 +137,7 @@ class _VllmWrapper:
 
     def snapshot_metrics(self, ttft_ema: float, tpot_ema: float) -> Dict[str, float]:
         mem_free_gb = 0.0
+        if torch.cuda.is_available():
             torch.cuda.synchronize(self.device_index)
             free_bytes, _ = torch.cuda.mem_get_info(self.device_index)
             mem_free_gb = free_bytes / (1024**3)

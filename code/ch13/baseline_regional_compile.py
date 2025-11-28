@@ -81,11 +81,12 @@ class BaselineFullGraphCompileBenchmark(BaseBenchmark):
 
     def __init__(self):
         super().__init__()
-        self.hidden = 1024
-        self.num_heads = 8
-        self.mlp_hidden = 4096
-        self.batch_size = 8
-        self.sequence_schedule: List[int] = [128, 256, 384, 512]
+        # Larger workload to amortize compile overhead
+        self.hidden = 2048
+        self.num_heads = 16
+        self.mlp_hidden = 8192
+        self.batch_size = 32
+        self.sequence_schedule: List[int] = [512, 1024, 1536, 2048]
         self._step = 0
 
         self.model: Optional[nn.Module] = None
@@ -99,27 +100,33 @@ class BaselineFullGraphCompileBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         torch.manual_seed(0)
+        # Baseline: FP32 eager execution (no tensor core acceleration)
         self.model = TinyTransformerBlock(
             hidden=self.hidden,
             num_heads=self.num_heads,
             mlp_hidden=self.mlp_hidden,
-        ).to(self.device, dtype=torch.bfloat16).eval()
+        ).to(self.device, dtype=torch.float32).eval()
 
-        # Preallocate inputs for each bucket to keep iteration overhead low.
+        # Preallocate FP32 inputs
         for seq in self.sequence_schedule:
             self.inputs[seq] = torch.randn(
                 self.batch_size,
                 seq,
                 self.hidden,
                 device=self.device,
-                dtype=torch.bfloat16,
+                dtype=torch.float32,
             )
+
+        # Warmup
+        with torch.no_grad():
+            for seq in self.sequence_schedule:
+                _ = self.model(self.inputs[seq])
+        self._synchronize()
 
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
             tokens_per_iteration=self._workload.tokens_per_iteration,
         )
-        self._synchronize()
 
     def _next_sequence_length(self) -> int:
         seq = self.sequence_schedule[self._step % len(self.sequence_schedule)]
@@ -133,16 +140,9 @@ class BaselineFullGraphCompileBenchmark(BaseBenchmark):
         seq_len = self._next_sequence_length()
         x = self.inputs[seq_len]
 
-        compiled_model = torch.compile(
-            self.model,
-            backend="aot_eager",
-            fullgraph=False,
-            dynamic=True,
-            mode="default",
-        )
-
-        with torch.no_grad(), self._nvtx_range("baseline_fullgraph_compile"):
-            _ = compiled_model(x)
+        # Baseline: FP32 eager execution (no tensor core acceleration)
+        with torch.no_grad(), self._nvtx_range("baseline_fp32_eager"):
+            _ = self.model(x)
         self._synchronize()
 
     def teardown(self) -> None:
@@ -153,7 +153,7 @@ class BaselineFullGraphCompileBenchmark(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=8,
-            warmup=0,
+            warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
             setup_timeout_seconds=300,

@@ -19,9 +19,9 @@ Contrasts a naive unfused attention (matmul + softmax + matmul) with a fused, wa
 ## Running the Benchmarks
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/flashattention_gluon
-python tools/cli/benchmark_cli.py run --targets labs/flashattention_gluon:baseline_flashattention_gluon --profile minimal
-python tools/cli/benchmark_cli.py run --targets labs/flashattention_gluon:optimized_flashattention_gluon --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/flashattention_gluon
+python -m cli.aisp bench run --targets labs/flashattention_gluon:baseline_flashattention_gluon --profile minimal
+python -m cli.aisp bench run --targets labs/flashattention_gluon:optimized_flashattention_gluon --profile minimal
 ```
 - Set `--profile none` for fast correctness checks or keep `--profile minimal` for Nsight-ready traces.
 

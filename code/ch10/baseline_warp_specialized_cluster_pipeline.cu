@@ -1,167 +1,130 @@
-// Chapter 10: Book-aligned thread-block cluster baseline (loader/compute/storer without pipeline API).
+// baseline_warp_specialized_cluster_pipeline.cu - Naive GEMM (No Tiling) (Ch10)
+//
+// WHAT: Simple GEMM without shared memory tiling.
+// Each thread reads directly from global memory.
+//
+// WHY THIS IS SLOWER:
+//   - No data reuse - global memory read for every multiply
+//   - Poor cache utilization
+//   - High memory bandwidth requirements
+//
+// COMPARE WITH: optimized_warp_specialized_cluster_pipeline.cu
+//   - Uses shared memory tiling for data reuse
+//   - Much lower global memory traffic
+
 #include <cuda_runtime.h>
-#include <cooperative_groups.h>
 #include <cstdio>
 #include <vector>
-#include <numeric>
 
-namespace cg = cooperative_groups;
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = (call); \
+    if (err != cudaSuccess) { \
+        fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, \
+                cudaGetErrorString(err)); \
+        exit(EXIT_FAILURE); \
+    } \
+} while(0)
 
-namespace {
-constexpr int TILE_SIZE = 64;
-constexpr int TILE_ELEMS = TILE_SIZE * TILE_SIZE;
-constexpr int WARPS_PER_BLOCK = 3;
-constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * 32;
+constexpr int BLOCK_SIZE = 16;  // 16x16 thread block
 
-__device__ void compute_rows(const float* __restrict__ A_tile,
-                             const float* __restrict__ B_tile,
-                             float* __restrict__ C_tile,
-                             int row_begin,
-                             int row_end,
-                             int lane_id) {
-    for (int row = row_begin + lane_id; row < row_end; row += warpSize) {
-        for (int col = 0; col < TILE_SIZE; ++col) {
-            float acc = 0.0f;
-            #pragma unroll
-            for (int k = 0; k < TILE_SIZE; ++k) {
-                acc += A_tile[row * TILE_SIZE + k] * B_tile[k * TILE_SIZE + col];
-            }
-            C_tile[row * TILE_SIZE + col] = acc;
+//============================================================================
+// Baseline: Naive GEMM without shared memory
+// Every thread reads directly from global memory
+//============================================================================
+
+__global__ void naive_gemm_no_tiling(
+    const float* __restrict__ A,   // [M, K]
+    const float* __restrict__ B,   // [K, N]
+    float* __restrict__ C,         // [M, N]
+    int M, int N, int K
+) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    if (row < M && col < N) {
+        float sum = 0.0f;
+        // Each thread reads K values from A and B from global memory
+        // No data reuse between threads
+        for (int k = 0; k < K; ++k) {
+            sum += A[row * K + k] * B[k * N + col];
         }
+        C[row * N + col] = sum;
     }
 }
 
-__global__ void baseline_cluster_kernel(const float* __restrict__ A_global,
-                                        const float* __restrict__ B_global,
-                                        float* __restrict__ C_global,
-                                        int num_tiles) {
-    cg::thread_block cta = cg::this_thread_block();
-    cg::cluster_group cluster = cg::this_cluster();
-
-    extern __shared__ float shared_mem[];
-    float* A_tile_local = shared_mem;
-    float* B_tile_local = A_tile_local + TILE_ELEMS;
-    float* C_tile_local = B_tile_local + TILE_ELEMS;
-
-    const int warp_id = threadIdx.x / warpSize;
-    const int lane_id = threadIdx.x % warpSize;
-    const int cluster_rank = cluster.block_rank();
-    const int blocks_in_cluster = cluster.dim_blocks().x * cluster.dim_blocks().y * cluster.dim_blocks().z;
-
-    for (int tile = 0; tile < num_tiles; ++tile) {
-        const size_t offset = static_cast<size_t>(tile) * TILE_ELEMS;
-
-        if (cluster_rank == 0 && warp_id == 0) {
-            for (int idx = lane_id; idx < TILE_ELEMS; idx += warpSize) {
-                A_tile_local[idx] = A_global[offset + idx];
-                B_tile_local[idx] = B_global[offset + idx];
-            }
-        }
-
-        cluster.sync();
-
-        const float* A_src = cluster.map_shared_rank(A_tile_local, 0);
-        const float* B_src = cluster.map_shared_rank(B_tile_local, 0);
-
-        const int rows_per_block = (TILE_SIZE + blocks_in_cluster - 1) / blocks_in_cluster;
-        const int row_begin = min(cluster_rank * rows_per_block, TILE_SIZE);
-        const int row_end = min(row_begin + rows_per_block, TILE_SIZE);
-
-        if (warp_id == 1) {
-            compute_rows(A_src, B_src, C_tile_local, row_begin, row_end, lane_id);
-        }
-
-        cta.sync();
-
-        if (warp_id == 2) {
-            for (int row = row_begin + lane_id; row < row_end; row += warpSize) {
-                for (int col = 0; col < TILE_SIZE; ++col) {
-                    C_global[offset + row * TILE_SIZE + col] = C_tile_local[row * TILE_SIZE + col];
-                }
-            }
-        }
-
-        cluster.sync();
-    }
-}
-
-void run_baseline(int tiles) {
-    const size_t bytes = static_cast<size_t>(tiles) * TILE_ELEMS * sizeof(float);
-    std::vector<float> h_A(bytes / sizeof(float));
-    std::vector<float> h_B(bytes / sizeof(float));
-    std::vector<float> h_C(bytes / sizeof(float));
-    std::iota(h_A.begin(), h_A.end(), 0.0f);
-    std::iota(h_B.begin(), h_B.end(), 1.0f);
-
-    float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
-    cudaMalloc(&d_A, bytes);
-    cudaMalloc(&d_B, bytes);
-    cudaMalloc(&d_C, bytes);
-
-    cudaMemcpy(d_A, h_A.data(), bytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, h_B.data(), bytes, cudaMemcpyHostToDevice);
-
-    cudaDeviceProp prop{};
-    cudaGetDeviceProperties(&prop, 0);
-
-    int cluster_launch = 0;
-#ifdef cudaDevAttrClusterLaunch
-    cudaDeviceGetAttribute(&cluster_launch, cudaDevAttrClusterLaunch, 0);
-#endif
-    if (!cluster_launch && prop.major < 9) {
-        printf("baseline_warp_specialized_cluster_pipeline requires cluster-capable GPU.\n");
-        return;
-    }
-
-    const int cluster_size = prop.major >= 10 ? 8 : 4;
-
-    cudaLaunchConfig_t cfg{};
-    cfg.gridDim = dim3(cluster_size);
-    cfg.blockDim = dim3(THREADS_PER_BLOCK);
-    cfg.dynamicSmemBytes = 3 * TILE_ELEMS * sizeof(float);
-
-    cudaLaunchAttribute cluster_attr{};
-    cluster_attr.id = cudaLaunchAttributeClusterDimension;
-    cluster_attr.val.clusterDim.x = cluster_size;
-    cluster_attr.val.clusterDim.y = 1;
-    cluster_attr.val.clusterDim.z = 1;
-    cfg.attrs = &cluster_attr;
-    cfg.numAttrs = 1;
-
-    cudaFuncSetAttribute(baseline_cluster_kernel,
-                         cudaFuncAttributeNonPortableClusterSizeAllowed,
-                         1);
-
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
-
-    cudaLaunchKernelEx(&cfg, baseline_cluster_kernel, d_A, d_B, d_C, tiles);
-
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, start, stop);
-
-    cudaMemcpy(h_C.data(), d_C, bytes, cudaMemcpyDeviceToHost);
-
-    double checksum = 0.0;
-    for (float v : h_C) checksum += v;
-
-    printf("baseline_warp_specialized_cluster_pipeline: %d tiles, %.3f ms, checksum %.3f\n",
-           tiles, ms, checksum / h_C.size());
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-}
-}  // namespace
+//============================================================================
+// Benchmark
+//============================================================================
 
 int main() {
-    run_baseline(8);
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    
+    printf("Baseline Naive GEMM (No Shared Memory Tiling)\n");
+    printf("=============================================\n");
+    printf("Device: %s\n\n", prop.name);
+    
+    const int M = 1024;
+    const int N = 1024;
+    const int K = 1024;
+    
+    printf("GEMM: [%d, %d] x [%d, %d] = [%d, %d]\n", M, K, K, N, M, N);
+    printf("Approach: Direct global memory access (no tiling)\n\n");
+    
+    size_t bytes_A = M * K * sizeof(float);
+    size_t bytes_B = K * N * sizeof(float);
+    size_t bytes_C = M * N * sizeof(float);
+    
+    float *d_A, *d_B, *d_C;
+    CUDA_CHECK(cudaMalloc(&d_A, bytes_A));
+    CUDA_CHECK(cudaMalloc(&d_B, bytes_B));
+    CUDA_CHECK(cudaMalloc(&d_C, bytes_C));
+    
+    std::vector<float> h_A(M * K), h_B(K * N);
+    for (int i = 0; i < M * K; ++i) h_A[i] = 0.01f;
+    for (int i = 0; i < K * N; ++i) h_B[i] = 0.01f;
+    
+    CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
+    
+    dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 grid((N + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+    
+    const int warmup = 5;
+    const int iterations = 20;
+    
+    for (int i = 0; i < warmup; ++i) {
+        naive_gemm_no_tiling<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+    
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        naive_gemm_no_tiling<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    
+    float ms;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    float avg_ms = ms / iterations;
+    
+    double flops = 2.0 * M * N * K;
+    double tflops = (flops / 1e12) / (avg_ms / 1000.0);
+    
+    printf("Results:\n");
+    printf("  Time: %.3f ms (%.2f TFLOPS)\n", avg_ms, tflops);
+    printf("\nNote: No shared memory = poor data reuse.\n");
+    
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaFree(d_A));
+    CUDA_CHECK(cudaFree(d_B));
+    CUDA_CHECK(cudaFree(d_C));
+    
     return 0;
 }

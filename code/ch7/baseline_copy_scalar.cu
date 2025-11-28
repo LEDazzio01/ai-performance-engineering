@@ -1,81 +1,102 @@
-// scalar_copy.cu -- naive global load example for Chapter 7.
+// baseline_copy_scalar.cu - Scalar memory copy (Ch7)
+//
+// WHAT: Naive scalar loads - 1 float (4 bytes) per memory operation.
+// Simple memory copy benchmark for comparing scalar vs vectorized.
+//
+// WHY THIS IS SLOWER:
+//   - Each thread issues individual 4-byte loads/stores
+//   - High instruction count per byte transferred
+//   - Does NOT saturate HBM bandwidth
 
 #include <cuda_runtime.h>
 #include <cstdio>
 
-#include "../common/headers/cuda_helpers.cuh"
+#define CUDA_CHECK(call)                                                       \
+    do {                                                                       \
+        cudaError_t err = (call);                                              \
+        if (err != cudaSuccess) {                                              \
+            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,   \
+                    cudaGetErrorString(err));                                  \
+            exit(EXIT_FAILURE);                                                \
+        }                                                                      \
+    } while (0)
 
-constexpr int N = 1 << 20;
-constexpr int RANDOM_PASSES = 64;
-constexpr int STRIDE = 97;
+constexpr int NUM_FLOATS = 64 * 1024 * 1024;  // 64M floats = 256 MB
+constexpr int BLOCK_SIZE = 256;
 
-__device__ __forceinline__ int advance_index(int idx) {
-  return (idx * STRIDE + 0x1f123bb) & (N - 1);
-}
-
-__global__ void copyScalarSlow(const float* in, float* out, int n) {
-  extern __shared__ float staging[];
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  if (tid >= n) {
-    return;
-  }
-
-  float accumulator = in[tid];
-  int gather_idx = tid;
-  #pragma unroll 8
-  for (int pass = 0; pass < RANDOM_PASSES; ++pass) {
-    gather_idx = advance_index(gather_idx);
-    const float sample = __ldg(in + gather_idx);
-    staging[threadIdx.x] = sample;
-    __syncthreads();
-    const int neighbor = (threadIdx.x + pass) & (blockDim.x - 1);
-    accumulator = staging[neighbor] * 0.999f + accumulator * 0.001f;
-    __syncthreads();
-  }
-
-  out[tid] = accumulator;
+// Scalar copy: 1 float per thread
+__global__ void copyScalar(const float* __restrict__ in,
+                           float* __restrict__ out,
+                           int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        out[idx] = in[idx];  // 4-byte load, 4-byte store
+    }
 }
 
 int main() {
-  float *h_in, *h_out;
-  CUDA_CHECK(cudaMallocHost(&h_in, N * sizeof(float)));
-  CUDA_CHECK(cudaMallocHost(&h_out, N * sizeof(float)));
-  for (int i = 0; i < N; ++i) {
-    h_in[i] = static_cast<float>(i);
-  }
-
-  float *d_in, *d_out;
-  CUDA_CHECK(cudaMalloc(&d_in, N * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_out, N * sizeof(float)));
-  CUDA_CHECK(cudaMemcpy(d_in, h_in, N * sizeof(float), cudaMemcpyHostToDevice));
-
-  dim3 block(64);
-  dim3 grid((N + block.x - 1) / block.x / 8);
-
-  cudaEvent_t start, stop;
-  CUDA_CHECK(cudaEventCreate(&start));
-  CUDA_CHECK(cudaEventCreate(&stop));
-
-  CUDA_CHECK(cudaEventRecord(start));
-  for (int iter = 0; iter < 50; ++iter) {
-    copyScalarSlow<<<grid, block, block.x * sizeof(float)>>>(d_in, d_out, N);
-    CUDA_CHECK(cudaGetLastError());
-  }
-  CUDA_CHECK(cudaEventRecord(stop));
-  CUDA_CHECK(cudaEventSynchronize(stop));
-  float ms = 0.0f;
-  CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
-  const float avg_ms = ms / 50.0f;
-
-  CUDA_CHECK(cudaMemcpy(h_out, d_out, N * sizeof(float), cudaMemcpyDeviceToHost));
-  printf("out[0]=%.1f\n", h_out[0]);
-  printf("TIME_MS: %.6f\n", avg_ms);
-
-  CUDA_CHECK(cudaEventDestroy(start));
-  CUDA_CHECK(cudaEventDestroy(stop));
-  CUDA_CHECK(cudaFree(d_in));
-  CUDA_CHECK(cudaFree(d_out));
-  CUDA_CHECK(cudaFreeHost(h_in));
-  CUDA_CHECK(cudaFreeHost(h_out));
-  return 0;
+    printf("Baseline: Scalar (4-byte) Copy\n");
+    printf("==============================\n");
+    
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    printf("GPU: %s (SM %d.%d)\n\n", prop.name, prop.major, prop.minor);
+    
+    size_t bytes = NUM_FLOATS * sizeof(float);
+    printf("Data size: %zu MB\n", bytes / (1024 * 1024));
+    printf("Total transfer: %zu MB (1 read + 1 write)\n\n", 2 * bytes / (1024 * 1024));
+    
+    // Allocate
+    float *d_in, *d_out;
+    CUDA_CHECK(cudaMalloc(&d_in, bytes));
+    CUDA_CHECK(cudaMalloc(&d_out, bytes));
+    
+    // Initialize
+    float* h_data = new float[NUM_FLOATS];
+    for (int i = 0; i < NUM_FLOATS; ++i) h_data[i] = (float)i;
+    CUDA_CHECK(cudaMemcpy(d_in, h_data, bytes, cudaMemcpyHostToDevice));
+    
+    // Setup timing
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+    
+    dim3 block(BLOCK_SIZE);
+    dim3 grid((NUM_FLOATS + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    
+    // Warmup
+    for (int i = 0; i < 5; ++i) {
+        copyScalar<<<grid, block>>>(d_in, d_out, NUM_FLOATS);
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+    
+    // Benchmark
+    const int iterations = 20;
+    CUDA_CHECK(cudaEventRecord(start));
+    for (int i = 0; i < iterations; ++i) {
+        copyScalar<<<grid, block>>>(d_in, d_out, NUM_FLOATS);
+    }
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+    
+    float ms;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
+    ms /= iterations;
+    
+    // Calculate bandwidth (read + write)
+    float bandwidth_gb = (2.0f * bytes) / (ms / 1000.0f) / 1e9f;
+    
+    printf("Results:\n");
+    printf("  Time: %.3f ms\n", ms);
+    printf("  Bandwidth: %.1f GB/s\n", bandwidth_gb);
+    printf("TIME_MS: %.6f\n", ms);
+    
+    // Cleanup
+    delete[] h_data;
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
+    CUDA_CHECK(cudaFree(d_in));
+    CUDA_CHECK(cudaFree(d_out));
+    
+    return 0;
 }

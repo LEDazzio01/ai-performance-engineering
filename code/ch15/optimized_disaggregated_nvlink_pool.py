@@ -195,7 +195,7 @@ def run_benchmark(
     )
     benchmark.setup()
     
-    config = BenchmarkConfig(iterations=3, warmup=1, profile_mode=profile)
+    config = BenchmarkConfig(iterations=3, warmup=5, profile_mode=profile)
     harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
     
     result = harness.benchmark(benchmark.run, name="optimized_disaggregated")
@@ -295,7 +295,7 @@ class DisaggregatedNVLinkPoolBenchmark(BaseBenchmark):
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=3)
+        return BenchmarkConfig(iterations=10, warmup=5)
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

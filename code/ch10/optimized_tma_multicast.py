@@ -27,8 +27,8 @@ class OptimizedTMAMulticastBenchmark(CudaBinaryBenchmark):
             chapter_dir=chapter_dir,
             binary_name="optimized_tma_multicast",
             friendly_name="TMA Multicast GEMM",
-            iterations=3,
-            warmup=1,
+            iterations=10,
+            warmup=5,  # Minimum warmup for CUDA binary
             timeout_seconds=180,
         )
 

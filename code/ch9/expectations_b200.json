@@ -31,19 +31,19 @@
       "metadata": {
         "best_optimization": "gemm",
         "best_optimization_file": "optimized_cutlass_gemm.cu",
-        "best_optimization_speedup": 1.016625862335927,
-        "best_optimization_time_ms": 1435.2189886655349,
-        "git_commit": "f646d69853794d032292098502313153b54fff3d",
-        "updated_at": "2025-11-26T06:37:06.128625"
+        "best_optimization_speedup": 0.9641752862687268,
+        "best_optimization_time_ms": 838.0051049947118,
+        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
+        "updated_at": "2025-11-27T20:14:04.266108"
       },
       "metrics": {
-        "baseline_p75_ms": 1362.8208709997125,
-        "baseline_p90_ms": 1362.8208709997125,
-        "baseline_time_ms": 1459.0807419929963,
-        "best_optimized_p75_ms": 1363.749515003292,
-        "best_optimized_p90_ms": 1363.749515003292,
+        "baseline_p75_ms": 775.7896509720013,
+        "baseline_p90_ms": 775.7896509720013,
+        "baseline_time_ms": 807.9838120029308,
+        "best_optimized_p75_ms": 859.5170259941369,
+        "best_optimized_p90_ms": 859.5170259941369,
         "best_optimized_speedup": 1.0,
-        "best_optimized_time_ms": 1435.2189886655349,
+        "best_optimized_time_ms": 838.0051049947118,
         "best_speedup": 1.0
       },
       "type": "cuda"
@@ -77,19 +77,19 @@
       "metadata": {
         "best_optimization": "l2norm",
         "best_optimization_file": "optimized_fused_l2norm.cu",
-        "best_optimization_speedup": 1.0998494187099617,
-        "best_optimization_time_ms": 790.130936007093,
-        "git_commit": "f646d69853794d032292098502313153b54fff3d",
-        "updated_at": "2025-11-26T06:43:20.772504"
+        "best_optimization_speedup": 1.1208625996100938,
+        "best_optimization_time_ms": 292.24167300465825,
+        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
+        "updated_at": "2025-11-27T20:14:06.253316"
       },
       "metrics": {
-        "baseline_p75_ms": 845.1493669999763,
-        "baseline_p90_ms": 845.1493669999763,
-        "baseline_time_ms": 869.0250506721592,
-        "best_optimized_p75_ms": 785.6323320011143,
-        "best_optimized_p90_ms": 785.6323320011143,
+        "baseline_p75_ms": 325.54786500986665,
+        "baseline_p90_ms": 325.54786500986665,
+        "baseline_time_ms": 327.5627613184042,
+        "best_optimized_p75_ms": 292.44243598077446,
+        "best_optimized_p90_ms": 292.44243598077446,
         "best_optimized_speedup": 1.02,
-        "best_optimized_time_ms": 790.130936007093,
+        "best_optimized_time_ms": 292.24167300465825,
         "best_speedup": 1.02
       },
       "type": "cuda"
@@ -149,19 +149,19 @@
       "metadata": {
         "best_optimization": "tiling_matmul",
         "best_optimization_file": "optimized_micro_tiling_matmul.cu",
-        "best_optimization_speedup": 1.0141300163160096,
-        "best_optimization_time_ms": 872.3744363232981,
-        "git_commit": "f646d69853794d032292098502313153b54fff3d",
-        "updated_at": "2025-11-26T06:30:46.363650"
+        "best_optimization_speedup": 1.0858825684170907,
+        "best_optimization_time_ms": 368.0012516366939,
+        "git_commit": "657de7f6b85e490ef49125856e5ed28875c0d8df",
+        "updated_at": "2025-11-27T20:13:59.176314"
       },
       "metrics": {
-        "baseline_p75_ms": 910.6902120111044,
-        "baseline_p90_ms": 910.6902120111044,
-        "baseline_time_ms": 884.7011013422161,
-        "best_optimized_p75_ms": 847.2201199911069,
-        "best_optimized_p90_ms": 847.2201199911069,
+        "baseline_p75_ms": 397.21010596258566,
+        "baseline_p90_ms": 397.21010596258566,
+        "baseline_time_ms": 399.6061443079573,
+        "best_optimized_p75_ms": 365.88397197192535,
+        "best_optimized_p90_ms": 365.88397197192535,
         "best_optimized_speedup": 1.1039286358817268,
-        "best_optimized_time_ms": 872.3744363232981,
+        "best_optimized_time_ms": 368.0012516366939,
         "best_speedup": 1.1039286358817268
       },
       "type": "cuda"

@@ -35,7 +35,7 @@ class OccupancyBinaryBenchmark(CudaBinaryBenchmark):
             binary_name="occupancy_tuning",
             friendly_name=friendly_name,
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=90,
             # Baseline: small block, heavy shared memory to depress occupancy.
             run_args=run_args

@@ -109,7 +109,7 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=2)
+        return BenchmarkConfig(iterations=10, warmup=5)
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""
@@ -136,5 +136,5 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     bench = get_benchmark()
-    result = bench.run(BenchmarkConfig(iterations=5, warmup=1))
+    result = bench.run(BenchmarkConfig(iterations=5, warmup=5))
     print(result)

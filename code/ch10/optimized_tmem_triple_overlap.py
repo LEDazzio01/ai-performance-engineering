@@ -27,7 +27,7 @@ class TMEMTripleOverlapBenchmark(CudaBinaryBenchmark):
             binary_name="tma_2d_pipeline_blackwell",
             friendly_name="Blackwell TMA 2D Pipeline",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
             time_regex=r"(?:TMA|Baseline)\s+runtime:\s*([0-9.]+)\s*ms",
             requires_pipeline_api=True,

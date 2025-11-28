@@ -22,7 +22,7 @@ class CapstoneMatmulBenchmark(BaseBenchmark):
         *,
         size: int = 2048,
         iterations: int = 3,
-        warmup: int = 1,
+        warmup: int = 5,
         timeout_seconds: int = 300,
         validate_against_baseline: bool = True,
     ) -> None:

@@ -28,26 +28,8 @@ ARCH_SUFFIX = {
 }
 
 
-def _env_arch_override() -> Optional[str]:
-    """Return architecture override from environment if present."""
-    for key in ("AIPERF_ARCH", "CHAPTER_ARCH", "CUDA_BENCH_ARCH"):
-        value = os.getenv(key)
-        if value and value in ARCH_SUFFIX:
-            return value
-    return None
-
-
 def detect_supported_arch() -> str:
-    """Infer the CUDA architecture for building binaries.
-    
-    Prefers explicit environment overrides, otherwise uses the active GPU's
-    compute capability. Only architectures supported by chapter Makefiles are
-    returned.
-    """
-    override = _env_arch_override()
-    if override:
-        return override
-    
+    """Infer the CUDA architecture for building binaries from the active GPU."""
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA device required to benchmark CUDA binaries")
     
@@ -62,7 +44,7 @@ def detect_supported_arch() -> str:
     
     raise RuntimeError(
         f"Unsupported compute capability {major}.{minor}. "
-        f"Set AIPERF_ARCH to one of {sorted(ARCH_SUFFIX)} to force compilation."
+        f"Supported architectures: {sorted(ARCH_SUFFIX)}"
     )
 
 
@@ -84,7 +66,7 @@ class CudaBinaryBenchmark(BaseBenchmark):
         friendly_name: str,
         *,
         iterations: int = 3,
-        warmup: int = 1,
+        warmup: int = 5,
         timeout_seconds: int = 15,  # 15 second timeout to prevent hangs
         run_args: Sequence[str] = (),
         time_regex: Optional[str] = r"([0-9]+(?:\.[0-9]+)?)\s*ms",

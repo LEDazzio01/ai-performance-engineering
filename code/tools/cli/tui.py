@@ -3,8 +3,12 @@
 
 import curses
 import json
-from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+from tools.analysis.performance_analyzer import (
+    PerformanceAnalyzer,
+    load_benchmark_data as load_benchmark_results,
+)
 
 
 class BenchmarkTUI:
@@ -14,6 +18,7 @@ class BenchmarkTUI:
         ("🚀 Speed Leaderboard", "speed"),
         ("💾 Memory Leaderboard", "memory"),
         ("⭐ Pareto Frontier", "pareto"),
+        ("📜 Summary", "summary"),
         ("🔍 What-If Solver", "whatif"),
         ("🔗 Optimization Stacking", "stacking"),
         ("⚡ Power Efficiency", "power"),
@@ -24,7 +29,7 @@ class BenchmarkTUI:
         ("❌ Exit", "exit"),
     ]
     
-    def __init__(self):
+    def __init__(self, data_path: Optional[str] = None):
         self.current_menu = 0
         self.current_view = "menu"
         self.scroll_offset = 0
@@ -32,16 +37,12 @@ class BenchmarkTUI:
         self.handler = None
         self.whatif_params = {"vram": "", "latency": "", "memory": ""}
         self.whatif_field = 0
+        self.data_path = data_path
         
     def init_handler(self):
         """Initialize the data handler."""
-        from tools.dashboard.server import DashboardHandler
-        
-        class MockHandler(DashboardHandler):
-            def __init__(self):
-                self.data_file = None
-        
-        self.handler = MockHandler()
+        loader = (lambda: load_benchmark_results(self.data_path)) if self.data_path else load_benchmark_results
+        self.handler = PerformanceAnalyzer(loader)
     
     def run(self, stdscr):
         """Main TUI loop."""
@@ -80,6 +81,8 @@ class BenchmarkTUI:
                 self.draw_leaderboard("memory")
             elif self.current_view == "pareto":
                 self.draw_pareto()
+            elif self.current_view == "summary":
+                self.draw_summary()
             elif self.current_view == "whatif":
                 self.draw_whatif()
             elif self.current_view == "stacking":
@@ -217,6 +220,39 @@ class BenchmarkTUI:
             self.stdscr.attron(self.COLOR_SUCCESS)
             self.stdscr.addstr(y, 2, f"⭐ {name:<38}{speedup:<12}{mem:<12}")
             self.stdscr.attroff(self.COLOR_SUCCESS)
+    
+    def draw_summary(self):
+        """Draw quick summary stats."""
+        h, _ = self.stdscr.getmaxyx()
+        data = load_benchmark_results(self.data_path)
+        summary = data.get("summary", {})
+        total = summary.get("total_benchmarks", len(data.get("benchmarks", [])))
+        avg_speedup = summary.get("avg_speedup", 0)
+        max_speedup = summary.get("max_speedup", 0)
+        successful = summary.get("successful")
+        failed = summary.get("failed")
+        memory_optimizations = summary.get("memory_optimizations")
+        speed_optimizations = summary.get("speed_optimizations")
+        
+        self.stdscr.attron(curses.A_BOLD)
+        self.stdscr.addstr(3, 2, "📜 BENCHMARK SUMMARY")
+        self.stdscr.attroff(curses.A_BOLD)
+        
+        lines = [
+            f"Total benchmarks: {total}",
+            f"Average speedup:  {avg_speedup:.2f}x",
+            f"Max speedup:      {max_speedup:.2f}x",
+        ]
+        if successful is not None:
+            lines.append(f"Successful:       {successful} | Failed: {failed or 0}")
+        if memory_optimizations is not None:
+            lines.append(f"Memory-focused:   {memory_optimizations} | Speed-focused: {speed_optimizations or 0}")
+        lines.append(f"Timestamp:        {data.get('timestamp', 'N/A')}")
+        
+        for idx, line in enumerate(lines):
+            if 6 + idx >= h - 2:
+                break
+            self.stdscr.addstr(5 + idx, 2, line)
     
     def draw_whatif(self):
         """Draw What-If solver with input fields."""
@@ -579,14 +615,11 @@ class BenchmarkTUI:
         return True
 
 
-def run_tui():
+def run_tui(data_file: Optional[str] = None):
     """Entry point for TUI."""
-    tui = BenchmarkTUI()
+    tui = BenchmarkTUI(data_file)
     curses.wrapper(tui.run)
 
 
 if __name__ == "__main__":
     run_tui()
-
-
-

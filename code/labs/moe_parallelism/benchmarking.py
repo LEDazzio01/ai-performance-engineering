@@ -75,7 +75,7 @@ class PlanBenchmark(BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         if self._config is None:
-            config = BenchmarkConfig(iterations=1, warmup=0)
+            config = BenchmarkConfig(iterations=1, warmup=5)
             config.use_subprocess = False
             self._config = config
         return self._config

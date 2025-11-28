@@ -478,13 +478,13 @@ class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
         )
         # Warmup with causal pattern
         if HAS_FLEX_ATTENTION:
-            _ = self.demo_benchmark.benchmark_pattern("warmup", causal_mask, num_warmup=2, num_iterations=2)
+            _ = self.demo_benchmark.benchmark_pattern("warmup", causal_mask, num_warmup=10, num_iterations=2)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         """Benchmark: FlexAttention with causal mask."""
         if HAS_FLEX_ATTENTION and self.demo_benchmark is not None:
-            result = self.demo_benchmark.benchmark_pattern("Causal", causal_mask, num_warmup=0, num_iterations=1)
+            result = self.demo_benchmark.benchmark_pattern("Causal", causal_mask, num_warmup=10, num_iterations=1)
             self._last = result.get("elapsed_ms", 0.0)
         self._synchronize()
 

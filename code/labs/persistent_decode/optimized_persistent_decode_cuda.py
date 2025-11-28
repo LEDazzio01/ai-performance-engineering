@@ -14,9 +14,9 @@ from pathlib import Path
 from typing import Optional
 
 import torch
-from torch.utils.cpp_extension import load
 
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from common.python.extension_loader_template import load_cuda_extension_v2
 from labs.persistent_decode.persistent_decode_common import (
     build_inputs,
     resolve_device,
@@ -28,25 +28,21 @@ from labs.persistent_decode.persistent_decode_common import (
 @functools.lru_cache(None)
 def _load_extension() -> object:
     """Compile and return the CUDA extension once per process."""
-    ext_path = Path(__file__).with_name("persistent_decode_ext.cu")
-    repo_root = Path(__file__).resolve().parents[2]
     include_dirs = [
         # Stick to the repo-pinned CUTLASS to avoid mixing cute headers from TransformerEngine.
-        repo_root / "third_party" / "cutlass" / "include",
-        repo_root / "common" / "headers",
+        REPO_ROOT / "third_party" / "cutlass" / "include",
+        REPO_ROOT / "common" / "headers",
     ]
-    return load(
+    return load_cuda_extension_v2(
         name="persistent_decode_ext",
-        sources=[str(ext_path)],
+        sources=[Path(__file__).with_name("persistent_decode_ext.cu")],
         extra_cuda_cflags=[
             "--use_fast_math",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-DCUTE_ARCH_TCGEN05_TMEM_ENABLED",
             "-gencode=arch=compute_100,code=sm_100",
-        ]
-        + [f"-I{p}" for p in include_dirs],
-        verbose=False,
+        ] + [f"-I{p}" for p in include_dirs if p.exists()],
     )
 
 
@@ -75,9 +71,10 @@ class OptimizedPersistentDecodeCUDABenchmark(BaseBenchmark):
         self.inputs = None
 
     def get_config(self) -> BenchmarkConfig:
+        # NOTE: CUDA binary runs external executable, warmup=5 ensures CUDA driver is initialized
         return BenchmarkConfig(
-            iterations=1,
-            warmup=0,
+            iterations=5,
+            warmup=5,  # Required to warm CUDA driver and JIT
             use_subprocess=True,
             measurement_timeout_seconds=600,
         )

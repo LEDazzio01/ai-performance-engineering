@@ -1,9 +1,4 @@
 from .capstone_extension import load_capstone_module
-from .scenario_benchmark import (
-    CapstoneScenarioBenchmark,
-    ScenarioVariant,
-    list_available_scenarios,
-)
 
 try:
     from .capstone_extension_tcgen05 import load_tcgen05_module
@@ -50,7 +45,4 @@ __all__ = [
     "baseline_matmul",
     "optimized_matmul",
     "load_capstone_module",
-    "CapstoneScenarioBenchmark",
-    "ScenarioVariant",
-    "list_available_scenarios",
 ]

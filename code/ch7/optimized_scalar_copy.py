@@ -24,7 +24,7 @@ class OptimizedCopyVectorizedBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_copy_vectorized",
             friendly_name="Ch7 Vectorized Copy",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

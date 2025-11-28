@@ -128,7 +128,7 @@ def run_benchmark(
     )
     benchmark.setup()
     
-    config = BenchmarkConfig(iterations=5, warmup=2, profile_mode=profile)
+    config = BenchmarkConfig(iterations=5, warmup=10, profile_mode=profile)
     harness = BenchmarkHarness(mode=BenchmarkMode.INFERENCE, config=config)
     
     result = harness.benchmark(benchmark.run, name="flexattention_document")

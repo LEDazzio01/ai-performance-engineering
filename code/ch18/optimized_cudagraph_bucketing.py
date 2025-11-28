@@ -473,7 +473,7 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
         return self._workload
 
     def get_config(self) -> Optional[BenchmarkConfig]:
-        return BenchmarkConfig(iterations=3, warmup=1, enable_profiling=False)
+        return BenchmarkConfig(iterations=3, warmup=10, enable_profiling=False)
 
 
 def get_benchmark() -> BaseBenchmark:

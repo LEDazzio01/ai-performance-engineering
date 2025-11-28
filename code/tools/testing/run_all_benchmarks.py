@@ -12,6 +12,7 @@ Usage:
 """
 
 import sys
+import os
 from pathlib import Path
 import json
 import argparse
@@ -25,6 +26,9 @@ from dataclasses import dataclass, fields
 import threading
 from contextlib import ExitStack
 import copy
+
+# Force NVCC line info so Nsight/torch traces carry file/line metadata
+os.environ["NVCCFLAGS"] = f"-lineinfo {os.environ.get('NVCCFLAGS', '')}".strip()
 
 # Ensure repository root on sys.path before importing helpers
 repo_root = Path(__file__).resolve().parent.parent.parent
@@ -544,14 +548,112 @@ def log_expectation_evaluation(
 
 
 def reset_cuda_state():
-    """Reset CUDA state to prevent cascading failures."""
+    """Reset CUDA state to prevent cascading failures.
+    
+    Performs thorough cleanup:
+    - Garbage collection to release Python references
+    - Empty CUDA cache to free GPU memory
+    - Synchronize all CUDA streams
+    - Reset peak memory stats
+    - Clear torch.compile caches
+    """
+    import gc
+    
+    # Force garbage collection first to release Python references to CUDA tensors
+    gc.collect()
+    
     try:
         if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            # Synchronize first to complete pending operations
             torch.cuda.synchronize()
+            # Empty cache to free all unreferenced memory
+            torch.cuda.empty_cache()
+            # Reset memory tracking stats
             torch.cuda.reset_peak_memory_stats()
+            torch.cuda.reset_accumulated_memory_stats()
+            # Another sync to ensure cleanup is complete
+            torch.cuda.synchronize()
     except RuntimeError:
-        pass  # CUDA not initialized
+        pass  # CUDA not initialized or error
+    
+    # Clear torch.compile caches to prevent stale compiled code
+    try:
+        torch._dynamo.reset()
+    except Exception:
+        pass  # May not be available in all versions
+    
+    # Second GC pass to clean up any CUDA objects freed above
+    gc.collect()
+
+
+def clean_build_directories(chapter_dir: Path) -> None:
+    """Clean build directories to prevent stale lock issues.
+    
+    Removes stale lock files and cleans torch extensions cache for the chapter.
+    This prevents hangs from build locks left by crashed processes.
+    """
+    import shutil
+    
+    try:
+        from common.python.build_utils import ensure_clean_build_directory
+    except ImportError:
+        ensure_clean_build_directory = None
+    
+    # Clean chapter build directory - more aggressive: remove lock files directly
+    build_dir = chapter_dir / "build"
+    if build_dir.exists():
+        # Remove all lock files first
+        for lock_file in build_dir.glob("**/*.lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+        for lock_file in build_dir.glob("**/lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+        for lock_file in build_dir.glob("**/.ninja_lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+        # Then run the standard cleanup
+        if ensure_clean_build_directory:
+            try:
+                ensure_clean_build_directory(build_dir, max_lock_age_seconds=30)
+            except Exception as e:
+                logger.warning(f"Failed to clean build directory {build_dir}: {e}")
+    
+    # Clean torch extensions cache for this chapter
+    torch_ext_dir = Path(os.environ.get("TORCH_EXTENSIONS_DIR", Path.home() / ".cache" / "torch_extensions"))
+    chapter_name = chapter_dir.name
+    for ext_dir in torch_ext_dir.glob(f"py*/{chapter_name}*"):
+        # Remove all lock files
+        for lock_file in ext_dir.glob("**/*.lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+        for lock_file in ext_dir.glob("**/lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
+        if ensure_clean_build_directory:
+            try:
+                ensure_clean_build_directory(ext_dir, max_lock_age_seconds=30)
+            except Exception:
+                pass  # Best effort cleanup
+    
+    # Also clean torch inductor cache locks
+    inductor_cache = Path(os.environ.get("TORCHINDUCTOR_CACHE_DIR", ".torch_inductor"))
+    if inductor_cache.exists():
+        for lock_file in inductor_cache.glob("**/*.lock"):
+            try:
+                lock_file.unlink()
+            except Exception:
+                pass
 
 
 def is_distributed_benchmark(file_path: Path) -> bool:
@@ -1445,6 +1547,7 @@ def profile_python_benchmark_torch(
             profile_memory=True,
             with_stack=True,
             with_flops=True,
+            with_modules=True,
         ) as prof:
             benchmark.benchmark_fn()
             prof.step()
@@ -1487,12 +1590,23 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> Tuple[bool, Optional[str
             logger.warning(f"  WARNING: Unable to auto-detect CUDA arch for {chapter_dir.name}: {exc}")
     
     try:
+        # Clean build directory before building to prevent stale lock issues
+        build_dir = chapter_dir / "build"
+        if build_dir.exists():
+            try:
+                from common.python.build_utils import ensure_clean_build_directory
+                ensure_clean_build_directory(build_dir)
+            except ImportError:
+                pass  # build_utils not available
+            except Exception:
+                pass  # Ignore cleanup errors
+        
         logger.info(f"  Building CUDA executables ({make_desc})...")
         # Explicitly set ARCH so Makefiles consistently target the active GPU
         result = subprocess.run(
             ["make", "-B", "-C", str(chapter_dir), "all"],
             capture_output=True,
-            timeout=120,  # Increased timeout - compilation can take time for complex kernels
+            timeout=300,  # Increased timeout for CUDA JIT compilation (can take 60+ seconds)
             check=False,
             text=True,
             env=env,
@@ -1507,8 +1621,8 @@ def ensure_cuda_executables_built(chapter_dir: Path) -> Tuple[bool, Optional[str
         return True, None
     except subprocess.TimeoutExpired:
         # Make timed out - compilation takes too long
-        logger.warning(f"  WARNING: Make build timed out after 120s - compilation may be too slow or hanging")
-        return False, "Make build timed out after 120s"
+        logger.warning(f"  WARNING: Make build timed out after 300s - compilation may be too slow or hanging")
+        return False, "Make build timed out after 300s"
     except Exception as e:
         logger.warning(f"  WARNING: Make build exception: {e}")
         return False, str(e)
@@ -1533,8 +1647,9 @@ def _test_chapter_impl(
     rdzv_endpoint: Optional[str] = None,
     env_passthrough: Optional[List[str]] = None,
     target_extra_args: Optional[Dict[str, List[str]]] = None,
-    # Verification
-    verify_correctness: bool = False,
+    # Verification - BOTH enabled by default; without verification, benchmarks are meaningless
+    verify_input: bool = True,
+    verify_output: bool = True,
     # LLM analysis and patching options
     llm_analysis: bool = False,
     force_llm: bool = False,
@@ -1636,8 +1751,14 @@ def _test_chapter_impl(
             }
         }
     
+    # Clean build directories to prevent stale lock issues (before any GPU operations)
+    logger.info(f"  Cleaning build directories...")
+    clean_build_directories(chapter_dir)
+    
     # Reset CUDA state at start of chapter (always, to prevent cascading failures)
+    logger.info(f"  Resetting GPU state...")
     reset_cuda_state()
+    reset_gpu_state()  # Full GPU reset between chapters for clean state
     # Additional cleanup for cold start mode (includes gc.collect() for more thorough cleanup)
     if cold_start:
         reset_gpu_state()
@@ -1728,7 +1849,8 @@ def _test_chapter_impl(
     base_config = BenchmarkConfig(
         iterations=iterations,
         warmup=warmup,
-        measurement_timeout_seconds=60,
+        measurement_timeout_seconds=180,  # Increased for CUDA JIT compilation (can take 30+ seconds)
+        setup_timeout_seconds=120,  # Allow more time for setup (CUDA extension loading)
         timeout_multiplier=timeout_multiplier,  # Apply timeout multiplier from CLI
         enable_memory_tracking=True,  # Enable memory metrics display
         enable_profiling=enable_profiling,  # Respect profiling flag (opt-in via CLI)
@@ -2150,6 +2272,38 @@ def _test_chapter_impl(
                         failed_error += 1
                     continue
                 
+                # Verify input equivalence BEFORE running benchmarks (enabled by default)
+                if verify_input:
+                    input_verify_result = _verify_input_equivalence(
+                        baseline_benchmark,
+                        optimized_benchmark,
+                        str(baseline_path),
+                        str(optimized_path),
+                    )
+                    
+                    if not input_verify_result.get('equivalent', False):
+                        mismatches = input_verify_result.get('mismatches', [])
+                        mismatch_str = '; '.join(mismatches[:3])  # Show first 3 mismatches
+                        if input_verify_result.get('verification_type') == 'no_signature':
+                            logger.warning(f"    ⚠ INPUT VERIFICATION: Unable to verify - no input signatures available")
+                            logger.warning(f"      Consider implementing get_input_signature() in benchmarks")
+                        else:
+                            logger.error(f"    ✗ INPUT VERIFICATION FAILED: {mismatch_str}")
+                            logger.error(f"      Baseline and optimized benchmarks have different workloads!")
+                            logger.error(f"      Benchmark comparison is INVALID without equivalent inputs")
+                            result_entry['optimizations'].append({
+                                'file': opt_name,
+                                'technique': technique,
+                                'status': 'failed_input_verification',
+                                'error': f'Input verification failed: {mismatch_str}',
+                                'input_verification': input_verify_result,
+                            })
+                            failed_error += 1
+                            continue
+                    else:
+                        if input_verify_result.get('verification_type') != 'skipped':
+                            logger.info(f"    ✓ Input verified: workloads are equivalent")
+                
                 try:
                     # Reset CUDA state before each optimized benchmark (always, to prevent cascading failures)
                     reset_cuda_state()
@@ -2522,23 +2676,30 @@ def _test_chapter_impl(
                     result_entry['status'] = 'succeeded'
                     successful += 1
                     
-                    # Verify outputs if requested
-                    if verify_correctness and best_opt and result_entry.get('baseline_file'):
-                        baseline_path = result_entry.get('baseline_file')
-                        optimized_path = best_opt.get('file')
-                        if baseline_path and optimized_path:
-                            baseline_full = chapter_dir / baseline_path
-                            optimized_full = chapter_dir / optimized_path
+                    # Verify outputs if requested (enabled by default)
+                    if verify_output and best_opt and result_entry.get('baseline_file'):
+                        baseline_path_str = result_entry.get('baseline_file')
+                        optimized_path_str = best_opt.get('file')
+                        if baseline_path_str and optimized_path_str:
+                            baseline_full = chapter_dir / baseline_path_str
+                            optimized_full = chapter_dir / optimized_path_str
                             if baseline_full.exists() and optimized_full.exists():
                                 verify_result = _verify_patched_benchmark(
                                     str(baseline_full),
                                     str(optimized_full),
                                 )
-                                result_entry['verification'] = verify_result
+                                result_entry['output_verification'] = verify_result
                                 if verify_result.get('verified'):
-                                    logger.info(f"    ✓ Verified: optimized output matches baseline")
+                                    logger.info(f"    ✓ Output verified: optimized produces same results as baseline")
                                 elif verify_result.get('errors'):
-                                    logger.warning(f"    ⚠ Verification: {verify_result['errors'][0]}")
+                                    # Output verification failure is serious - mark as failed
+                                    logger.error(f"    ✗ OUTPUT VERIFICATION FAILED: {verify_result['errors'][0]}")
+                                    logger.error(f"      Without output verification, benchmark results are INVALID")
+                                    result_entry['status'] = 'failed_verification'
+                                    result_entry['error'] = f"Output verification failed: {verify_result['errors'][0]}"
+                                    # Decrement successful count since we're now failing
+                                    successful -= 1
+                                    failed_error += 1
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1
@@ -3622,6 +3783,99 @@ def _rebenchmark_patched_variant(
         }
 
 
+def _verify_input_equivalence(
+    baseline_benchmark,
+    optimized_benchmark,
+    baseline_path: str,
+    optimized_path: str,
+) -> Dict[str, Any]:
+    """Verify that baseline and optimized benchmarks have equivalent workloads.
+    
+    This is critical for benchmark validity: comparing performance of different
+    workloads is meaningless. Without input verification, an "optimized" benchmark
+    could simply be doing less work.
+    
+    Args:
+        baseline_benchmark: Instantiated baseline benchmark
+        optimized_benchmark: Instantiated optimized benchmark
+        baseline_path: Path to baseline file (for error messages)
+        optimized_path: Path to optimized file (for error messages)
+        
+    Returns:
+        Dict with keys:
+            - equivalent: bool (True if inputs match)
+            - verification_type: str (e.g., 'input_signature', 'skipped')
+            - mismatches: List[str] (description of any mismatches)
+            - baseline_signature: Dict (baseline input signature)
+            - optimized_signature: Dict (optimized input signature)
+    """
+    result = {
+        'equivalent': False,
+        'verification_type': 'input_signature',
+        'mismatches': [],
+        'baseline_signature': {},
+        'optimized_signature': {},
+    }
+    
+    # Check if benchmarks opt out of input verification
+    baseline_skip = getattr(baseline_benchmark, 'skip_input_verification', lambda: False)()
+    optimized_skip = getattr(optimized_benchmark, 'skip_input_verification', lambda: False)()
+    
+    if baseline_skip or optimized_skip:
+        result['verification_type'] = 'skipped'
+        result['equivalent'] = True  # Assume OK if benchmark opts out
+        result['mismatches'].append(f"Input verification skipped by benchmark {'baseline' if baseline_skip else 'optimized'}")
+        return result
+    
+    # Get input signatures from both benchmarks
+    baseline_sig_fn = getattr(baseline_benchmark, 'get_input_signature', None)
+    optimized_sig_fn = getattr(optimized_benchmark, 'get_input_signature', None)
+    
+    if baseline_sig_fn and callable(baseline_sig_fn):
+        try:
+            result['baseline_signature'] = baseline_sig_fn() or {}
+        except Exception as e:
+            result['mismatches'].append(f"Failed to get baseline signature: {e}")
+    
+    if optimized_sig_fn and callable(optimized_sig_fn):
+        try:
+            result['optimized_signature'] = optimized_sig_fn() or {}
+        except Exception as e:
+            result['mismatches'].append(f"Failed to get optimized signature: {e}")
+    
+    baseline_sig = result['baseline_signature']
+    optimized_sig = result['optimized_signature']
+    
+    # If neither has a signature, we can't verify - this should be a warning
+    if not baseline_sig and not optimized_sig:
+        result['verification_type'] = 'no_signature'
+        result['equivalent'] = True  # Can't verify, assume OK but note it
+        result['mismatches'].append("Neither benchmark provides input signature - verification not possible")
+        return result
+    
+    # Compare signatures
+    all_keys = set(baseline_sig.keys()) | set(optimized_sig.keys())
+    
+    for key in all_keys:
+        baseline_val = baseline_sig.get(key)
+        optimized_val = optimized_sig.get(key)
+        
+        if baseline_val is None and optimized_val is not None:
+            result['mismatches'].append(f"{key}: baseline missing, optimized={optimized_val}")
+        elif baseline_val is not None and optimized_val is None:
+            result['mismatches'].append(f"{key}: baseline={baseline_val}, optimized missing")
+        elif baseline_val != optimized_val:
+            # For numeric values, allow small tolerance
+            if isinstance(baseline_val, (int, float)) and isinstance(optimized_val, (int, float)):
+                if abs(baseline_val - optimized_val) > 1e-6 * max(abs(baseline_val), abs(optimized_val), 1):
+                    result['mismatches'].append(f"{key}: baseline={baseline_val}, optimized={optimized_val}")
+            else:
+                result['mismatches'].append(f"{key}: baseline={baseline_val}, optimized={optimized_val}")
+    
+    result['equivalent'] = len(result['mismatches']) == 0
+    return result
+
+
 def _verify_patched_benchmark(
     original_file: str,
     patched_file: str,
@@ -4114,8 +4368,9 @@ def test_chapter(
     rdzv_endpoint: Optional[str] = None,
     env_passthrough: Optional[List[str]] = None,
     target_extra_args: Optional[Dict[str, List[str]]] = None,
-    # Verification
-    verify_correctness: bool = False,
+    # Verification - BOTH enabled by default; without verification, benchmarks are meaningless
+    verify_input: bool = True,
+    verify_output: bool = True,
     # LLM analysis and patching options
     llm_analysis: bool = False,
     force_llm: bool = False,
@@ -4146,7 +4401,8 @@ def test_chapter(
         rdzv_endpoint=rdzv_endpoint,
         env_passthrough=env_passthrough,
         target_extra_args=target_extra_args,
-        verify_correctness=verify_correctness,
+        verify_input=verify_input,
+        verify_output=verify_output,
         force_llm=force_llm,
         llm_analysis=llm_analysis,
         llm_provider=llm_provider,
@@ -4522,9 +4778,26 @@ def main():
     
     # Test all chapters
     all_results = []
-    for chapter_dir in chapter_dirs:
+    for chapter_idx, chapter_dir in enumerate(chapter_dirs):
         if not chapter_dir.exists():
             continue
+
+        # GPU reset and cleanup between chapters to prevent state corruption
+        if chapter_idx > 0:
+            logger.info(f"\n  Resetting GPU state before {chapter_dir.name}...")
+            reset_cuda_state()
+            reset_gpu_state()
+        
+        # Clean build directories to prevent stale lock issues
+        build_dir = chapter_dir / "build"
+        if build_dir.exists():
+            try:
+                from common.python.build_utils import ensure_clean_build_directory
+                ensure_clean_build_directory(build_dir)
+            except ImportError:
+                pass  # build_utils not available
+            except Exception as e:
+                logger.warning(f"  Failed to clean build directory: {e}")
 
         example_filters = chapter_filters.get(chapter_slug(chapter_dir, repo_root))
         only_examples = sorted(example_filters) if example_filters else None

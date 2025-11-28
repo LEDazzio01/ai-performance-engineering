@@ -47,43 +47,14 @@ def validate_benchmark_file(file_path: Path, warn: bool = True) -> bool:
     
     return has_fn
 
-LAB_NAMES = {
-    "fullstack_cluster",
-    "blackwell_matmul",
-    "async_input_pipeline",
-    "moe_cuda",
-    "moe_parallelism",
-    "cudnn_sdpa_bench",
-    "flexattention",
-    "train_distributed",
-    "persistent_decode",
-    "dynamic_router",
-    "occupancy_tuning",
-    "kv_cache_compression",
-    "speculative_decode",
-    "fast_nanochat",
-}
+# LAB_NAMES is deprecated - labs are now auto-discovered based on
+# presence of baseline_*.py or level*.py files in labs/ subdirectories.
+# Kept for backward compatibility but no longer required for registration.
+LAB_NAMES = set()  # Auto-discovery handles this now
+# Shorthand aliases for common labs (optional convenience)
 LAB_ALIASES: Dict[str, str] = {
-    "lab_fullstack_cluster": "labs/fullstack_cluster",
-    "lab_blackwell_matmul": "labs/blackwell_matmul",
-    "lab_async_input_pipeline": "labs/async_input_pipeline",
-    "lab_moe_cuda": "labs/moe_cuda",
-    "lab_moe_parallelism": "labs/moe_parallelism",
-    "lab_cudnn_sdpa_bench": "labs/cudnn_sdpa_bench",
-    "lab_flexattention": "labs/flexattention",
-    "lab_train_distributed": "labs/train_distributed",
-    "lab_persistent_decode": "labs/persistent_decode",
-    "lab_dynamic_router": "labs/dynamic_router",
-    "lab_occupancy_tuning": "labs/occupancy_tuning",
-    "lab_kv_cache_compression": "labs/kv_cache_compression",
-    "lab_speculative_decode": "labs/speculative_decode",
-    "lab_fast_nanochat": "labs/fast_nanochat",
     "capstone": "labs/fullstack_cluster",
-    "capstone2": "labs/blackwell_matmul",
-    "capstone3": "labs/moe_cuda",
-    "capstone4": "labs/flexattention",
-    "capstone5": "labs/persistent_decode",
-    "capstone6": "labs/occupancy_tuning",
+    "moe_journey": "labs/moe_optimization_journey",
 }
 
 
@@ -92,13 +63,21 @@ def _labs_root(repo_root: Path) -> Path:
 
 
 def _lab_dirs(repo_root: Path) -> Iterable[Path]:
+    """Auto-discover all lab directories that contain benchmark files."""
     labs_root = _labs_root(repo_root)
     if not labs_root.is_dir():
         return []
-    return sorted(
-        [p for p in labs_root.iterdir() if p.is_dir() and p.name in LAB_NAMES],
-        key=lambda p: p.name,
-    )
+    
+    lab_dirs = []
+    for p in labs_root.iterdir():
+        if not p.is_dir() or p.name.startswith(('_', '.')):
+            continue
+        # Check if directory has any baseline_*.py files (benchmark convention)
+        has_benchmarks = any(p.glob("baseline_*.py")) or any(p.glob("level*.py"))
+        if has_benchmarks:
+            lab_dirs.append(p)
+    
+    return sorted(lab_dirs, key=lambda p: p.name)
 
 
 def chapter_slug(chapter_dir: Path, repo_root: Path) -> str:

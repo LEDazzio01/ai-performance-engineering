@@ -26,8 +26,8 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ch15
 python compare.py --profile none
-python tools/cli/benchmark_cli.py list-targets --chapter ch15
-python tools/cli/benchmark_cli.py run --targets ch15 --profile minimal
+python tools/cli/aisp bench list-targets --chapter ch15
+python tools/cli/aisp bench run --targets ch15 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
@@ -36,8 +36,8 @@ python tools/cli/benchmark_cli.py run --targets ch15 --profile minimal
 - `python optimized_disaggregated_inference.py --profile minimal` shows reduced fabric stalls compared to the baseline while maintaining accuracy parity.
 - `python optimized_kv_cache_management.py --validate` confirms eviction + promotion policies keep decode latency within the budget.
 - `python compare.py --examples continuous_batching` proves optimized scheduling increases tokens/sec vs naive queue draining.
-- `python tools/cli/benchmark_cli.py run --targets ch15:moe_validation --profile none` sweeps top-k and capacity-factor guardrails while logging overflow rate, Gini, router entropy, and loss/throughput.
-- `python tools/cli/benchmark_cli.py run --targets ch15:inference_placement --profile none` contrasts naive cross-node TP/EP versus NVLink-local prefill/decode with sticky sessions and local-first MoE routing.
+- `python tools/cli/aisp bench run --targets ch15:moe_validation --profile none` sweeps top-k and capacity-factor guardrails while logging overflow rate, Gini, router entropy, and loss/throughput.
+- `python tools/cli/aisp bench run --targets ch15:inference_placement --profile none` contrasts naive cross-node TP/EP versus NVLink-local prefill/decode with sticky sessions and local-first MoE routing.
 
 ## Notes
 - `disaggregated_inference.py` can run purely in simulation mode; set `--simulate-network` when hardware isn't wired for NVLink pooling.

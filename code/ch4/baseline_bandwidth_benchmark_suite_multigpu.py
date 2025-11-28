@@ -42,7 +42,7 @@ class BandwidthSuiteMultiGPU(BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
             iterations=1,
-            warmup=0,
+            warmup=5,
             measurement_timeout_seconds=30,
         )
 

@@ -11,8 +11,8 @@ import os
 from pathlib import Path
 
 try:
-import torch
-import torch.distributed as dist
+    import torch
+    import torch.distributed as dist
 except ImportError:
     print("ERROR: PyTorch not installed. Please install PyTorch first.")
     sys.exit(1)

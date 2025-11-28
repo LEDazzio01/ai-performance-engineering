@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -52,10 +51,6 @@ def _slugify(text: str) -> str:
 
 def detect_expectation_key() -> str:
     """Return a hardware/environment key for selecting expectation files."""
-    override = os.environ.get("AIPERF_EXPECTATION_KEY")
-    if override:
-        return _slugify(override)
-
     try:
         import torch
 

@@ -65,7 +65,7 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
         self.output = None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=4, warmup=1, measurement_timeout_seconds=30, setup_timeout_seconds=30)
+        return BenchmarkConfig(iterations=10, warmup=5, measurement_timeout_seconds=60, setup_timeout_seconds=60)  # Min warmup for CUDA
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

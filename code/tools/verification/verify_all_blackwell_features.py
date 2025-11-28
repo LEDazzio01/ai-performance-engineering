@@ -14,9 +14,10 @@ Features verified:
 - FP4 (E2M1 - status check)
 - Warp Specialization
 - 5th Gen Tensor Cores (tcgen05)
+- Triton Blackwell Features (TMA descriptors, pipelining, torch.compile)
 
 Usage:
-    python verify_all_blackwell_features.py [--profile] [--ncu] [--nsys]
+    python verify_all_blackwell_features.py [--profile] [--ncu] [--nsys] [--skip-triton]
 """
 
 import argparse
@@ -121,9 +122,12 @@ def check_fp4_support() -> Dict:
     }
     
     # Check cuBLASLt
+    try:
         import ctypes
         ctypes.CDLL('libcublasLt.so.13')
         status["cublaslt_available"] = True
+    except (OSError, ImportError):
+        pass
     
     # Check if native FP4 conversion works
     if status["dtype_available"]:
@@ -182,12 +186,16 @@ def check_tma_support() -> Dict:
     }
     
     # First try via PyTorch (more reliable)
+    try:
         props = torch.cuda.get_device_properties(0)
         # TMA is available on SM 9.0+ (Hopper and Blackwell)
         if props.major >= 9:
             status["hardware_supported"] = True
+    except Exception:
+        pass
     
     # Then try CUDA driver API
+    try:
         import ctypes
         cuda = ctypes.CDLL('libcuda.so')
         
@@ -202,6 +210,8 @@ def check_tma_support() -> Dict:
         if result == 0 and attr.value == 1:
             status["driver_attribute"] = True
             status["hardware_supported"] = True
+    except Exception:
+        pass
     
     return status
 
@@ -214,12 +224,16 @@ def check_cluster_support() -> Dict:
     }
     
     # First try via PyTorch
+    try:
         props = torch.cuda.get_device_properties(0)
         # Clusters are available on SM 9.0+ (Hopper and Blackwell)
         if props.major >= 9:
             status["hardware_supported"] = True
+    except Exception:
+        pass
     
     # Then try CUDA driver API
+    try:
         import ctypes
         cuda = ctypes.CDLL('libcuda.so')
         
@@ -234,6 +248,8 @@ def check_cluster_support() -> Dict:
         if result == 0 and attr.value == 1:
             status["driver_attribute"] = True
             status["hardware_supported"] = True
+    except Exception:
+        pass
     
     return status
 
@@ -295,6 +311,215 @@ def run_ncu_profile(test_name: str) -> Optional[str]:
         return f"ncu error: {e}"
 
 
+def run_triton_blackwell_tests() -> Dict:
+    """Run Triton Blackwell feature tests."""
+    results = {}
+    
+    try:
+        import triton
+        import triton.language as tl
+        results["triton_version"] = triton.__version__
+    except ImportError:
+        return {"error": "Triton not installed"}
+    
+    # Test 1: Basic Kernel Compilation
+    try:
+        @triton.jit
+        def _add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+            pid = tl.program_id(0)
+            offs = pid * BLOCK + tl.arange(0, BLOCK)
+            mask = offs < n
+            x = tl.load(x_ptr + offs, mask=mask)
+            y = tl.load(y_ptr + offs, mask=mask)
+            tl.store(out_ptr + offs, x + y, mask=mask)
+        
+        n = 1024
+        x = torch.randn(n, device='cuda')
+        y = torch.randn(n, device='cuda')
+        out = torch.empty_like(x)
+        grid = (triton.cdiv(n, 256),)
+        _add_kernel[grid](x, y, out, n, BLOCK=256)
+        torch.cuda.synchronize()
+        
+        if torch.allclose(out, x + y):
+            results["Basic Kernel"] = {"status": "PASS", "detail": "Compiles and executes correctly"}
+        else:
+            results["Basic Kernel"] = {"status": "FAIL", "detail": "Results incorrect"}
+    except Exception as e:
+        results["Basic Kernel"] = {"status": "FAIL", "detail": str(e)[:80]}
+    
+    # Test 2: TMA Descriptors
+    if hasattr(tl, 'make_tensor_descriptor'):
+        try:
+            # Setup allocator for TMA
+            from triton.runtime import _allocation as triton_allocation
+            
+            class _TorchAllocator:
+                def __init__(self):
+                    self._bufs = {}
+                def __call__(self, size, alignment, stream):
+                    aligned = (size + alignment - 1) // alignment * alignment
+                    buf = torch.empty(aligned, dtype=torch.uint8, device='cuda')
+                    ptr = buf.data_ptr()
+                    self._bufs[ptr] = buf
+                    return ptr
+            
+            triton_allocation.set_allocator(_TorchAllocator())
+            
+            @triton.jit
+            def _tma_copy(inp, out, N: tl.constexpr, BLOCK: tl.constexpr):
+                pid = tl.program_id(0)
+                desc = tl.make_tensor_descriptor(inp, shape=[N], strides=[1], block_shape=[BLOCK])
+                data = desc.load([pid * BLOCK])
+                offs = pid * BLOCK + tl.arange(0, BLOCK)
+                tl.store(out + offs, data, mask=offs < N)
+            
+            N, BLOCK = 1024, 128
+            x = torch.randn(N, device='cuda')
+            y = torch.zeros_like(x)
+            _tma_copy[(triton.cdiv(N, BLOCK),)](x, y, N, BLOCK)
+            torch.cuda.synchronize()
+            
+            if torch.allclose(y, x):
+                results["TMA Descriptors"] = {"status": "PASS", "detail": "Hardware TMA works"}
+            else:
+                results["TMA Descriptors"] = {"status": "FAIL", "detail": "Results incorrect"}
+        except Exception as e:
+            err = str(e)
+            if "allocator" in err.lower():
+                results["TMA Descriptors"] = {"status": "WARN", "detail": "Needs triton.set_allocator()"}
+            else:
+                results["TMA Descriptors"] = {"status": "FAIL", "detail": err[:80]}
+    else:
+        results["TMA Descriptors"] = {"status": "SKIP", "detail": "tl.make_tensor_descriptor not available"}
+    
+    # Test 3: Multi-Stage Pipeline
+    try:
+        @triton.jit
+        def _matmul_kernel(
+            a_ptr, b_ptr, c_ptr, M, N, K,
+            stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+            BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+        ):
+            pid = tl.program_id(0)
+            num_pid_m = tl.cdiv(M, BLOCK_M)
+            pid_m, pid_n = pid % num_pid_m, pid // num_pid_m
+            offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+            offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+            offs_k = tl.arange(0, BLOCK_K)
+            a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
+            b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_n[None, :] * stride_bn
+            acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+            for _ in range(0, K, BLOCK_K):
+                a = tl.load(a_ptrs)
+                b = tl.load(b_ptrs)
+                acc += tl.dot(a, b)
+                a_ptrs += BLOCK_K * stride_ak
+                b_ptrs += BLOCK_K * stride_bk
+            c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
+            tl.store(c_ptrs, acc.to(tl.float16))
+        
+        M = N = K = 256
+        a = torch.randn(M, K, device='cuda', dtype=torch.float16)
+        b = torch.randn(K, N, device='cuda', dtype=torch.float16)
+        c = torch.empty(M, N, device='cuda', dtype=torch.float16)
+        BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
+        grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),)
+        _matmul_kernel[grid](
+            a, b, c, M, N, K,
+            a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
+            BLOCK_M, BLOCK_N, BLOCK_K,
+            num_stages=3, num_warps=4,
+        )
+        torch.cuda.synchronize()
+        expected = torch.matmul(a, b)
+        if torch.allclose(c, expected, rtol=1e-1, atol=1e-1):
+            results["Multi-Stage Pipeline"] = {"status": "PASS", "detail": "num_stages=3 works"}
+        else:
+            results["Multi-Stage Pipeline"] = {"status": "FAIL", "detail": "Results incorrect"}
+    except Exception as e:
+        err = str(e)
+        if "latencies" in err.lower():
+            results["Multi-Stage Pipeline"] = {"status": "WARN", "detail": "Known compiler issue"}
+        else:
+            results["Multi-Stage Pipeline"] = {"status": "FAIL", "detail": err[:80]}
+    
+    # Test 4: torch.compile Integration
+    try:
+        def _matmul_fn(a, b):
+            return torch.matmul(a, b)
+        compiled = torch.compile(_matmul_fn, mode='reduce-overhead')
+        a = torch.randn(256, 256, device='cuda', dtype=torch.float16)
+        b = torch.randn(256, 256, device='cuda', dtype=torch.float16)
+        for _ in range(3):
+            _ = compiled(a, b)
+        torch.cuda.synchronize()
+        result = compiled(a, b)
+        expected = torch.matmul(a, b)
+        if torch.allclose(result, expected, rtol=1e-2, atol=1e-2):
+            results["torch.compile"] = {"status": "PASS", "detail": "Triton backend works"}
+        else:
+            results["torch.compile"] = {"status": "FAIL", "detail": "Results incorrect"}
+    except Exception as e:
+        err = str(e)
+        if "sm_121a" in err or "ptxas" in err.lower():
+            results["torch.compile"] = {"status": "FAIL", "detail": "SM patch not applied"}
+        else:
+            results["torch.compile"] = {"status": "FAIL", "detail": err[:80]}
+    
+    # Test 5: FP8 Support
+    if hasattr(torch, 'float8_e4m3fn'):
+        try:
+            @triton.jit
+            def _fp8_kernel(x_ptr, out_ptr, n, BLOCK: tl.constexpr):
+                pid = tl.program_id(0)
+                offs = pid * BLOCK + tl.arange(0, BLOCK)
+                mask = offs < n
+                x = tl.load(x_ptr + offs, mask=mask)
+                tl.store(out_ptr + offs, x, mask=mask)
+            
+            n = 1024
+            x = torch.randn(n, device='cuda', dtype=torch.float16).to(torch.float8_e4m3fn)
+            out = torch.empty_like(x)
+            _fp8_kernel[(triton.cdiv(n, 256),)](x, out, n, BLOCK=256)
+            torch.cuda.synchronize()
+            results["FP8 Triton"] = {"status": "PASS", "detail": "FP8 tensors work"}
+        except Exception as e:
+            results["FP8 Triton"] = {"status": "FAIL", "detail": str(e)[:80]}
+    else:
+        results["FP8 Triton"] = {"status": "SKIP", "detail": "torch.float8_e4m3fn not available"}
+    
+    # Test 6: Persistent Kernel Pattern
+    try:
+        @triton.jit
+        def _persistent_add(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr, NUM_SMS: tl.constexpr):
+            pid = tl.program_id(0)
+            num_blocks = tl.cdiv(n, BLOCK)
+            for block_id in range(pid, num_blocks, NUM_SMS):
+                offs = block_id * BLOCK + tl.arange(0, BLOCK)
+                mask = offs < n
+                x = tl.load(x_ptr + offs, mask=mask)
+                y = tl.load(y_ptr + offs, mask=mask)
+                tl.store(out_ptr + offs, x + y, mask=mask)
+        
+        n = 8192
+        num_sms = torch.cuda.get_device_properties(0).multi_processor_count
+        x = torch.randn(n, device='cuda')
+        y = torch.randn(n, device='cuda')
+        out = torch.empty_like(x)
+        grid = (min(num_sms, triton.cdiv(n, 256)),)
+        _persistent_add[grid](x, y, out, n, BLOCK=256, NUM_SMS=num_sms)
+        torch.cuda.synchronize()
+        if torch.allclose(out, x + y):
+            results["Persistent Kernels"] = {"status": "PASS", "detail": f"{num_sms} SMs"}
+        else:
+            results["Persistent Kernels"] = {"status": "FAIL", "detail": "Results incorrect"}
+    except Exception as e:
+        results["Persistent Kernels"] = {"status": "FAIL", "detail": str(e)[:80]}
+    
+    return results
+
+
 def analyze_ncu_for_tensor_cores(report_path: Path) -> Dict:
     """Analyze NCU report for tensor core usage."""
     metrics = {
@@ -343,6 +568,7 @@ def main():
     parser.add_argument("--nsys", action="store_true", help="Run nsys profiling")
     parser.add_argument("--ncu", action="store_true", help="Run ncu profiling")
     parser.add_argument("--json", action="store_true", help="Output JSON results")
+    parser.add_argument("--skip-triton", action="store_true", help="Skip Triton tests")
     args = parser.parse_args()
     
     results = {
@@ -443,6 +669,27 @@ def main():
     print_result("FP4 packed workaround", fp4_status["workaround_available"])
     results["tests"]["fp4_python"] = fp4_status
     
+    # Triton Blackwell Features
+    if not args.skip_triton:
+        print_header("Triton Blackwell Feature Tests")
+        triton_results = run_triton_blackwell_tests()
+        results["tests"]["triton"] = triton_results
+        
+        for test_name, test_result in triton_results.items():
+            if test_name == "triton_version":
+                print(f"\n  Triton Version: {test_result}")
+                continue
+            status = test_result.get("status", "UNKNOWN")
+            detail = test_result.get("detail", "")
+            passed = status == "PASS"
+            print_result(test_name, passed, detail)
+            if passed:
+                results["summary"]["passed"] += 1
+            elif status == "SKIP":
+                results["summary"]["skipped"] += 1
+            else:
+                results["summary"]["failed"] += 1
+    
     # Profiling
     if args.profile or args.nsys or args.ncu:
         print_header("Profiling")
@@ -497,6 +744,20 @@ def main():
             print(f"    {status} {name}")
             if not passed:
                 all_passed = False
+    
+    # Triton features
+    if "triton" in results["tests"] and not args.skip_triton:
+        print("\n  Triton Blackwell Features:")
+        triton_results = results["tests"]["triton"]
+        triton_features = ["Basic Kernel", "TMA Descriptors", "Multi-Stage Pipeline", 
+                          "torch.compile", "FP8 Triton", "Persistent Kernels"]
+        for feat in triton_features:
+            if feat in triton_results:
+                status_str = triton_results[feat].get("status", "UNKNOWN")
+                icon = "✓" if status_str == "PASS" else ("○" if status_str == "SKIP" else "✗")
+                print(f"    {icon} {feat}")
+                if status_str == "FAIL":
+                    all_passed = False
     
     print("\n  FP4 Status:")
     print(f"    • dtype exists: {fp4_status['dtype_available']}")

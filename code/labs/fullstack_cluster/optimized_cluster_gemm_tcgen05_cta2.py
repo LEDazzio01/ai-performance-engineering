@@ -23,7 +23,7 @@ class OptimizedCapstoneGemmTCGen05CTA2Benchmark(CapstoneMatmulBenchmark):
             runner=optimized_matmul_tcgen05_cta2,
             label="capstone_optimized_tcgen05_cta2",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=360,
             validate_against_baseline=False,
         )

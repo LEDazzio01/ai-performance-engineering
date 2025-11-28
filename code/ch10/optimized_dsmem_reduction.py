@@ -21,7 +21,7 @@ class OptimizedDSMEMReductionBenchmark(CudaBinaryBenchmark):
             binary_name="optimized_dsmem_reduction",
             friendly_name="DSMEM Cluster Reduction",
             iterations=3,
-            warmup=1,
+            warmup=5,
             timeout_seconds=120,
         )
 

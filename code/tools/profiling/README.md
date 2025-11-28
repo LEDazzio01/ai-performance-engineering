@@ -324,7 +324,7 @@ The profiling data integrates with the dashboard automatically:
 
 ```bash
 # Start dashboard with profiling data
-python -m tools.dashboard.server --port 8080
+python -m tools.dashboard.server --port 6970
 ```
 
 Access profiling visualizations at:
@@ -358,6 +358,5 @@ tools/profiling/
 
 - PyTorch >= 2.0 (for torch.profiler and torch.compile)
 - Optional: `hta` package for full HTA support (`pip install HolisticTraceAnalysis`)
-
 
 

@@ -17,11 +17,10 @@ class BaselineThresholdBenchmark(ThresholdBenchmarkBase):
 
     def _invoke_kernel(self) -> None:
         assert self.extension is not None
-        assert self.host_inputs is not None
         assert self.inputs is not None
         assert self.outputs is not None
-        # Naive implementation streams data from host memory each iteration before running on the GPU.
-        self.inputs.copy_(self.host_inputs, non_blocking=False)
+        # Naive kernel with branch divergence - data is already on GPU
+        # The kernel uses nested if/else branches that cause warp divergence
         self.extension.threshold_baseline(self.inputs, self.outputs, self.threshold)
 
 

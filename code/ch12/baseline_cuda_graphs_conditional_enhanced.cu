@@ -49,10 +49,8 @@ int main() {
     
     size_t bytes = N * sizeof(float);
     float *d_data = nullptr;
-    int *d_condition = nullptr;
     
     CUDA_CHECK(cudaMalloc(&d_data, bytes));
-    CUDA_CHECK(cudaMalloc(&d_condition, sizeof(int)));
     
     std::vector<float> h_data(N);
     for (int i = 0; i < N; ++i) {
@@ -66,10 +64,14 @@ int main() {
     constexpr int ITERS = 1000;
     constexpr float THRESHOLD = 1.5f;
     
+    int *d_condition = nullptr;
+    CUDA_CHECK(cudaMalloc(&d_condition, sizeof(int)));
+    
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
     
+    // Baseline: host-side conditional dispatch with D2H synchronization
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < ITERS; ++i) {
         predicate_kernel<<<1, 1>>>(d_condition, d_data, N, THRESHOLD);
@@ -89,13 +91,13 @@ int main() {
     float ms = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&ms, start, stop));
     
-    std::printf("Baseline (standard with D2H copy): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
-    std::printf("Overhead: D2H copy + CPU branch decision\n");
+    std::printf("Baseline (individual kernel launches): %.2f ms (%.3f ms/iter)\n", ms, ms / ITERS);
+    std::printf("Note: Comparing kernel launch overhead vs CUDA graph replay\n");
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
-    CUDA_CHECK(cudaFree(d_data));
     CUDA_CHECK(cudaFree(d_condition));
+    CUDA_CHECK(cudaFree(d_data));
     
     return 0;
 }

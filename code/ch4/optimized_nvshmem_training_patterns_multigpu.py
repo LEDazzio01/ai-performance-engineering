@@ -51,7 +51,7 @@ class OptimizedNVSHMEMTrainingPatternsMultiGPU(BaseBenchmark):
             sys.argv = original_argv
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=1, measurement_timeout_seconds=300)
+        return BenchmarkConfig(iterations=1, warmup=5, measurement_timeout_seconds=300)
 
 
     def get_custom_metrics(self) -> Optional[dict]:

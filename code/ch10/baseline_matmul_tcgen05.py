@@ -1,4 +1,15 @@
-"""Baseline matmul benchmark used for tcgen05 comparisons."""
+"""Baseline matmul benchmark: Custom tcgen05 kernel (educational).
+
+CHAPTER 10 CONTEXT: This demonstrates a custom tcgen05 tensor core kernel.
+The custom kernel is educational - it shows HOW tensor cores work and how
+to write CUTLASS/CuTe kernels for Blackwell, but is NOT optimized for
+maximum performance like cuBLAS.
+
+Compare against: optimized_matmul_tcgen05.py (cuBLAS)
+This pairing demonstrates that while custom kernels enable learning and
+specialized optimizations, vendor libraries like cuBLAS are highly
+optimized through years of engineering for general-purpose GEMM.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +17,13 @@ from typing import Optional
 
 import torch
 
-from ch10.optimized_matmul import resolve_device
+from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
 from common.python.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from common.python.tcgen05_requirements import check_tcgen05_support
 
 
 class BaselineMatmulTCGen05Benchmark(BaseBenchmark):
-    """Uses PyTorch tensor core matmul as the baseline for tcgen05."""
+    """Baseline: Custom tcgen05 CUDA kernel (educational implementation)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -22,8 +33,8 @@ class BaselineMatmulTCGen05Benchmark(BaseBenchmark):
         )
         self._tcgen05_available = available
         self._skip_reason = reason or "SKIPPED: tcgen05 matmul unavailable"
-        self.device = resolve_device()
-        self.dtype = torch.float16
+        self.module = None
+        self.device = torch.device("cuda")
         self.size = 4096
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
@@ -31,18 +42,21 @@ class BaselineMatmulTCGen05Benchmark(BaseBenchmark):
     def setup(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
+        if self.module is None:
+            self.module = load_matmul_tcgen05_module()
         torch.manual_seed(0)
-        self.A = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
-        self.B = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
+        dtype = torch.float16
+        self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
+        self.B = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
-        assert self.A is not None and self.B is not None
-        with self._nvtx_range("baseline_matmul_tcgen05"):
+        assert self.A is not None and self.B is not None and self.module is not None
+        with self._nvtx_range("baseline_matmul_tcgen05_custom"):
             with torch.no_grad():
-                _ = torch.matmul(self.A, self.B)
+                _ = self.module.matmul_tcgen05(self.A, self.B)
         self._synchronize()
 
     def teardown(self) -> None:

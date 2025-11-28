@@ -25,21 +25,21 @@ Demonstrates Blackwell-friendly persistent decode kernels and TMA-powered prefil
 Use the benchmark harness for comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
 cd ai-performance-engineering
-python tools/cli/benchmark_cli.py list-targets --chapter labs/persistent_decode
-python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile minimal
+python -m cli.aisp bench list-targets --chapter labs/persistent_decode
+python -m cli.aisp bench run --targets labs/persistent_decode --profile minimal
 ```
 - Targets follow the `labs/persistent_decode:<workload>` naming convention listed by `list-targets`.
 - Use `--target-extra-arg labs/persistent_decode:<workload>="--flag value"` to sweep schedule knobs.
 
 ## Validation Checklist
-- `python tools/cli/benchmark_cli.py run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.
+- `python -m cli.aisp bench run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.
 - `python labs/persistent_decode/kv_locality_microbench.py --rows 256 --cols 4096 --iters 200` contrasts pageable vs pinned (NUMA-local/remote) host slabs against HBM copies; flags override defaults (no env vars).
-- `python tools/cli/benchmark_cli.py run --targets labs/persistent_decode:kv_locality_microbench --target-extra-arg labs/persistent_decode:kv_locality_microbench="--rows 256 --cols 4096 --iters 200"` drives the harness version with the same flags.
+- `python -m cli.aisp bench run --targets labs/persistent_decode:kv_locality_microbench --target-extra-arg labs/persistent_decode:kv_locality_microbench="--rows 256 --cols 4096 --iters 200"` drives the harness version with the same flags.
 - `python labs/persistent_decode/optimized_persistent_decode_graphs.py --iterations 50` shows lower launch overhead than `baseline_persistent_decode.py`.
 - `python labs/persistent_decode/optimized_native_tma_prefill_decode.py --validate` matches the math reference while reporting achieved memory throughput.
-- `python tools/cli/benchmark_cli.py run --targets labs/persistent_decode:paged_kv_offload_baseline labs/persistent_decode:paged_kv_offload_optimized --profile minimal` compares naive FP8 KV with no fusion guard versus the fused-gated, memmap-backed path.
+- `python -m cli.aisp bench run --targets labs/persistent_decode:paged_kv_offload_baseline labs/persistent_decode:paged_kv_offload_optimized --profile minimal` compares naive FP8 KV with no fusion guard versus the fused-gated, memmap-backed path.
 - `optimized_tma_prefill_decode.py` SKIPs automatically when `tma_ready` is false (e.g., GB10 toolchains that cannot emit tensormap instructions yet); expectations include `hw_skip_reason` to mark this as not applicable instead of a regression.
-- `python tools/cli/benchmark_cli.py run --targets labs/persistent_decode:right_sized_decode --target-extra-arg labs/persistent_decode:right_sized_decode="--tier small --quantization int4 --backend triton"` compares right-sized decode tiers; swap `--tier large` or `--backend graphs` to see the impact of bigger slices or graph capture.
+- `python -m cli.aisp bench run --targets labs/persistent_decode:right_sized_decode --target-extra-arg labs/persistent_decode:right_sized_decode="--tier small --quantization int4 --backend triton"` compares right-sized decode tiers; swap `--tier large` or `--backend graphs` to see the impact of bigger slices or graph capture.
 
 ## Notes
 - The paged KV microbench assumes PyTorch 2.10+ and CUDA 13 with B200/GB200-class hardware for fused FP8 attention; it falls back to FP16 automatically when fusion is unavailable.

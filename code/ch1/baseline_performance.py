@@ -143,7 +143,7 @@ class BaselinePerformanceBenchmark(BaseBenchmark):
         """Return benchmark-specific config."""
         return BenchmarkConfig(
             iterations=5,
-            warmup=1,
+            warmup=10,
         )
     
     def get_custom_metrics(self) -> Optional[dict]:

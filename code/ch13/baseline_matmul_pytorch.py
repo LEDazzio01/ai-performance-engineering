@@ -37,7 +37,7 @@ def resolve_device() -> torch.device:
 
 
 class BaselineMatmulPyTorchBenchmark(BaseBenchmark):
-    """PyTorch matmul baseline - standard GEMM."""
+    """PyTorch matmul baseline - sequential unfused operations."""
     
     def __init__(self):
         super().__init__()
@@ -45,9 +45,10 @@ class BaselineMatmulPyTorchBenchmark(BaseBenchmark):
         self.B = None
         self.C = None
         self.bias = None
-        self.m = 2048
-        self.n = 2048
-        self.k = 2048
+        # Use larger matrices to show more difference
+        self.m = 4096
+        self.n = 4096
+        self.k = 4096
         tokens = self.m * self.n
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
