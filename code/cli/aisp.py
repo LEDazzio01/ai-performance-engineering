@@ -28,9 +28,6 @@ except Exception:
     def has_capability(name: str) -> bool:
         return False
 
-# Extension flag; updated after plugin discovery
-EXT_ENABLED = False
-
 try:
     import typer
 except ImportError:  # pragma: no cover - Typer required for the CLI
@@ -171,7 +168,7 @@ if typer:
 
     system_app = typer.Typer(help="System diagnostics, environment, and GPU status")
     test_app = typer.Typer(help="Lightweight tests (bandwidth, network, warmup)")
-    microbench_app = typer.Typer(help="Microbenchmarks (disk, PCIe, memory, tensor)")
+    hwbench_app = typer.Typer(help="Hardware benchmarks (disk, PCIe, memory, tensor-cores, SFU)")
     ops_app = typer.Typer(help="Advanced system analysis and distributed planning")
     monitoring_app = typer.Typer(help="Monitoring and diagnostics runners")
 
@@ -262,7 +259,7 @@ if typer:
 # Category: ai (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and ai_app is not None:
+if typer and ai_app is not None:
 
     @ai_app.command("ask", help="Ask a performance question (LLM-powered)")
     def ai_ask(
@@ -301,7 +298,7 @@ if typer and EXT_ENABLED and ai_app is not None:
 # Category: analyze (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and analyze_app is not None:
+if typer and analyze_app is not None:
 
     @analyze_app.command("profile", help="Run profiling on a benchmark/script")
     def analyze_profile(
@@ -369,7 +366,7 @@ if typer and EXT_ENABLED and analyze_app is not None:
 # Category: optimize (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and optimize_app is not None:
+if typer and optimize_app is not None:
 
     @optimize_app.command("recommend", help="Get optimization recommendations")
     def optimize_recommend(
@@ -414,7 +411,7 @@ if typer and EXT_ENABLED and optimize_app is not None:
 # Category: distributed (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and distributed_app is not None:
+if typer and distributed_app is not None:
 
     @distributed_app.command("plan", help="Plan parallelism strategy (TP/PP/DP)")
     def distributed_plan(
@@ -455,7 +452,7 @@ if typer and EXT_ENABLED and distributed_app is not None:
 # Category: inference (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and inference_app is not None:
+if typer and inference_app is not None:
 
     @inference_app.command("vllm", help="vLLM configuration and optimization")
     def inference_vllm(
@@ -505,7 +502,7 @@ if typer and EXT_ENABLED and inference_app is not None:
 # Category: training (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and training_app is not None:
+if typer and training_app is not None:
 
     @training_app.command("rl", help="RL/RLHF optimization")
     def training_rl(ctx: typer.Context) -> None:
@@ -527,7 +524,7 @@ if typer and EXT_ENABLED and training_app is not None:
 # Category: monitor (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and monitor_app is not None:
+if typer and monitor_app is not None:
 
     @monitor_app.command("live", help="Real-time GPU monitoring")
     def monitor_live(ctx: typer.Context) -> None:
@@ -549,7 +546,7 @@ if typer and EXT_ENABLED and monitor_app is not None:
 # Category: report (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and report_app is not None:
+if typer and report_app is not None:
 
     @report_app.command("generate", help="Generate performance report")
     def report_generate(
@@ -595,7 +592,7 @@ if typer and EXT_ENABLED and report_app is not None:
 # =============================================================================
 
 if typer and profile_app is not None:
-    # Commands always registered to profile_app; access controlled via EXT_ENABLED when adding to main app
+    # Profile commands - always available
 
     @profile_app.command("flame", help="Generate flame graph")
     def profile_flame(
@@ -630,6 +627,56 @@ if typer and profile_app is not None:
     ) -> None:
         from cli.commands import profiling
         _run(profiling.hta, ctx, file=str(file) if file else None)
+
+    @profile_app.command("torch", help="Run torch.profiler capture (Chrome trace + summary)")
+    def profile_torch_profiler(
+        ctx: typer.Context,
+        script: Path = typer.Argument(..., help="Python script to profile"),
+        mode: str = typer.Option("full", "--mode", help="Profiler preset (full/memory/flops/modules/blackwell)"),
+        output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Base name for capture folder"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Output root (default: artifacts/torch-profiles)"),
+        nvtx_label: str = typer.Option("aisp_torch_profile", "--nvtx-label", help="NVTX/record_function label for correlation"),
+        no_nvtx: bool = typer.Option(False, "--no-nvtx", help="Disable NVTX range emission"),
+        force_lineinfo: bool = typer.Option(True, "--force-lineinfo/--no-force-lineinfo", help="Force -lineinfo for better source mapping"),
+        timeout_seconds: Optional[int] = typer.Option(None, "--timeout", help="Optional timeout in seconds"),
+        script_args: List[str] = typer.Option([], "--arg", "-a", help="Arguments forwarded to the script", show_default=False),
+    ) -> None:
+        from cli.commands import profiling
+        _run(
+            profiling.torch_profiler,
+            ctx,
+            script=str(script),
+            mode=mode,
+            output_name=output_name,
+            output_dir=str(output_dir) if output_dir else None,
+            nvtx_label=nvtx_label,
+            use_nvtx=not no_nvtx,
+            force_lineinfo=force_lineinfo,
+            timeout_seconds=timeout_seconds,
+            script_args=script_args,
+        )
+
+    @profile_app.command("hta-capture", help="Launch HTA capture (nsys + HTAAnalyzer)")
+    def profile_hta_capture(
+        ctx: typer.Context,
+        command: str = typer.Argument(..., help='Command to profile (quote it), e.g., "python train.py --batch 8"'),
+        preset: str = typer.Option("full", "--preset", help="Nsight preset (full|light)", show_default=True),
+        output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Base name for capture"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Directory for nsys + HTA outputs"),
+        force_lineinfo: bool = typer.Option(True, "--force-lineinfo/--no-force-lineinfo", help="Force -lineinfo for source mapping"),
+        timeout_seconds: Optional[int] = typer.Option(None, "--timeout", help="Optional timeout in seconds"),
+    ) -> None:
+        from cli.commands import profiling
+        _run(
+            profiling.hta_capture,
+            ctx,
+            command=command,
+            preset=preset,
+            output_name=output_name or "hta_capture",
+            output_dir=str(output_dir) if output_dir else None,
+            force_lineinfo=force_lineinfo,
+            timeout_seconds=timeout_seconds,
+        )
 
     @profile_app.command("ncu", help="NCU deep dive analysis")
     def profile_ncu(
@@ -670,7 +717,7 @@ if typer and profile_app is not None:
 # Category: HuggingFace (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and hf_app is not None:
+if typer and hf_app is not None:
 
     @hf_app.command("search", help="Search HuggingFace models")
     def hf_search(
@@ -778,7 +825,7 @@ if typer:
 # Category: cluster (extension)
 # =============================================================================
 
-if typer and EXT_ENABLED and cluster_app is not None:
+if typer and cluster_app is not None:
 
     @cluster_app.command("slurm", help="Generate SLURM script")
     def cluster_slurm(
@@ -834,13 +881,13 @@ if typer and EXT_ENABLED and cluster_app is not None:
 
 
 # =============================================================================
-# Category: microbench (core)
+# Category: hwbench (hardware benchmarks)
 # =============================================================================
 
 if typer:
 
-    @microbench_app.command("disk", help="Disk I/O benchmark (sequential)")
-    def microbench_disk(
+    @hwbench_app.command("disk", help="Disk I/O benchmark (sequential)")
+    def hwbench_disk(
         ctx: typer.Context,
         file_size_mb: int = typer.Option(256, "--size-mb", "-s", help="File size (MB)"),
         block_size_kb: int = typer.Option(1024, "--block-kb", "-b", help="Block size (KB)"),
@@ -855,8 +902,8 @@ if typer:
             tmp_dir=str(tmp_dir) if tmp_dir else None,
         )
 
-    @microbench_app.command("pcie", help="PCIe H2D/D2H bandwidth")
-    def microbench_pcie(
+    @hwbench_app.command("pcie", help="PCIe H2D/D2H bandwidth")
+    def hwbench_pcie(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
         iters: int = typer.Option(10, "--iters", "-i", help="Iterations"),
@@ -864,8 +911,8 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.pcie, ctx, size_mb=size_mb, iters=iters)
 
-    @microbench_app.command("mem", help="Memory hierarchy stride test")
-    def microbench_mem(
+    @hwbench_app.command("mem", help="Memory hierarchy stride test")
+    def hwbench_mem(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
         stride: int = typer.Option(128, "--stride", help="Stride (bytes)"),
@@ -873,8 +920,8 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
 
-    @microbench_app.command("tensor", help="Tensor core throughput")
-    def microbench_tensor(
+    @hwbench_app.command("tensor-cores", help="Tensor core throughput")
+    def hwbench_tensor_cores(
         ctx: typer.Context,
         size: int = typer.Option(4096, "--size", help="Matrix size"),
         precision: str = typer.Option("fp16", "--precision", help="Precision (fp16/fp32/bf16)"),
@@ -882,16 +929,16 @@ if typer:
         from core.diagnostics import microbench
         _run(microbench.tensor_core, ctx, size=size, precision=precision)
 
-    @microbench_app.command("sfu", help="SFU benchmark")
-    def microbench_sfu(
+    @hwbench_app.command("sfu", help="SFU (Special Function Units) benchmark")
+    def hwbench_sfu(
         ctx: typer.Context,
         elements: int = typer.Option(64 * 1024 * 1024, "--elements", help="Number of elements"),
     ) -> None:
         from core.diagnostics import microbench
         _run(microbench.sfu, ctx, elements=elements)
 
-    @microbench_app.command("loopback", help="Loopback TCP throughput")
-    def microbench_loopback(
+    @hwbench_app.command("loopback", help="Loopback TCP throughput")
+    def hwbench_loopback(
         ctx: typer.Context,
         size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
         port: int = typer.Option(5789, "--port", help="Port to use"),
@@ -983,8 +1030,8 @@ if typer:
     ) -> None:
         _run_module("monitoring.diagnostics.uma_memory.optimized_uma_memory_reporting", args or [])
 
-    @monitoring_app.command("microbench", help="Lightweight diagnostics microbenchmarks.")
-    def monitoring_microbench(
+    @monitoring_app.command("hwbench", help="Lightweight hardware benchmarks.")
+    def monitoring_hwbench(
         args: List[str] = typer.Argument(None, help="Arguments forwarded to core.diagnostics.microbench"),
     ) -> None:
         _run_module("core.diagnostics.microbench", args or [])
@@ -1004,7 +1051,6 @@ if typer:
         BENCH_APP = None
 
     plugin_apps = load_plugin_apps()
-    EXT_ENABLED = bool(os.environ.get("AISP_ENABLE_EXT")) or has_capability("cli.ext") or bool(plugin_apps)
 
     if BENCH_APP:
         app.add_typer(BENCH_APP, name="bench", help="Run, profile, and verify benchmarks")
@@ -1015,54 +1061,52 @@ if typer:
             typer.echo("Bench CLI unavailable (typer not installed or import failed).")
             raise typer.Exit(code=1)
 
-    # Extension-owned top-level commands should be provided via plugins
-    if EXT_ENABLED:
+    # Top-level utility commands
+    @app.command("tui", help="Launch interactive terminal UI")
+    def tui_command(
+        ctx: typer.Context,
+        data_file: Optional[Path] = typer.Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),
+    ) -> None:
+        from cli.tui import run_tui
+        try:
+            run_tui(str(data_file) if data_file else None)
+        except Exception as exc:  # pragma: no cover - curses may fail in CI
+            typer.echo(f"TUI error: {exc}", err=True)
+            raise typer.Exit(code=1)
 
-        @app.command("tui", help="Launch interactive terminal UI")
-        def tui_command(
-            ctx: typer.Context,
-            data_file: Optional[Path] = typer.Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),
-        ) -> None:
-            from cli.tui import run_tui
-            try:
-                run_tui(str(data_file) if data_file else None)
-            except Exception as exc:  # pragma: no cover - curses may fail in CI
-                typer.echo(f"TUI error: {exc}", err=True)
-                raise typer.Exit(code=1)
+    @app.command("dashboard", help="Launch web dashboard")
+    def dashboard_command(
+        ctx: typer.Context,
+        port: int = typer.Option(6970, "--port", "-p", help="Port to run the server on"),
+        data: Optional[Path] = typer.Option(None, "--data", "-d", help="Path to benchmark results JSON file"),
+        no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser automatically"),
+    ) -> None:
+        from dashboard.api.server import serve_dashboard
+        serve_dashboard(port=port, data_file=data, open_browser=not no_browser)
 
-        @app.command("dashboard", help="Launch web dashboard")
-        def dashboard_command(
-            ctx: typer.Context,
-            port: int = typer.Option(6970, "--port", "-p", help="Port to run the server on"),
-            data: Optional[Path] = typer.Option(None, "--data", "-d", help="Path to benchmark results JSON file"),
-            no_browser: bool = typer.Option(False, "--no-browser", help="Do not open browser automatically"),
-        ) -> None:
-            from dashboard.api.server import serve_dashboard
-            serve_dashboard(port=port, data_file=data, open_browser=not no_browser)
+    @app.command("mcp", help="Start MCP server for AI chat integration")
+    def mcp_command(
+        ctx: typer.Context,
+        list_tools: bool = typer.Option(False, "--list", help="List available tools"),
+        test: Optional[str] = typer.Option(None, "--test", help="Test a specific tool"),
+        serve: bool = typer.Option(False, "--serve", help="Start MCP server (stdio)"),
+    ) -> None:
+        from mcp import server
 
-        @app.command("mcp", help="Start MCP server for AI chat integration")
-        def mcp_command(
-            ctx: typer.Context,
-            list_tools: bool = typer.Option(False, "--list", help="List available tools"),
-            test: Optional[str] = typer.Option(None, "--test", help="Test a specific tool"),
-            serve: bool = typer.Option(False, "--serve", help="Start MCP server (stdio)"),
-        ) -> None:
-            from mcp import server
-
-            old_argv = sys.argv
-            new_argv = [old_argv[0]]
-            if list_tools:
-                new_argv.append("--list")
-            if test:
-                new_argv.extend(["--test", test])
-            if serve:
-                new_argv.append("--serve")
-            sys.argv = new_argv
-            try:
-                result = server.main()
-                raise typer.Exit(code=0 if result is None else int(result))
-            finally:
-                sys.argv = old_argv
+        old_argv = sys.argv
+        new_argv = [old_argv[0]]
+        if list_tools:
+            new_argv.append("--list")
+        if test:
+            new_argv.extend(["--test", test])
+        if serve:
+            new_argv.append("--serve")
+        sys.argv = new_argv
+        try:
+            result = server.main()
+            raise typer.Exit(code=0 if result is None else int(result))
+        finally:
+            sys.argv = old_argv
 
     @app.command("version", help="Show version information")
     def version_command() -> None:
@@ -1093,21 +1137,20 @@ if typer:
 if typer:
     app.add_typer(system_app, name="system")
     app.add_typer(test_app, name="test")
-    app.add_typer(microbench_app, name="microbench")
+    app.add_typer(hwbench_app, name="hwbench")
     app.add_typer(ops_app, name="ops")
     app.add_typer(monitoring_app, name="monitor")
-    if EXT_ENABLED:
-        app.add_typer(ai_app, name="ai")
-        app.add_typer(analyze_app, name="analyze")
-        app.add_typer(optimize_app, name="optimize")
-        app.add_typer(distributed_app, name="distributed")
-        app.add_typer(inference_app, name="inference")
-        app.add_typer(training_app, name="training")
-        app.add_typer(monitor_app, name="monitor")
-        app.add_typer(report_app, name="report")
-        app.add_typer(profile_app, name="profile")
-        app.add_typer(hf_app, name="hf")
-        app.add_typer(cluster_app, name="cluster")
+    # All sub-apps always available
+    app.add_typer(profile_app, name="profile")
+    app.add_typer(ai_app, name="ai")
+    app.add_typer(analyze_app, name="analyze")
+    app.add_typer(optimize_app, name="optimize")
+    app.add_typer(distributed_app, name="distributed")
+    app.add_typer(inference_app, name="inference")
+    app.add_typer(training_app, name="training")
+    app.add_typer(report_app, name="report")
+    app.add_typer(hf_app, name="hf")
+    app.add_typer(cluster_app, name="cluster")
 
 
 # =============================================================================

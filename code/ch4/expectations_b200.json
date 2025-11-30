@@ -91,7 +91,7 @@
       "metrics": {
         "baseline_p75_ms": 1.3458240032196045,
         "baseline_throughput.latency_ms": 1.3770425581932069,
-        "baseline_throughput.requests_per_s": 581.6596127337207,
+        "baseline_throughput.requests_per_s": 744.574137941147,
         "baseline_throughput.tokens_per_s": 333087610.3126899,
         "baseline_time_ms": 1.3770425581932069,
         "best_optimized_p75_ms": 0.17849600315093994,
@@ -115,11 +115,11 @@
         "updated_at": "2025-11-24T17:08:53.434206"
       },
       "metrics": {
-        "baseline_p75_ms": 34.551326751708984,
-        "baseline_throughput.latency_ms": 34.465771484375,
-        "baseline_throughput.requests_per_s": 29.014293222867458,
-        "baseline_throughput.tokens_per_s": 290142932.2286746,
-        "baseline_time_ms": 34.465771484375,
+        "baseline_p75_ms": 11.488191604614258,
+        "baseline_throughput.latency_ms": 11.457791366577148,
+        "baseline_throughput.requests_per_s": 87.27685537345718,
+        "baseline_throughput.tokens_per_s": 872768553.7345718,
+        "baseline_time_ms": 11.457791366577148,
         "best_optimized_p75_ms": 1.4521600008010864,
         "best_optimized_speedup": 23.687976925617246,
         "best_optimized_throughput.latency_ms": 1.4549900817871093,

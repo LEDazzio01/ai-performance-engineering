@@ -17,12 +17,12 @@
         "baseline_throughput.samples_per_s": 2595.552004859036,
         "baseline_time_ms": 49.92940902709961,
         "best_optimized_p75_ms": 2.0604159832000732,
-        "best_optimized_speedup": 23.934553196009585,
+        "best_optimized_speedup": 32.488996788247135,
         "best_optimized_throughput.latency_ms": 2.0604159832000732,
         "best_optimized_throughput.requests_per_s": 485.33888697896816,
         "best_optimized_throughput.samples_per_s": 62123.377533307925,
         "best_optimized_time_ms": 2.0604159832000732,
-        "best_speedup": 23.934553196009585
+        "best_speedup": 32.488996788247135
       },
       "type": "python"
     }

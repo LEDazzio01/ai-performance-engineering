@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import contextlib
 import runpy
 import json
 import os
@@ -33,6 +34,23 @@ def _parse_args() -> argparse.Namespace:
         help="Profiler preset to use",
     )
     parser.add_argument(
+        "--nvtx-label",
+        default="aisp_torch_profile",
+        help="NVTX/record_function range label to wrap the run (helps correlate with nsys/NVTX traces)",
+    )
+    parser.add_argument(
+        "--nvtx/--no-nvtx",
+        dest="use_nvtx",
+        default=True,
+        help="Emit a host-side NVTX range around the profiled section",
+    )
+    parser.add_argument(
+        "--force-lineinfo/--no-force-lineinfo",
+        dest="force_lineinfo",
+        default=True,
+        help="Force -lineinfo into NVCC/TORCH_NVCC_FLAGS for better source mapping (default: on)",
+    )
+    parser.add_argument(
         "--script-args",
         nargs=argparse.REMAINDER,
         help="Arguments forwarded to the target script",
@@ -40,7 +58,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _set_env(output_dir: Path) -> None:
+def _set_env(output_dir: Path, force_lineinfo: bool = True) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
@@ -53,6 +71,13 @@ def _set_env(output_dir: Path) -> None:
     os.environ["PYTORCH_ALLOC_CONF"] = alloc_conf
     os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "1")
     os.environ.setdefault("PYTHONFAULTHANDLER", "1")
+    if force_lineinfo:
+        def _append_flag(key: str, flag: str) -> None:
+            current = os.environ.get(key, "").strip()
+            if flag not in current.split():
+                os.environ[key] = f"{flag} {current}".strip()
+        _append_flag("NVCC_PREPEND_FLAGS", "-lineinfo")
+        _append_flag("TORCH_NVCC_FLAGS", "-lineinfo")
 
 
 def _load_module(script: Path) -> ModuleType:
@@ -126,8 +151,78 @@ def _apply_blackwell_tuning() -> None:
         dynamo_cfg.automatic_dynamic_shapes = True
 
 
-def run_profiler(script: Path, output_dir: Path, mode: str, script_args: Optional[Iterable[str]]) -> None:
-    _set_env(output_dir)
+@contextlib.contextmanager
+def _nvtx_range(label: str, enabled: bool):
+    """Emit both NVTX and record_function ranges for cross-profiler linking."""
+    rf_cm = torch.autograd.profiler.record_function(label) if enabled else contextlib.nullcontext()
+    nvtx_push = getattr(torch.cuda.nvtx, "range_push", None)
+    nvtx_pop = getattr(torch.cuda.nvtx, "range_pop", None)
+    has_nvtx = enabled and torch.cuda.is_available() and nvtx_push and nvtx_pop
+
+    try:
+        if has_nvtx:
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+            nvtx_push(label)
+        with rf_cm:
+            yield
+    finally:
+        if has_nvtx:
+            try:
+                nvtx_pop()
+            except Exception:
+                pass
+
+
+def _write_summary(prof: torch.profiler.profile, output_dir: Path, mode: str) -> Optional[Path]:
+    """Persist a lightweight summary for API/UI consumption."""
+    try:
+        averages = prof.key_averages()
+        rows: List[Dict[str, object]] = []
+        total_cuda = 0.0
+        total_cpu = 0.0
+        for evt in averages:
+            cuda_time = float(getattr(evt, "cuda_time_total", 0.0) or 0.0)
+            cpu_time = float(getattr(evt, "cpu_time_total", 0.0) or 0.0)
+            total_cuda += cuda_time
+            total_cpu += cpu_time
+            rows.append(
+                {
+                    "name": getattr(evt, "key", ""),
+                    "count": getattr(evt, "count", 0),
+                    "cuda_time_total_us": cuda_time,
+                    "cpu_time_total_us": cpu_time,
+                    "self_cuda_time_total_us": float(getattr(evt, "self_cuda_time_total", 0.0) or 0.0),
+                    "self_cpu_time_total_us": float(getattr(evt, "self_cpu_time_total", 0.0) or 0.0),
+                    "cpu_memory_usage": float(getattr(evt, "cpu_memory_usage", 0.0) or 0.0),
+                    "cuda_memory_usage": float(getattr(evt, "cuda_memory_usage", 0.0) or 0.0),
+                }
+            )
+        summary = {
+            "mode": mode,
+            "total_cuda_time_us": total_cuda,
+            "total_cpu_time_us": total_cpu,
+            "top_ops": sorted(rows, key=lambda r: r.get("cuda_time_total_us", 0.0), reverse=True)[:50],
+        }
+        summary_path = output_dir / "torch_profile_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2))
+        return summary_path
+    except Exception:
+        return None
+
+
+def run_profiler(
+    script: Path,
+    output_dir: Path,
+    mode: str,
+    script_args: Optional[Iterable[str]],
+    nvtx_label: str = "aisp_torch_profile",
+    use_nvtx: bool = True,
+    force_lineinfo: bool = True,
+) -> None:
+    _set_env(output_dir, force_lineinfo=force_lineinfo)
     if mode in {"full", "blackwell"}:
         _apply_blackwell_tuning()
 
@@ -141,7 +236,8 @@ def run_profiler(script: Path, output_dir: Path, mode: str, script_args: Optiona
 
     try:
         with profile(**profiler_kwargs) as prof:
-            entry()
+            with _nvtx_range(nvtx_label, enabled=use_nvtx):
+                entry()
             prof.step()
     except Exception as exc:  # pragma: no cover - surfaced in metadata
         error = f"{type(exc).__name__}: {exc}"
@@ -158,6 +254,8 @@ def run_profiler(script: Path, output_dir: Path, mode: str, script_args: Optiona
             "cuda_available": torch.cuda.is_available(),
             "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
             "error": error,
+            "nvtx_label": nvtx_label,
+            "force_lineinfo": bool(force_lineinfo),
         }
         (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
@@ -165,6 +263,16 @@ def run_profiler(script: Path, output_dir: Path, mode: str, script_args: Optiona
             try:
                 trace_path = output_dir / f"chrome_trace_{mode}.json"
                 prof.export_chrome_trace(str(trace_path))
+                # Standardize name for loaders
+                alias_path = output_dir / "trace.json"
+                if not alias_path.exists():
+                    try:
+                        alias_path.symlink_to(trace_path.name)
+                    except Exception:
+                        try:
+                            alias_path.write_bytes(trace_path.read_bytes())
+                        except Exception:
+                            pass
 
                 summary_path = output_dir / f"summary_{mode}.txt"
                 parts: List[str] = []
@@ -204,6 +312,7 @@ def run_profiler(script: Path, output_dir: Path, mode: str, script_args: Optiona
                         )
                     averages_path = output_dir / f"key_averages_{mode}.json"
                     averages_path.write_text(json.dumps(rows, indent=2))
+                    _write_summary(prof, output_dir, mode)
                 except AttributeError:
                     pass
             except Exception:
@@ -212,7 +321,15 @@ def run_profiler(script: Path, output_dir: Path, mode: str, script_args: Optiona
 
 def main() -> None:
     args = _parse_args()
-    run_profiler(args.script, args.output_dir, args.profile_mode, args.script_args)
+    run_profiler(
+        args.script,
+        args.output_dir,
+        args.profile_mode,
+        args.script_args,
+        nvtx_label=args.nvtx_label,
+        use_nvtx=bool(args.use_nvtx),
+        force_lineinfo=bool(args.force_lineinfo),
+    )
 
 
 if __name__ == "__main__":

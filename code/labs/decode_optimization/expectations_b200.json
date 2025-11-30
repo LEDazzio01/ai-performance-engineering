@@ -19,12 +19,12 @@
         "baseline_time_ms": 13.300871928532919,
         "best_optimized_p75_ms": 0.0,
         "best_optimized_p90_ms": 3.6885759830474854,
-        "best_optimized_speedup": 3.6797088529933197,
+        "best_optimized_speedup": 10.409564536865377,
         "best_optimized_throughput.latency_ms": 3.7118106683095298,
         "best_optimized_throughput.requests_per_s": 2155.282344625471,
         "best_optimized_throughput.tokens_per_s": 689690.3502801507,
         "best_optimized_time_ms": 3.7118106683095298,
-        "best_speedup": 3.6797088529933197
+        "best_speedup": 10.409564536865377
       },
       "type": "python"
     },
@@ -47,12 +47,12 @@
         "baseline_time_ms": 15.321885267893473,
         "best_optimized_p75_ms": 0.0,
         "best_optimized_p90_ms": 8.271871566772461,
-        "best_optimized_speedup": 1.9337884214937817,
+        "best_optimized_speedup": 2.7514255051402117,
         "best_optimized_throughput.latency_ms": 8.300967892011007,
         "best_optimized_throughput.requests_per_s": 963.7430362427176,
         "best_optimized_throughput.tokens_per_s": 308397.77159766963,
         "best_optimized_time_ms": 8.300967892011007,
-        "best_speedup": 1.9337884214937817
+        "best_speedup": 2.7514255051402117
       },
       "type": "python"
     },
@@ -159,12 +159,12 @@
         "baseline_time_ms": 16.42902135848999,
         "best_optimized_p75_ms": 0.0,
         "best_optimized_p90_ms": 15.44320011138916,
-        "best_optimized_speedup": 1.0458923159415237,
+        "best_optimized_speedup": 2.223003186927688,
         "best_optimized_throughput.latency_ms": 15.314485390981039,
         "best_optimized_throughput.requests_per_s": 522.3812485864746,
         "best_optimized_throughput.tokens_per_s": 167161.99954767188,
         "best_optimized_time_ms": 15.314485390981039,
-        "best_speedup": 1.0
+        "best_speedup": 2.223003186927688
       },
       "type": "python"
     },
@@ -187,12 +187,12 @@
         "baseline_time_ms": 15.79973061879476,
         "best_optimized_p75_ms": 0.0,
         "best_optimized_p90_ms": 8.402239799499512,
-        "best_optimized_speedup": 2.355054807297227,
+        "best_optimized_speedup": 2.945349948411318,
         "best_optimized_throughput.latency_ms": 8.32145889600118,
         "best_optimized_throughput.requests_per_s": 961.3698871773969,
         "best_optimized_throughput.tokens_per_s": 332135.22694489546,
         "best_optimized_time_ms": 8.32145889600118,
-        "best_speedup": 2.355054807297227
+        "best_speedup": 2.945349948411318
       },
       "type": "python"
     }

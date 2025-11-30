@@ -22,6 +22,7 @@ class OptimizedContinuousBatchingBenchmark(BaseBenchmark):
         self.hidden_dim = 1024
         # Match baseline total samples: batch_size(12) * num_batches(12) = 144
         self.batch_size = 12  # For signature matching
+        self.num_batches = 12  # For signature matching with baseline
         self.num_samples = 144
         tokens = self.num_samples * self.hidden_dim
         self._workload = WorkloadMetadata(

@@ -41,7 +41,7 @@ class GraphedKVTransferBenchmark(BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.hidden_size = 2048
+        self.hidden_size = 1024  # Must match baseline for valid comparison
         self.chunk_size = 256
         self.num_chunks = 32
         self.pipeline_depth = 4

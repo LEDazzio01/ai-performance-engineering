@@ -20,6 +20,7 @@ class BaselineContinuousBatchingBenchmark(BaseBenchmark):
         self.batch_size = 12
         self.hidden_dim = 1024
         self.num_batches = 12
+        self.num_samples = self.batch_size * self.num_batches  # 144 total samples for signature matching
         tokens = self.batch_size * self.hidden_dim * self.num_batches
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.num_batches),

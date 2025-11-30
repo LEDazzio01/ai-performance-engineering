@@ -64,7 +64,7 @@ function MetricsTable({ result }: { result: any }) {
   );
 }
 
-export function MicrobenchTab() {
+export function HwbenchTab() {
   const disk = useSWRMutation('disk', fetchJson);
   const [diskSize, setDiskSize] = useState(256);
   const [diskBlock, setDiskBlock] = useState(1024);
@@ -107,12 +107,14 @@ export function MicrobenchTab() {
   const [nsysFullTimeline, setNsysFullTimeline] = useState(false);
   const [nsysResult, setNsysResult] = useState<Result>(null);
   const [nsysLoading, setNsysLoading] = useState(false);
+  const [nsysForceLineinfo, setNsysForceLineinfo] = useState(true);
 
   const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
   const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
   const [ncuQueue, setNcuQueue] = useState(false);
   const [ncuResult, setNcuResult] = useState<Result>(null);
   const [ncuLoading, setNcuLoading] = useState(false);
+  const [ncuForceLineinfo, setNcuForceLineinfo] = useState(true);
 
   const [jobId, setJobId] = useState('');
   const [jobStatus, setJobStatus] = useState<Result>(null);
@@ -126,7 +128,7 @@ export function MicrobenchTab() {
         <div className="card-header">
           <div className="flex items-center gap-2">
             <Timer className="w-5 h-5 text-accent-warning" />
-            <h2 className="text-lg font-semibold text-white">Microbenchmarks</h2>
+            <h2 className="text-lg font-semibold text-white">Hardware Benchmarks</h2>
           </div>
         </div>
         <div className="card-body">
@@ -158,7 +160,7 @@ export function MicrobenchTab() {
               onChange={(e) => setTimeoutSeconds(e.target.value === '' ? '' : Number(e.target.value))}
             />
           </label>
-          <span className="text-xs text-white/50">Applies to all microbench calls below.</span>
+          <span className="text-xs text-white/50">Applies to all hardware benchmark calls below.</span>
         </div>
       </div>
 
@@ -174,7 +176,7 @@ export function MicrobenchTab() {
             <div className="flex flex-wrap gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
-                onClick={() => disk.trigger({ url: `/api/microbench/disk?file_size_mb=${diskSize}&block_size_kb=${diskBlock}${flagQuery}` })}
+                onClick={() => disk.trigger({ url: `/api/hwbench/disk?file_size_mb=${diskSize}&block_size_kb=${diskBlock}${flagQuery}` })}
               >
                 Run Disk I/O
               </button>
@@ -226,7 +228,7 @@ export function MicrobenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-primary/20 px-3 py-2 text-sm text-accent-primary hover:bg-accent-primary/30 transition-colors"
-                onClick={() => pcie.trigger({ url: `/api/microbench/pcie?size_mb=${pcieSize}&iters=${pcieIters}${flagQuery}` })}
+                onClick={() => pcie.trigger({ url: `/api/hwbench/pcie?size_mb=${pcieSize}&iters=${pcieIters}${flagQuery}` })}
               >
                 Run PCIe H2D/D2H
               </button>
@@ -252,7 +254,7 @@ export function MicrobenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-success/20 px-3 py-2 text-sm text-accent-success hover:bg-accent-success/30 transition-colors"
-                onClick={() => mem.trigger({ url: `/api/microbench/mem?size_mb=${memSize}&stride=${memStride}${flagQuery}` })}
+                onClick={() => mem.trigger({ url: `/api/hwbench/mem?size_mb=${memSize}&stride=${memStride}${flagQuery}` })}
               >
                 Run Memory Stride
               </button>
@@ -278,7 +280,7 @@ export function MicrobenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-warning/20 px-3 py-2 text-sm text-accent-warning hover:bg-accent-warning/30 transition-colors"
-                onClick={() => tensor.trigger({ url: `/api/microbench/tensor?size=${tensorSize}&precision=${encodeURIComponent(tensorPrecision)}${flagQuery}` })}
+                onClick={() => tensor.trigger({ url: `/api/hwbench/tensor-cores?size=${tensorSize}&precision=${encodeURIComponent(tensorPrecision)}${flagQuery}` })}
               >
                 Run Tensor Core
               </button>
@@ -304,7 +306,7 @@ export function MicrobenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-tertiary/20 px-3 py-2 text-sm text-accent-tertiary hover:bg-accent-tertiary/30 transition-colors"
-                onClick={() => sfu.trigger({ url: `/api/microbench/sfu?elements=${sfuElems}${flagQuery}` })}
+                onClick={() => sfu.trigger({ url: `/api/hwbench/sfu?elements=${sfuElems}${flagQuery}` })}
               >
                 Run SFU
               </button>
@@ -327,7 +329,7 @@ export function MicrobenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
-                onClick={() => loop.trigger({ url: `/api/microbench/loopback?size_mb=${loopSize}&port=${loopPort}${flagQuery}` })}
+                onClick={() => loop.trigger({ url: `/api/hwbench/loopback?size_mb=${loopSize}&port=${loopPort}${flagQuery}` })}
               >
                 Run Loopback
               </button>
@@ -408,17 +410,21 @@ export function MicrobenchTab() {
                       value={nsysPreset}
                       onChange={(e) => setNsysPreset(e.target.value as 'light' | 'full')}
                     >
-                      <option value="full">full</option>
-                      <option value="light">light</option>
+                    <option value="full">full (default)</option>
+                    <option value="light">light</option>
                     </select>
                   </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" className="accent-accent-primary" checked={nsysFullTimeline} onChange={(e) => setNsysFullTimeline(e.target.checked)} />
                     Full timeline
                   </label>
+                 <label className="flex items-center gap-2">
+                   <input type="checkbox" className="accent-accent-secondary" checked={nsysQueue} onChange={(e) => setNsysQueue(e.target.checked)} />
+                   Queue only
+                 </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" className="accent-accent-secondary" checked={nsysQueue} onChange={(e) => setNsysQueue(e.target.checked)} />
-                    Queue only
+                    <input type="checkbox" className="accent-accent-primary" checked={nsysForceLineinfo} onChange={(e) => setNsysForceLineinfo(e.target.checked)} />
+                    Force lineinfo
                   </label>
                   <label className="flex items-center gap-2">
                     Timeout (s)
@@ -442,11 +448,12 @@ export function MicrobenchTab() {
                     try {
                       const json = await startNsightSystemsCapture({
                         command: nsysCommand,
-                        preset: nsysPreset,
-                        full_timeline: nsysFullTimeline,
-                        queue_only: nsysQueue,
-                        timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
-                      });
+                      preset: nsysPreset,
+                      full_timeline: nsysFullTimeline,
+                      queue_only: nsysQueue,
+                      force_lineinfo: nsysForceLineinfo,
+                      timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
+                    });
                       setNsysResult(json);
                       if (json.job_id) setJobId(json.job_id);
                     } catch (e: any) {
@@ -489,9 +496,13 @@ export function MicrobenchTab() {
                       <option value="occupancy">occupancy</option>
                     </select>
                   </label>
+                 <label className="flex items-center gap-2">
+                   <input type="checkbox" className="accent-accent-secondary" checked={ncuQueue} onChange={(e) => setNcuQueue(e.target.checked)} />
+                   Queue only
+                 </label>
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" className="accent-accent-secondary" checked={ncuQueue} onChange={(e) => setNcuQueue(e.target.checked)} />
-                    Queue only
+                    <input type="checkbox" className="accent-accent-primary" checked={ncuForceLineinfo} onChange={(e) => setNcuForceLineinfo(e.target.checked)} />
+                    Force lineinfo
                   </label>
                   <label className="flex items-center gap-2">
                     Timeout (s)
@@ -515,10 +526,11 @@ export function MicrobenchTab() {
                     try {
                       const json = await startNsightComputeCapture({
                         command: ncuCommand,
-                        workload_type: ncuWorkload,
-                        queue_only: ncuQueue,
-                        timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
-                      });
+                      workload_type: ncuWorkload,
+                      queue_only: ncuQueue,
+                      force_lineinfo: ncuForceLineinfo,
+                      timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
+                    });
                       setNcuResult(json);
                       if (json.job_id) setJobId(json.job_id);
                     } catch (e: any) {
@@ -614,4 +626,4 @@ export function MicrobenchTab() {
   );
 }
 
-export default MicrobenchTab;
+export default HwbenchTab;

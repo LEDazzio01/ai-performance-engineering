@@ -38,7 +38,7 @@ type DeepProfileDataset = {
 
 export function DeepProfileTab() {
   const [fullTimelineToggle, setFullTimelineToggle] = useState(false);
-  const [preset, setPreset] = useState<'light' | 'full'>('light');
+  const [preset, setPreset] = useState<'light' | 'full'>('full');
   const [selectedChapter, setSelectedChapter] = useState<string | null>(null);
   const [nsysCommand, setNsysCommand] = useState('python -c "print(123)"');
   const [nsysQueue, setNsysQueue] = useState(false);
@@ -50,6 +50,7 @@ export function DeepProfileTab() {
   const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
   const [ncuQueue, setNcuQueue] = useState(false);
   const [ncuTimeout, setNcuTimeout] = useState<number | ''>('');
+  const [forceLineinfo, setForceLineinfo] = useState(true);
   const [ncuResult, setNcuResult] = useState<any>(null);
   const [ncuLoading, setNcuLoading] = useState(false);
 
@@ -172,8 +173,8 @@ export function DeepProfileTab() {
               className="px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-xs text-white"
               title="NSYS preset for capture tooling"
             >
-              <option value="light">Light (default)</option>
-              <option value="full">Full (cuda-hw + cuBLAS/cuSOLVER/cuSPARSE/cuDNN + forks)</option>
+              <option value="full">Full (default: cuda-hw + cuBLAS/cuSOLVER/cuSPARSE/cuDNN + forks)</option>
+              <option value="light">Light (smaller/faster)</option>
             </select>
             {preset === 'full' && (
               <span className="text-[11px] text-accent-warning">
@@ -225,6 +226,10 @@ export function DeepProfileTab() {
                   Queue only
                 </label>
                 <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={forceLineinfo} onChange={(e) => setForceLineinfo(e.target.checked)} />
+                  Force lineinfo
+                </label>
+                <label className="flex items-center gap-2">
                   Timeout (s)
                   <input
                     type="number"
@@ -249,6 +254,7 @@ export function DeepProfileTab() {
                       preset: preset,
                       full_timeline: fullTimelineToggle || preset === 'full',
                       queue_only: nsysQueue,
+                      force_lineinfo: forceLineinfo,
                       timeout_seconds: nsysTimeout === '' ? undefined : Number(nsysTimeout),
                     });
                     setNsysResult(res);
@@ -295,6 +301,10 @@ export function DeepProfileTab() {
                   Queue only
                 </label>
                 <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={forceLineinfo} onChange={(e) => setForceLineinfo(e.target.checked)} />
+                  Force lineinfo
+                </label>
+                <label className="flex items-center gap-2">
                   Timeout (s)
                   <input
                     type="number"
@@ -318,6 +328,7 @@ export function DeepProfileTab() {
                       command: ncuCommand,
                       workload_type: ncuWorkload,
                       queue_only: ncuQueue,
+                      force_lineinfo: forceLineinfo,
                       timeout_seconds: ncuTimeout === '' ? undefined : Number(ncuTimeout),
                     });
                     setNcuResult(res);

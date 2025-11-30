@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 import typer
 
 from core.profile_insights import generate_flamegraph_comparison
@@ -378,9 +379,102 @@ def kernels(args) -> None:
 def hta(args) -> None:
     """Holistic Trace Analysis."""
     from rich.console import Console
-    file = getattr(args, 'file', None)
     console = Console()
-    console.print(f"[yellow]HTA analysis for {file or 'default profile'}[/yellow]")
+    console.print("[yellow]Use 'aisp profile hta-capture' to collect a new HTA trace or view highlights in the dashboard.[/yellow]")
+
+
+def torch_profiler(args) -> int:
+    """Run torch.profiler capture with NVTX + lineinfo defaults."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from core.profiling.torch_profiler import TorchProfilerAutomation
+
+    console = Console()
+    script_path = Path(getattr(args, "script", ""))
+    if not script_path.exists():
+        console.print(f"[red]Script not found:[/red] {script_path}")
+        return 1
+
+    output_dir_opt = getattr(args, "output_dir", None)
+    output_root = Path(output_dir_opt) if output_dir_opt else Path("artifacts/torch-profiles")
+    mode = getattr(args, "mode", "full")
+    output_name = getattr(args, "output_name", None) or script_path.stem
+    nvtx_label = getattr(args, "nvtx_label", "aisp_torch_profile")
+    force_lineinfo = bool(getattr(args, "force_lineinfo", True))
+    use_nvtx = bool(getattr(args, "use_nvtx", True))
+    timeout_seconds = getattr(args, "timeout_seconds", None)
+    script_args: List[str] = getattr(args, "script_args", None) or []
+
+    profiler = TorchProfilerAutomation(output_root)
+    console.print(f"[cyan]Running torch.profiler ({mode}) on {script_path}[/cyan]")
+    result = profiler.profile(
+        script=script_path,
+        output_name=output_name,
+        mode=mode,
+        script_args=script_args,
+        force_lineinfo=force_lineinfo,
+        timeout_seconds=timeout_seconds,
+        nvtx_label=nvtx_label,
+        use_nvtx=use_nvtx,
+    )
+
+    if not result.get("success"):
+        console.print(f"[red]Profiler failed:[/red] {result.get('error', 'unknown error')}")
+        return 1
+
+    panel_lines = [
+        f"[green]✓[/green] Trace: {result.get('trace_path') or 'n/a'}",
+        f"Summary: {result.get('summary') and 'torch_profile_summary.json' or 'n/a'}",
+        f"Metadata: {result.get('metadata') and 'metadata.json' or 'n/a'}",
+        f"NVTX label: {result.get('nvtx_label')}",
+        f"Force lineinfo: {result.get('force_lineinfo')}",
+    ]
+    console.print(Panel.fit("\n".join(panel_lines), title="torch.profiler capture", border_style="green"))
+    return 0
+
+
+def hta_capture(args) -> int:
+    """Run an HTA-friendly nsys capture and analyze it."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from core.profiling.hta_capture import HTACaptureAutomation
+
+    console = Console()
+    command_str = getattr(args, "command", "")
+    command_list = getattr(args, "command_list", None) or (shlex.split(command_str) if command_str else [])
+    if not command_list:
+        console.print("[red]Command is required (e.g., python train.py --arg foo)[/red]")
+        return 1
+
+    output_dir_opt = getattr(args, "output_dir", None)
+    output_root = Path(output_dir_opt) if output_dir_opt else Path("artifacts/hta")
+    output_name = getattr(args, "output_name", "hta_capture")
+    preset = getattr(args, "preset", "full")
+    force_lineinfo = bool(getattr(args, "force_lineinfo", True))
+    timeout_seconds = getattr(args, "timeout_seconds", None)
+
+    capture = HTACaptureAutomation(output_root)
+    console.print(f"[cyan]Running HTA capture via nsys ({preset})[/cyan]")
+    result = capture.capture(
+        command=command_list,
+        output_name=output_name,
+        preset=preset,
+        force_lineinfo=force_lineinfo,
+        timeout_seconds=timeout_seconds,
+    )
+
+    if not result.get("success"):
+        console.print(f"[red]HTA capture failed:[/red] {result.get('error', 'unknown error')}")
+        return 1
+
+    lines = [
+        f"[green]✓[/green] NSYS report: {result.get('nsys_output')}",
+        f"Trace JSON: {result.get('trace_path')}",
+        f"HTA report: {result.get('hta_report')}",
+        f"Force lineinfo: {result.get('force_lineinfo')}",
+    ]
+    console.print(Panel.fit("\n".join(lines), title="HTA capture", border_style="green"))
+    return 0
 
 
 def ncu(args) -> None:
@@ -410,4 +504,3 @@ def occupancy(args) -> None:
     from rich.console import Console
     console = Console()
     console.print("[yellow]Occupancy analysis[/yellow]")
-

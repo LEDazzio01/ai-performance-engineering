@@ -71,7 +71,7 @@ export const tabs = [
   { id: 'history', label: 'History', icon: History },
   { id: 'batchopt', label: 'Batch Size', icon: Package },
   { id: 'webhooks', label: 'Webhooks', icon: Bell },
-  { id: 'microbench', label: 'Microbench', icon: Timer },
+  { id: 'hwbench', label: 'Hardware Bench', icon: Timer },
   { id: 'themes', label: 'Themes', icon: Palette },
   { id: 'aiassistant', label: 'AI Assistant', icon: Brain },
 ];
@@ -105,7 +105,7 @@ const tabGroups: TabGroup[] = [
     label: 'Profiling',
     icon: Flame,
     color: 'text-accent-warning',
-    tabs: ['roofline', 'profiler', 'memory', 'deepprofile', 'microbench'],
+    tabs: ['roofline', 'profiler', 'memory', 'deepprofile', 'hwbench'],
   },
   {
     id: 'optimization',

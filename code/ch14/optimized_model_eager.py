@@ -71,7 +71,14 @@ class SimpleTransformer(nn.Module):
 
 
 class OptimizedModelCompiledBenchmark(BaseBenchmark):
-    """Benchmark implementation with torch.compile optimization."""
+    """Benchmark implementation with torch.compile optimization.
+    
+    Chapter 14 Optimization: torch.compile with max-autotune mode for optimal
+    kernel selection and fusion. Demonstrates:
+    1. Kernel fusion (multiple ops -> single kernel)
+    2. Memory layout optimization
+    3. Inductor-based code generation
+    """
     
     def __init__(self):
         super().__init__()
@@ -95,26 +102,31 @@ class OptimizedModelCompiledBenchmark(BaseBenchmark):
         if torch.cuda.is_available():
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
-        model = SimpleTransformer().to(self.device).eval()
+            enable_tf32()  # Enable TF32 for speedup
+        
+        # Use BF16 for tensor core acceleration (key optimization over baseline FP32)
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        model = SimpleTransformer().to(self.device, dtype=dtype).eval()
         self.model = model
         
+        # Use max-autotune for best performance (searches through kernel configs)
         self.compiled_model = compile_model(
             model,
-            mode="reduce-overhead",
+            mode="max-autotune",  # Better than reduce-overhead for sustained workloads
             fullgraph=False,
             dynamic=False,
         )
         
         self.input_ids = torch.randint(0, self.vocab_size, (self.batch_size, self.seq_len), device=self.device)
         
-        # Warmup (compilation happens here)
-        for _ in range(30):
+        # Extensive warmup for compilation and autotuning
+        for _ in range(50):
             with torch.no_grad():
                 _ = self.compiled_model(self.input_ids)
         torch.cuda.synchronize(self.device)
         
         # Additional warmup after compilation
-        for _ in range(10):
+        for _ in range(20):
             with torch.no_grad():
                 _ = self.compiled_model(self.input_ids)
         torch.cuda.synchronize()

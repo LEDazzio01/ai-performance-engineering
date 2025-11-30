@@ -209,19 +209,19 @@
       "metadata": {
         "best_optimization": "specialized_multistream",
         "best_optimization_file": "optimized_warp_specialized_multistream.cu",
-        "best_optimization_speedup": 1.1671802716033457,
-        "best_optimization_time_ms": 382.4943660098749,
-        "git_commit": "2e62787eff329e2d792c1e48583eace9d4ddad8e",
-        "updated_at": "2025-11-29T18:26:32.325402"
+        "best_optimization_speedup": 1.2391910093776894,
+        "best_optimization_time_ms": 326.32909666669246,
+        "git_commit": "eb2e8d4a62fb8932f387beaf023612b0d065b7fa",
+        "updated_at": "2025-11-30T05:59:40.003975"
       },
       "metrics": {
         "baseline_p75_ms": 415.5397249851376,
         "baseline_p90_ms": 415.5397249851376,
         "baseline_time_ms": 402.77517567543936,
-        "best_optimized_p75_ms": 441.8921850156039,
-        "best_optimized_p90_ms": 441.8921850156039,
+        "best_optimized_p75_ms": 321.2795589934103,
+        "best_optimized_p90_ms": 321.2795589934103,
         "best_optimized_speedup": 1.1671802716033457,
-        "best_optimized_time_ms": 440.13538665603846,
+        "best_optimized_time_ms": 326.32909666669246,
         "best_speedup": 1.0
       },
       "type": "cuda"

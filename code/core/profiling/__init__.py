@@ -15,6 +15,8 @@ from .memory import MemoryProfiler, MemorySnapshot
 from .flame_graph import FlameGraphGenerator
 from .timeline import TimelineGenerator
 from .hta_integration import HTAAnalyzer
+from .torch_profiler import TorchProfilerAutomation
+from .hta_capture import HTACaptureAutomation
 
 __all__ = [
     'UnifiedProfiler',
@@ -24,7 +26,8 @@ __all__ = [
     'FlameGraphGenerator',
     'TimelineGenerator',
     'HTAAnalyzer',
+    'TorchProfilerAutomation',
+    'HTACaptureAutomation',
 ]
-
 
 

@@ -64,7 +64,7 @@ import {
   BatchSizeOptimizationTab,
   WebhooksTab,
   ThemesTab,
-  MicrobenchTab,
+  HwbenchTab,
   AIAssistantTab,
 } from '@/components/tabs';
 import {
@@ -1147,7 +1147,7 @@ export default function Dashboard() {
 
         {activeTab === 'webhooks' && <WebhooksTab />}
 
-        {activeTab === 'microbench' && <MicrobenchTab />}
+        {activeTab === 'hwbench' && <HwbenchTab />}
 
         {activeTab === 'themes' && <ThemesTab />}
 

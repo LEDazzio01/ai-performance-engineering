@@ -28,7 +28,7 @@ Architecture:
       Cluster/Cost: aisp_cluster_slurm, aisp_cost_estimate
       Benchmark: aisp_run_benchmarks, aisp_verify_benchmarks, aisp_benchmark_targets, aisp_available_benchmarks
       Nsight: aisp_profile_nsys, aisp_profile_ncu, aisp_nsys_summary, aisp_compare_nsys, aisp_compare_ncu, aisp_profile_compare
-      Microbenches: aisp_test_disk, aisp_test_pcie, aisp_test_mem_hierarchy, aisp_test_tensor_core, aisp_test_sfu, aisp_test_network_loopback
+      Hardware benchmarks: aisp_test_disk, aisp_test_pcie, aisp_test_mem_hierarchy, aisp_test_tensor_core, aisp_test_sfu, aisp_test_network_loopback
       Exports: aisp_export_csv, aisp_export_pdf, aisp_export_html
       System/Analysis: aisp_system_capabilities, aisp_full_system_analysis, aisp_nsys_ncu_available
 """
@@ -92,10 +92,10 @@ _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_profile_compare": "Generates flame graph comparison; parses NSYS reports and may traverse multiple files; allow extra runtime.",
     "aisp_test_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_test_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_disk": "Runs disk I/O micro-benchmark; writes temporary files to tmp_dir. Supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_pcie": "Runs PCIe micro-benchmark; exercises host↔GPU transfers. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_mem_hierarchy": "Runs memory hierarchy micro-benchmark; exercises GPU memory. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_tensor_core": "Runs tensor core micro-benchmark; exercises GPU math units. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_test_disk": "Runs disk I/O hardware benchmark; writes temporary files to tmp_dir. Supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_test_pcie": "Runs PCIe hardware benchmark; exercises host↔GPU transfers. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_test_mem_hierarchy": "Runs memory hierarchy hardware benchmark; exercises GPU memory. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_test_tensor_core": "Runs tensor core hardware benchmark; exercises GPU math units. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
 }
 
 def _property_implies_output(prop: str) -> bool:
@@ -1869,9 +1869,14 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
         "trace_forks": {"type": "boolean", "default": True, "description": "Trace child processes before exec"},
         "preset": {
             "type": "string",
-            "description": "NSYS preset: light (default) or full (adds cuda-hw/cublas/cusolver/cusparse/cudnn + fork tracing)",
+            "description": "NSYS preset: full (default, adds cuda-hw/cublas/cusolver/cusparse/cudnn + fork tracing) or light (smaller/faster)",
             "enum": ["light", "full"],
             "default": "full"
+        },
+        "force_lineinfo": {
+            "type": "boolean",
+            "description": "Force -lineinfo via NVCC/TORCH_NVCC_FLAGS to improve source mapping",
+            "default": True
         },
         "precheck_only": {
             "type": "boolean",
@@ -1923,6 +1928,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     full_timeline = bool(params.get("full_timeline", False))
     trace_forks = bool(params.get("trace_forks", True))
     preset = params.get("preset", "light")
+    force_lineinfo = bool(params.get("force_lineinfo", True))
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     queue_only = bool(params.get("queue_only"))
@@ -1962,6 +1968,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             **precheck,
             "preset": preset,
             "full_timeline": full_timeline or preset == "full",
+            "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use queue_only=true to background the run. Default preset is full; set preset=light for smaller/faster traces.",
@@ -1978,6 +1985,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             full_timeline=full_timeline,
             trace_forks=trace_forks,
             preset=preset,
+            force_lineinfo=force_lineinfo,
             timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         )
         result = {
@@ -1987,6 +1995,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "cwd": str(output_dir),
             "preset": preset,
             "full_timeline": full_timeline or preset == "full",
+            "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "timeout_hit": bool(auto.last_run.get("timeout_hit")) if hasattr(auto, "last_run") else False,  # type: ignore[attr-defined]
             "warning": "NSYS full timeline enabled by default: captures may run slower and produce large traces; set preset=light to keep it small." if preset == "full" or full_timeline else "Set preset=light to reduce trace size/runtime.",
@@ -2036,6 +2045,11 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         "kernel_filter": {
             "type": "string",
             "description": "Optional kernel name filter (regex)"
+        },
+        "force_lineinfo": {
+            "type": "boolean",
+            "description": "Force -lineinfo via NVCC/TORCH_NVCC_FLAGS to improve source mapping",
+            "default": True
         },
         "precheck_only": {
             "type": "boolean",
@@ -2122,6 +2136,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             **precheck,
             "workload_type": workload_type,
             "kernel_filter": kernel_filter,
+            "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "planned_output": str(output_path),
             "note": "Set dry_run=false to execute; use queue_only=true to background the run.",
@@ -2134,6 +2149,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             output_name=output_name,
             workload_type=workload_type,
             kernel_filter=kernel_filter,
+            force_lineinfo=force_lineinfo,
             timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         )
 
@@ -2143,6 +2159,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "workload_type": workload_type,
             "ncu_available": auto.ncu_available,
             "cwd": str(output_dir),
+            "force_lineinfo": force_lineinfo,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "timeout_hit": bool(auto.last_run.get("timeout_hit")) if hasattr(auto, "last_run") else False,  # type: ignore[attr-defined]
             "error": auto.last_error if path is None else None,
@@ -2154,6 +2171,207 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         queued = _queue_job("aisp_profile_ncu", _execute_capture, params)
         queued["note"] = "Background capture started; poll with aisp_job_status using job_id."
         queued["workload_type"] = workload_type
+        return queued
+
+    return _execute_capture()
+
+
+@register_tool(
+    "aisp_profile_torch",
+    "Run PyTorch autograd/torch.profiler capture and emit a Chrome trace + summary. Requires torch installed. Defaults to NVTX + force_lineinfo for correlation with nsys.",
+    {"type": "object", "properties": {
+        "script": {"type": "string", "description": "Path to Python script to profile"},
+        "script_args": {"type": "array", "items": {"type": "string"}, "description": "Args forwarded to the script"},
+        "output_name": {"type": "string", "description": "Base name for the capture folder", "default": "mcp_torch"},
+        "output_dir": {"type": "string", "description": "Output root (default: artifacts/mcp-profiles/torch)", "default": "artifacts/mcp-profiles/torch"},
+        "mode": {"type": "string", "description": "Profiler preset", "enum": ["full", "memory", "flops", "modules", "blackwell"], "default": "full"},
+        "nvtx_label": {"type": "string", "description": "NVTX/record_function range label", "default": "aisp_torch_profile"},
+        "use_nvtx": {"type": "boolean", "description": "Emit NVTX range around the profiled run", "default": True},
+        "force_lineinfo": {"type": "boolean", "description": "Force -lineinfo in NVCC/TORCH_NVCC_FLAGS for better source mapping", "default": True},
+        "precheck_only": {"type": "boolean", "description": "Return prereqs without running", "default": False},
+        "dry_run": {"type": "boolean", "description": "Describe the capture without executing (alias: estimate_only)", "default": False},
+        "queue_only": {"type": "boolean", "description": "Return a job ticket and run capture in background; poll with aisp_job_status", "default": False},
+        "timeout_seconds": {"type": "integer", "description": "Max runtime before returning partial output; set 0/null for no timeout", "default": 300},
+        "include_context": {"type": "boolean", "description": "Include full system context in the response", "default": True},
+        "context_level": {"type": "string", "enum": ["summary", "full"], "default": "summary"},
+    }, "required": ["script"]}
+)
+def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Run torch.profiler for a Python script and return summary + trace paths."""
+    from pathlib import Path
+    from core.profiling.torch_profiler import TorchProfilerAutomation
+
+    script = params.get("script")
+    if not script:
+        return {"error": "script is required"}
+
+    script_path = Path(script)
+    output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles/torch"))
+    output_name = params.get("output_name") or script_path.stem or "mcp_torch"
+    mode = params.get("mode", "full")
+    script_args = params.get("script_args") or []
+    if isinstance(script_args, str):
+        import shlex as _shlex  # local import to avoid global side effects
+        script_args = _shlex.split(script_args)
+    force_lineinfo = bool(params.get("force_lineinfo", True))
+    use_nvtx = bool(params.get("use_nvtx", True))
+    nvtx_label = params.get("nvtx_label", "aisp_torch_profile")
+    precheck_only = bool(params.get("precheck_only", False))
+    dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
+    queue_only = bool(params.get("queue_only"))
+    timeout_param = params.get("timeout_seconds")
+    timeout_seconds = None if timeout_param is None else int(timeout_param)
+    include_context = bool(params.get("include_context", True))
+    context_level = params.get("context_level", "summary")
+
+    try:
+        import torch  # noqa: F401
+        torch_available = True
+        cuda_available = torch.cuda.is_available()  # type: ignore[attr-defined]
+        torch_error = None
+    except Exception as exc:  # pragma: no cover - defensive
+        torch_available = False
+        cuda_available = False
+        torch_error = str(exc)
+
+    precheck = {
+        "torch_available": torch_available,
+        "cuda_available": cuda_available,
+        "torch_error": torch_error,
+        "output_dir": str(output_dir),
+        "script_exists": script_path.exists(),
+        "force_lineinfo": force_lineinfo,
+        "nvtx_label": nvtx_label,
+    }
+    if precheck_only:
+        return {"precheck_only": True, **precheck}
+    if not script_path.exists():
+        return {"error": f"script not found: {script}", **precheck}
+    if dry_run:
+        planned = output_dir / f"{output_name}_<timestamp>"
+        return {
+            "dry_run": True,
+            **precheck,
+            "planned_output": str(planned),
+            "timeout_seconds": timeout_seconds,
+            "mode": mode,
+        }
+
+    def _execute_capture():
+        runner = TorchProfilerAutomation(output_dir)
+        result = runner.profile(
+            script=script_path,
+            output_name=output_name,
+            mode=mode,
+            script_args=script_args,
+            force_lineinfo=force_lineinfo,
+            timeout_seconds=timeout_seconds,
+            nvtx_label=nvtx_label,
+            use_nvtx=use_nvtx,
+        )
+        result.update({"torch_available": torch_available, "cuda_available": cuda_available})
+        if not result.get("success"):
+            result.setdefault("error", runner.last_error or "torch profiler failed")
+        return attach_context_if_requested(result, include_context, context_level)
+
+    if queue_only:
+        queued = _queue_job("aisp_profile_torch", _execute_capture, params)
+        queued["note"] = "Background torch.profiler capture started; poll with aisp_job_status using job_id."
+        queued["mode"] = mode
+        queued["nvtx_label"] = nvtx_label
+        return queued
+
+    return _execute_capture()
+
+
+@register_tool(
+    "aisp_profile_hta",
+    "Run an Nsight Systems capture with HTA-friendly flags and analyze with HTAAnalyzer. Produces .nsys-rep, exported trace.json, and hta_report.json.",
+    {"type": "object", "properties": {
+        "command": {"type": "array", "items": {"type": "string"}, "description": "Command to profile (argv list)"},
+        "output_name": {"type": "string", "description": "Base name for output files", "default": "mcp_hta"},
+        "output_dir": {"type": "string", "description": "Directory for outputs (default: artifacts/hta)", "default": "artifacts/hta"},
+        "preset": {"type": "string", "description": "nsys preset", "enum": ["light", "full"], "default": "full"},
+        "force_lineinfo": {"type": "boolean", "description": "Force -lineinfo for source/line mapping", "default": True},
+        "precheck_only": {"type": "boolean", "description": "Return prereqs without running", "default": False},
+        "dry_run": {"type": "boolean", "description": "Describe the capture without executing", "default": False},
+        "queue_only": {"type": "boolean", "description": "Run in background and return job_id", "default": False},
+        "timeout_seconds": {"type": "integer", "description": "Max runtime before returning partial output; set 0/null for none", "default": 300},
+        "include_context": {"type": "boolean", "description": "Include full system context in the response", "default": True},
+        "context_level": {"type": "string", "enum": ["summary", "full"], "default": "summary"},
+    }, "required": ["command"]}
+)
+def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Run nsys + HTA analysis."""
+    import shlex
+    from pathlib import Path
+    from core.profiling.hta_capture import HTACaptureAutomation
+    from core.profiling.nsight_automation import NsightAutomation
+
+    command_list = params.get("command") or []
+    if isinstance(command_list, str):
+        command_list = shlex.split(command_list)
+    if not command_list:
+        return {"error": "command is required"}
+
+    output_dir = Path(params.get("output_dir", "artifacts/hta"))
+    output_name = params.get("output_name", "mcp_hta")
+    preset = params.get("preset", "full")
+    force_lineinfo = bool(params.get("force_lineinfo", True))
+    precheck_only = bool(params.get("precheck_only"))
+    dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
+    queue_only = bool(params.get("queue_only"))
+    timeout_param = params.get("timeout_seconds")
+    timeout_seconds = None if timeout_param is None else int(timeout_param)
+    include_context = bool(params.get("include_context", True))
+    context_level = params.get("context_level", "summary")
+
+    nsight = NsightAutomation(output_dir)
+    try:
+        import hta  # noqa: F401
+        hta_available = True
+    except Exception:
+        hta_available = False
+
+    precheck = {
+        "nsys_available": nsight.nsys_available,
+        "hta_available": hta_available,
+        "output_dir": str(output_dir),
+        "preset": preset,
+        "command_provided": bool(command_list),
+        "force_lineinfo": force_lineinfo,
+    }
+    if precheck_only:
+        return {"precheck_only": True, **precheck}
+    if not nsight.nsys_available:
+        return {"error": "nsys is not installed or not on PATH", **precheck}
+    if dry_run:
+        base = output_dir / f"{output_name}.nsys-rep"
+        return {
+            "dry_run": True,
+            **precheck,
+            "planned_output": str(base),
+            "timeout_seconds": timeout_seconds,
+        }
+
+    def _execute_capture():
+        runner = HTACaptureAutomation(output_dir)
+        result = runner.capture(
+            command=command_list,
+            output_name=output_name,
+            preset=preset,
+            force_lineinfo=force_lineinfo,
+            timeout_seconds=timeout_seconds,
+        )
+        result.update({"hta_available": hta_available, "nsys_available": nsight.nsys_available})
+        if not result.get("success"):
+            result.setdefault("error", runner.last_error or "HTA capture failed")
+        return attach_context_if_requested(result, include_context, context_level)
+
+    if queue_only:
+        queued = _queue_job("aisp_profile_hta", _execute_capture, params)
+        queued["note"] = "Background HTA capture started; poll with aisp_job_status using job_id."
+        queued["preset"] = preset
         return queued
 
     return _execute_capture()

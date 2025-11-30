@@ -23,8 +23,11 @@ import {
   generatePatch,
   startNsightSystemsCapture,
   startNsightComputeCapture,
+  startTorchProfilerCapture,
+  startHTACapture,
   fetchNsightJobStatus,
   fetchMcpJobStatus,
+  getProfilerTorch,
 } from '@/lib/api';
 import { BottleneckDetectiveCard } from '@/components/BottleneckDetectiveCard';
 import { ProfilerHTACard } from '@/components/ProfilerHTACard';
@@ -73,6 +76,7 @@ export function ProfilerTab() {
   const [nsysQueue, setNsysQueue] = useState(false);
   const [nsysFullTimeline, setNsysFullTimeline] = useState(false);
   const [nsysTimeout, setNsysTimeout] = useState<number | ''>('');
+  const [nsysForceLineinfo, setNsysForceLineinfo] = useState(true);
   const [nsysResult, setNsysResult] = useState<any>(null);
   const [nsysLoading, setNsysLoading] = useState(false);
 
@@ -80,8 +84,28 @@ export function ProfilerTab() {
   const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
   const [ncuQueue, setNcuQueue] = useState(false);
   const [ncuTimeout, setNcuTimeout] = useState<number | ''>('');
+  const [ncuForceLineinfo, setNcuForceLineinfo] = useState(true);
   const [ncuResult, setNcuResult] = useState<any>(null);
   const [ncuLoading, setNcuLoading] = useState(false);
+
+  const [torchScript, setTorchScript] = useState('ch1/baseline.py');
+  const [torchArgs, setTorchArgs] = useState('');
+  const [torchMode, setTorchMode] = useState('full');
+  const [torchQueue, setTorchQueue] = useState(false);
+  const [torchForceLineinfo, setTorchForceLineinfo] = useState(true);
+  const [torchUseNvtx, setTorchUseNvtx] = useState(true);
+  const [torchNvtxLabel, setTorchNvtxLabel] = useState('aisp_torch_profile');
+  const [torchTimeout, setTorchTimeout] = useState<number | ''>('');
+  const [torchResult, setTorchResult] = useState<any>(null);
+  const [torchLoading, setTorchLoading] = useState(false);
+
+  const [htaCommand, setHtaCommand] = useState('python -c "print(789)"');
+  const [htaPreset, setHtaPreset] = useState<'light' | 'full'>('full');
+  const [htaQueue, setHtaQueue] = useState(false);
+  const [htaForceLineinfo, setHtaForceLineinfo] = useState(true);
+  const [htaTimeout, setHtaTimeout] = useState<number | ''>('');
+  const [htaResult, setHtaResult] = useState<any>(null);
+  const [htaLoading, setHtaLoading] = useState(false);
 
   const [jobId, setJobId] = useState('');
   const [jobStatus, setJobStatus] = useState<any>(null);
@@ -110,6 +134,9 @@ export function ProfilerTab() {
       timeline: timelineRes.status === 'fulfilled' ? (timelineRes.value as any) : null,
     };
   });
+
+  const torchProfilerQuery = useApiQuery('profiler/torch', getProfilerTorch);
+  const torchProfilerData = torchProfilerQuery.data as any;
 
   const analyzeMutation = useApiMutation('profiler/analyze', analyzeKernel);
   const patchMutation = useApiMutation('profiler/patch', generatePatch);
@@ -145,6 +172,7 @@ export function ProfilerTab() {
 
   const handleRefresh = () => {
     void profilerQuery.mutate();
+    void torchProfilerQuery.mutate();
   };
 
   const runKernelAnalysis = async () => {
@@ -359,9 +387,51 @@ export function ProfilerTab() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <ProfilerHTACard />
         <ProfilesListCard />
+        <div className="card">
+          <div className="card-header flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Flame className="w-4 h-4 text-accent-secondary" />
+              <h3 className="font-medium text-white">Torch Profiler</h3>
+            </div>
+            <button
+              onClick={() => torchProfilerQuery.mutate()}
+              className="p-2 rounded hover:bg-white/5 text-white/70"
+              aria-label="Refresh torch profiler"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="card-body space-y-3">
+            {torchProfilerQuery.error ? (
+              <ErrorState message={getErrorMessage(torchProfilerQuery.error, 'Failed to load torch profiler')} onRetry={() => torchProfilerQuery.mutate()} />
+            ) : torchProfilerQuery.isLoading ? (
+              <LoadingState inline message="Loading torch profiler..." />
+            ) : torchProfilerData?.top_ops?.length ? (
+              <div className="space-y-2">
+                {torchProfilerData.top_ops.slice(0, 4).map((op: any, idx: number) => (
+                  <div key={idx} className="p-3 rounded-lg bg-white/5 border border-white/10 flex items-center justify-between">
+                    <div>
+                      <div className="text-white font-semibold truncate max-w-[180px]">{op.name || 'op'}</div>
+                      <div className="text-xs text-white/50">{op.count} calls</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm text-accent-primary font-mono">{(op.cuda_time_total_us / 1000).toFixed(2)} ms</div>
+                      <div className="text-[11px] text-white/40">cuda total</div>
+                    </div>
+                  </div>
+                ))}
+                <div className="text-xs text-white/50">
+                  Trace: {torchProfilerData.trace_path || 'n/a'}
+                </div>
+              </div>
+            ) : (
+              <EmptyState title="No torch.profiler data" description="Run a torch capture below to populate this card." />
+            )}
+          </div>
+        </div>
       </div>
 
       {timeline && (
@@ -427,7 +497,7 @@ export function ProfilerTab() {
                     value={nsysPreset}
                     onChange={(e) => setNsysPreset(e.target.value as 'light' | 'full')}
                   >
-                    <option value="full">full</option>
+                    <option value="full">full (default)</option>
                     <option value="light">light</option>
                   </select>
                 </label>
@@ -438,6 +508,10 @@ export function ProfilerTab() {
                 <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-secondary" checked={nsysQueue} onChange={(e) => setNsysQueue(e.target.checked)} />
                   Queue only
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={nsysForceLineinfo} onChange={(e) => setNsysForceLineinfo(e.target.checked)} />
+                  Force lineinfo
                 </label>
                 <label className="flex items-center gap-2">
                   Timeout (s)
@@ -464,6 +538,7 @@ export function ProfilerTab() {
                       preset: nsysPreset,
                       full_timeline: nsysFullTimeline,
                       queue_only: nsysQueue,
+                      force_lineinfo: nsysForceLineinfo,
                       timeout_seconds: nsysTimeout === '' ? undefined : Number(nsysTimeout),
                     });
                     setNsysResult(res);
@@ -507,6 +582,10 @@ export function ProfilerTab() {
                   Queue only
                 </label>
                 <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={ncuForceLineinfo} onChange={(e) => setNcuForceLineinfo(e.target.checked)} />
+                  Force lineinfo
+                </label>
+                <label className="flex items-center gap-2">
                   Timeout (s)
                   <input
                     type="number"
@@ -530,6 +609,7 @@ export function ProfilerTab() {
                       command: ncuCommand,
                       workload_type: ncuWorkload,
                       queue_only: ncuQueue,
+                      force_lineinfo: ncuForceLineinfo,
                       timeout_seconds: ncuTimeout === '' ? undefined : Number(ncuTimeout),
                     });
                     setNcuResult(res);
@@ -544,6 +624,173 @@ export function ProfilerTab() {
                 {ncuLoading ? 'Running...' : 'Run Nsight Compute'}
               </button>
               <ResultPanel title="Nsight Compute Result" content={ncuResult} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-xs text-white/60">torch.profiler script</label>
+              <input
+                className="w-full rounded-lg bg-white/10 border border-white/10 px-3 py-2 text-sm text-white"
+                value={torchScript}
+                onChange={(e) => setTorchScript(e.target.value)}
+              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-white/60">Args (optional)</label>
+                  <input
+                    className="w-full rounded-lg bg-white/10 border border-white/10 px-3 py-2 text-sm text-white"
+                    value={torchArgs}
+                    onChange={(e) => setTorchArgs(e.target.value)}
+                    placeholder="--batch 8 --steps 5"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-white/60">NVTX label</label>
+                  <input
+                    className="w-full rounded-lg bg-white/10 border border-white/10 px-3 py-2 text-sm text-white"
+                    value={torchNvtxLabel}
+                    onChange={(e) => setTorchNvtxLabel(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs text-white/70 items-center">
+                <label className="flex items-center gap-2">
+                  Mode
+                  <select
+                    className="bg-white/10 border border-white/10 rounded-lg px-2 py-1 text-white"
+                    value={torchMode}
+                    onChange={(e) => setTorchMode(e.target.value)}
+                  >
+                    <option value="full">full</option>
+                    <option value="memory">memory</option>
+                    <option value="flops">flops</option>
+                    <option value="modules">modules</option>
+                    <option value="blackwell">blackwell</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-secondary" checked={torchQueue} onChange={(e) => setTorchQueue(e.target.checked)} />
+                  Queue only
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={torchForceLineinfo} onChange={(e) => setTorchForceLineinfo(e.target.checked)} />
+                  Force lineinfo
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={torchUseNvtx} onChange={(e) => setTorchUseNvtx(e.target.checked)} />
+                  NVTX range
+                </label>
+                <label className="flex items-center gap-2">
+                  Timeout (s)
+                  <input
+                    type="number"
+                    className="bg-white/10 border border-white/10 rounded-lg px-2 py-1 w-20 text-white"
+                    value={torchTimeout}
+                    onChange={(e) => setTorchTimeout(e.target.value === '' ? '' : Number(e.target.value))}
+                  />
+                </label>
+              </div>
+              <button
+                className="rounded-lg bg-accent-secondary/20 px-3 py-2 text-sm text-accent-secondary hover:bg-accent-secondary/30 transition-colors"
+                onClick={async () => {
+                  if (!torchScript.trim()) {
+                    setTorchResult({ error: 'Script is required' });
+                    return;
+                  }
+                  setTorchLoading(true);
+                  setTorchResult(null);
+                  try {
+                    const res = await startTorchProfilerCapture({
+                      script: torchScript,
+                      mode: torchMode,
+                      queue_only: torchQueue,
+                      nvtx_label: torchNvtxLabel,
+                      force_lineinfo: torchForceLineinfo,
+                      use_nvtx: torchUseNvtx,
+                      timeout_seconds: torchTimeout === '' ? undefined : Number(torchTimeout),
+                      script_args: torchArgs.trim() ? torchArgs.trim().match(/\S+/g) || [] : undefined,
+                    });
+                    setTorchResult(res);
+                    if ((res as any)?.job_id) setJobId((res as any).job_id);
+                  } catch (e: any) {
+                    setTorchResult({ error: e.message });
+                  } finally {
+                    setTorchLoading(false);
+                  }
+                }}
+              >
+                {torchLoading ? 'Running...' : 'Run torch.profiler'}
+              </button>
+              <ResultPanel title="torch.profiler Result" content={torchResult} />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs text-white/60">HTA (nsys + HTAAnalyzer) command</label>
+              <input
+                className="w-full rounded-lg bg-white/10 border border-white/10 px-3 py-2 text-sm text-white"
+                value={htaCommand}
+                onChange={(e) => setHtaCommand(e.target.value)}
+              />
+              <div className="flex flex-wrap gap-3 text-xs text-white/70 items-center">
+                <label className="flex items-center gap-2">
+                  Preset
+                  <select
+                    className="bg-white/10 border border-white/10 rounded-lg px-2 py-1 text-white"
+                    value={htaPreset}
+                    onChange={(e) => setHtaPreset(e.target.value as 'full' | 'light')}
+                  >
+                    <option value="full">full</option>
+                    <option value="light">light</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-secondary" checked={htaQueue} onChange={(e) => setHtaQueue(e.target.checked)} />
+                  Queue only
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" className="accent-accent-primary" checked={htaForceLineinfo} onChange={(e) => setHtaForceLineinfo(e.target.checked)} />
+                  Force lineinfo
+                </label>
+                <label className="flex items-center gap-2">
+                  Timeout (s)
+                  <input
+                    type="number"
+                    className="bg-white/10 border border-white/10 rounded-lg px-2 py-1 w-20 text-white"
+                    value={htaTimeout}
+                    onChange={(e) => setHtaTimeout(e.target.value === '' ? '' : Number(e.target.value))}
+                  />
+                </label>
+              </div>
+              <button
+                className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
+                onClick={async () => {
+                  if (!htaCommand.trim()) {
+                    setHtaResult({ error: 'Command is required' });
+                    return;
+                  }
+                  setHtaLoading(true);
+                  setHtaResult(null);
+                  try {
+                    const res = await startHTACapture({
+                      command: htaCommand,
+                      preset: htaPreset,
+                      queue_only: htaQueue,
+                      force_lineinfo: htaForceLineinfo,
+                      timeout_seconds: htaTimeout === '' ? undefined : Number(htaTimeout),
+                    });
+                    setHtaResult(res);
+                    if ((res as any)?.job_id) setJobId((res as any).job_id);
+                  } catch (e: any) {
+                    setHtaResult({ error: e.message });
+                  } finally {
+                    setHtaLoading(false);
+                  }
+                }}
+              >
+                {htaLoading ? 'Running...' : 'Run HTA capture'}
+              </button>
+              <ResultPanel title="HTA Capture Result" content={htaResult} />
             </div>
           </div>
 

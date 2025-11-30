@@ -115,13 +115,13 @@
         "baseline_throughput.latency_ms": 30.34915199279785,
         "baseline_throughput.requests_per_s": 1054.3951938951675,
         "baseline_time_ms": 30.34915199279785,
-        "best_optimized_p75_ms": 12.46668815612793,
-        "best_optimized_speedup": 5.655732776987646,
-        "best_optimized_throughput.latency_ms": 15.102265739440918,
-        "best_optimized_throughput.requests_per_s": 5325.5026777153735,
-        "best_optimized_throughput.tokens_per_s": 43626517.93584434,
-        "best_optimized_time_ms": 15.102265739440918,
-        "best_speedup": 5.655732776987646
+        "best_optimized_p75_ms": 8.265983581542969,
+        "best_optimized_speedup": 16.613523677109388,
+        "best_optimized_throughput.latency_ms": 8.311468696594238,
+        "best_optimized_throughput.requests_per_s": 7700.203458171606,
+        "best_optimized_throughput.tokens_per_s": 63080066.7293418,
+        "best_optimized_time_ms": 8.311468696594238,
+        "best_speedup": 16.613523677109388
       },
       "type": "python"
     },

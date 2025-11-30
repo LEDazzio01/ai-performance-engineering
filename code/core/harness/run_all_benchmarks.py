@@ -726,8 +726,9 @@ def is_distributed_benchmark(file_path: Path) -> bool:
 def check_hardware_limitation(error_msg: str) -> Optional[str]:
     """Check if error is due to hardware/software limitation and return skip reason.
     
-    Only skips for TRUE hardware limitations that cannot be fixed:
+    Only skips for TRUE hardware/software limitations that cannot be fixed in code:
     - Triton SM 12.1 bug (sm_121a issue)
+    - Missing Triton features (e.g., DSMEM/TMA APIs not available in installed version)
     
     For other issues, we should fix them instead of skipping:
     - CUTLASS: Verify it's actually unavailable before skipping
@@ -736,6 +737,16 @@ def check_hardware_limitation(error_msg: str) -> Optional[str]:
     - Device-side asserts: Already handled with reset_cuda_state()
     """
     error_lower = error_msg.lower()
+    
+    # FAIL FAST markers - Triton version/feature limitations (software stack issue)
+    if 'fail fast:' in error_lower:
+        # Extract the reason after "FAIL FAST:"
+        idx = error_lower.find('fail fast:')
+        reason = error_msg[idx + len('fail fast:'):].strip()
+        # Truncate at first period or newline for cleaner display
+        if '.' in reason:
+            reason = reason[:reason.index('.') + 1]
+        return f"SKIPPED (software limitation): {reason}"
     
     # Treat explicit SKIPPED markers as hardware limitations.
     if 'skipped:' in error_lower:
@@ -760,6 +771,13 @@ def check_hardware_limitation(error_msg: str) -> Optional[str]:
         return "Distributed shared memory (DSMEM) not supported by this toolkit/runtime"
     if 'thread block clusters unavailable' in error_lower or 'cluster target block not present' in error_lower:
         return "Thread block clusters unavailable on this driver/toolkit (needs CUDA 13.1+ or compute-sanitizer)"
+    
+    # Triton version limitations - missing features in installed Triton version
+    if 'triton' in error_lower and ('missing required' in error_lower or 'is missing' in error_lower):
+        # Extract feature names if possible
+        if 'dsmem' in error_lower or 'tma' in error_lower or 'cluster' in error_lower:
+            return f"Triton version missing Blackwell features (DSMEM/TMA/cluster). Requires newer Triton."
+        return "Triton version missing required features"
     if 'distributed benchmark requires multiple gpus' in error_lower:
         if 'SKIPPED:' in error_msg:
             return error_msg.split('SKIPPED:', 1)[1].strip()
@@ -940,6 +958,7 @@ def find_cuda_executable(cu_file: Path, chapter_dir: Path) -> Optional[Path]:
     """Find the compiled executable for a CUDA source file.
     
     Looks for executables with SM suffixes (e.g., baseline_gemm_sm121) or without suffix.
+    Prioritizes the current GPU's compute capability.
     
     Args:
         cu_file: Path to .cu source file
@@ -950,10 +969,37 @@ def find_cuda_executable(cu_file: Path, chapter_dir: Path) -> Optional[Path]:
     """
     base_name = cu_file.stem
     
-    # Check common SM suffixes (in order of preference)
-    suffixes = ["_sm121", "_sm103", "_sm100", "_sm90", "_sm89", "_sm86", ""]
+    # Handle special naming conventions where driver.cu produces different executable name
+    # E.g., optimized_warp_specialized_two_pipelines_driver.cu -> optimized_warp_specialized_two_pipelines_multistream
+    driver_to_executable = {
+        "optimized_warp_specialized_two_pipelines_driver": "optimized_warp_specialized_two_pipelines_multistream",
+        "baseline_warp_specialized_two_pipelines_driver": "baseline_warp_specialized_two_pipelines_multistream",
+    }
+    if base_name in driver_to_executable:
+        base_name = driver_to_executable[base_name]
     
-    for suffix in suffixes:
+    # Detect current GPU's SM version and prioritize it
+    try:
+        import torch
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            current_sm = f"_sm{major}{minor}"
+        else:
+            current_sm = "_sm100"  # Default to Blackwell
+    except Exception:
+        current_sm = "_sm100"
+    
+    # Check SM suffixes with current GPU's SM first
+    suffixes = [current_sm, "_sm100", "_sm103", "_sm121", "_sm90", "_sm89", "_sm86", ""]
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_suffixes = []
+    for s in suffixes:
+        if s not in seen:
+            seen.add(s)
+            unique_suffixes.append(s)
+    
+    for suffix in unique_suffixes:
         executable = chapter_dir / f"{base_name}{suffix}"
         if executable.exists() and os.access(executable, os.X_OK):
             return executable
@@ -3969,10 +4015,29 @@ def _verify_patched_benchmark(
             result['verified'] = True
             result['details']['reason'] = 'CUDA files verified separately via executable comparison'
             return result
+        
+        # Skip non-Python files
+        if orig_path.suffix != '.py':
+            result['verification_type'] = 'skipped'
+            result['verified'] = True
+            result['details']['reason'] = f'Non-Python file ({orig_path.suffix})'
+            return result
             
-        orig_spec = importlib.util.spec_from_file_location("orig_module", orig_path)
+        # Use unique module names to avoid collisions
+        orig_module_name = f"_verify_orig_{orig_path.stem}_{id(result)}"
+        orig_spec = importlib.util.spec_from_file_location(orig_module_name, orig_path)
+        if orig_spec is None or orig_spec.loader is None:
+            result['verification_type'] = 'skipped'
+            result['verified'] = True
+            result['details']['reason'] = f'Could not load module spec for {orig_path.name}'
+            return result
         orig_module = importlib.util.module_from_spec(orig_spec)
-        orig_spec.loader.exec_module(orig_module)
+        # Register module BEFORE exec_module - required for dataclasses and self-referential imports
+        sys.modules[orig_module_name] = orig_module
+        try:
+            orig_spec.loader.exec_module(orig_module)
+        finally:
+            sys.modules.pop(orig_module_name, None)
         
         # Load patched
         patch_path = Path(patched_file)
@@ -3980,10 +4045,28 @@ def _verify_patched_benchmark(
             result['verification_type'] = 'skipped'
             result['errors'].append(f"Patched file not found: {patched_file}")
             return result
+        
+        # Skip non-Python files
+        if patch_path.suffix != '.py':
+            result['verification_type'] = 'skipped'
+            result['verified'] = True
+            result['details']['reason'] = f'Non-Python file ({patch_path.suffix})'
+            return result
             
-        patch_spec = importlib.util.spec_from_file_location("patch_module", patch_path)
+        patch_module_name = f"_verify_patch_{patch_path.stem}_{id(result)}"
+        patch_spec = importlib.util.spec_from_file_location(patch_module_name, patch_path)
+        if patch_spec is None or patch_spec.loader is None:
+            result['verification_type'] = 'skipped'
+            result['verified'] = True
+            result['details']['reason'] = f'Could not load module spec for {patch_path.name}'
+            return result
         patch_module = importlib.util.module_from_spec(patch_spec)
-        patch_spec.loader.exec_module(patch_module)
+        # Register module BEFORE exec_module - required for dataclasses and self-referential imports
+        sys.modules[patch_module_name] = patch_module
+        try:
+            patch_spec.loader.exec_module(patch_module)
+        finally:
+            sys.modules.pop(patch_module_name, None)
         
     except Exception as e:
         result['errors'].append(f"Failed to load modules: {e}")

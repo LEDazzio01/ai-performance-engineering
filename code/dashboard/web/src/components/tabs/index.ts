@@ -16,5 +16,5 @@ export { HistoryTab } from './HistoryTab';
 export { BatchSizeOptimizationTab } from './BatchSizeOptimizationTab';
 export { WebhooksTab } from './WebhooksTab';
 export { ThemesTab } from './ThemesTab';
-export { default as MicrobenchTab } from './MicrobenchTab';
+export { default as HwbenchTab } from './HwbenchTab';
 export { AIAssistantTab } from './AIAssistantTab';

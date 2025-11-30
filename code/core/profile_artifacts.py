@@ -312,7 +312,9 @@ def load_hta_analysis(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
     }
 
     hta_files = list(code_root.glob("**/hta_report*.json"))
+    hta_files.extend(code_root.glob("**/*hta_report*.json"))
     hta_files.extend(code_root.glob("**/hta_analysis*.json"))
+    hta_files.extend(code_root.glob("**/*hta_analysis*.json"))
 
     if hta_files:
         try:
@@ -325,3 +327,34 @@ def load_hta_analysis(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
         hta_data["message"] = "No HTA analysis found. Run HTA tooling to generate reports."
 
     return hta_data
+
+
+def load_torch_profiler(code_root: Path = CODE_ROOT) -> Dict[str, Any]:
+    """Load the latest torch.profiler summary + metadata."""
+    data: Dict[str, Any] = {"top_ops": []}
+    summary_files = list(code_root.glob("**/torch_profile_summary.json"))
+    if not summary_files:
+        data["message"] = "No torch.profiler captures found. Run with 'aisp profile torch <script.py>'."
+        return data
+
+    summary_path = max(summary_files, key=lambda f: f.stat().st_mtime)
+    summary: Dict[str, Any] = {}
+    try:
+        summary = json.loads(summary_path.read_text())
+        data.update(summary if isinstance(summary, dict) else {})
+        data["summary_path"] = str(summary_path)
+    except Exception:
+        data["error"] = f"Failed to parse {summary_path.name}"
+    meta_path = summary_path.parent / "metadata.json"
+    if meta_path.exists():
+        try:
+            data["metadata"] = json.loads(meta_path.read_text())
+        except Exception:
+            data.setdefault("metadata_error", f"Failed to parse {meta_path.name}")
+    trace_path = summary_path.parent / "trace.json"
+    if not trace_path.exists():
+        alt = summary_path.parent / f"chrome_trace_{summary.get('mode', 'full') if isinstance(summary, dict) else 'full'}.json"
+        trace_path = alt if alt.exists() else trace_path
+    if trace_path.exists():
+        data["trace_path"] = str(trace_path)
+    return data

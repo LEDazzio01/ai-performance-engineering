@@ -698,13 +698,10 @@ class BaseBenchmark:
                     # Use lowercase key for consistency
                     signature[attr.lower()] = value
         
-        # Also capture tensor shapes if available
-        for attr in ["data", "input", "x", "inputs", "input_tensor"]:
-            if hasattr(self, attr):
-                tensor = getattr(self, attr)
-                if hasattr(tensor, "shape"):
-                    signature[f"{attr}_shape"] = tuple(tensor.shape)
-                    signature[f"{attr}_dtype"] = str(tensor.dtype) if hasattr(tensor, "dtype") else None
+        # Note: We intentionally do NOT capture tensor shapes/dtypes here.
+        # Tensors are typically created in setup() which runs after signature comparison.
+        # The workload attributes above (batch_size, seq_len, etc.) are sufficient
+        # to verify that benchmarks have equivalent workloads.
         
         return signature if signature else None
 

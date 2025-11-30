@@ -255,6 +255,39 @@ export async function startNsightComputeCapture(payload: {
   });
 }
 
+export async function startTorchProfilerCapture(payload: {
+  script: string;
+  mode?: string;
+  output_name?: string;
+  output_dir?: string;
+  nvtx_label?: string;
+  force_lineinfo?: boolean;
+  use_nvtx?: boolean;
+  queue_only?: boolean;
+  timeout_seconds?: number;
+  script_args?: string[];
+}) {
+  return fetchAPI('/profiler/torch', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startHTACapture(payload: {
+  command: string;
+  preset?: string;
+  output_name?: string;
+  output_dir?: string;
+  force_lineinfo?: boolean;
+  queue_only?: boolean;
+  timeout_seconds?: number;
+}) {
+  return fetchAPI('/profiler/hta-capture', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchNsightJobStatus(job_id: string) {
   const search = new URLSearchParams({ job_id });
   return fetchAPI(`/nsight/job-status?${search.toString()}`);
@@ -295,6 +328,10 @@ export async function getProfilerKernels() {
 
 export async function getProfilerHTA() {
   return fetchAPI('/profiler/hta');
+}
+
+export async function getProfilerTorch() {
+  return fetchAPI('/profiler/torch');
 }
 
 export async function getProfilerCompile() {

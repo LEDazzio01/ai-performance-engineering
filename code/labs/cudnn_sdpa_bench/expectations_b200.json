@@ -17,12 +17,12 @@
         "baseline_throughput.tokens_per_s": 44720.53085121633,
         "baseline_time_ms": 46.74931335449219,
         "best_optimized_p75_ms": 1.303231954574585,
-        "best_optimized_speedup": 44.013934898208774,
+        "best_optimized_speedup": 55.49008474411365,
         "best_optimized_throughput.latency_ms": 1.303231954574585,
         "best_optimized_throughput.requests_per_s": 6138.584901880684,
         "best_optimized_throughput.tokens_per_s": 1571477.734881455,
         "best_optimized_time_ms": 1.303231954574585,
-        "best_speedup": 44.013934898208774
+        "best_speedup": 55.49008474411365
       },
       "type": "python"
     }

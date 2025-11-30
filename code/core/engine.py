@@ -255,6 +255,10 @@ class ProfileEngine:
     def hta(self) -> Dict[str, Any]:
         """Holistic Trace Analysis."""
         return _get_handler().get_hta_analysis()
+
+    def torch_profiler(self) -> Dict[str, Any]:
+        """Latest torch.profiler capture summary."""
+        return _get_handler().get_torch_profiler()
     
     def compile_analysis(self) -> Dict[str, Any]:
         """torch.compile analysis."""

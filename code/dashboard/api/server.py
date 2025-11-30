@@ -306,6 +306,8 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             self.send_json_response(self.get_kernel_breakdown())
         elif self.path == '/api/profiler/hta':
             self.send_json_response(self.get_hta_analysis())
+        elif self.path == '/api/profiler/torch':
+            self.send_json_response(self.get_torch_profiler())
         elif self.path == '/api/profiler/compile':
             self.send_json_response(self.get_compile_analysis())
         elif self.path == '/api/profiler/roofline':
@@ -400,7 +402,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             self.send_json_response({"html": self.export_html_report()})
         elif self.path == '/api/export/pdf':
             self.export_pdf_report()
-        elif self.path.startswith('/api/microbench/disk'):
+        elif self.path.startswith('/api/hwbench/disk'):
             from core.diagnostics import microbench
             params = self._parse_query()
             file_size_mb = int(params.get('file_size_mb', [256])[0])
@@ -433,7 +435,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/microbench/pcie'):
+        elif self.path.startswith('/api/hwbench/pcie'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [256])[0])
@@ -461,7 +463,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/microbench/mem'):
+        elif self.path.startswith('/api/hwbench/mem'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [256])[0])
@@ -489,7 +491,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/microbench/roofline'):
+        elif self.path.startswith('/api/hwbench/roofline'):
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [32])[0])
             strides = [int(s) for s in params.get('stride', [])] if params.get('stride') else None
@@ -511,7 +513,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 })
             else:
                 self.send_json_response(self.roofline_sweep(size_mb=size_mb, strides=strides, timeout_seconds=timeout_seconds))
-        elif self.path.startswith('/api/microbench/tensor'):
+        elif self.path.startswith('/api/hwbench/tensor-cores'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size = int(params.get('size', [4096])[0])
@@ -539,7 +541,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/microbench/sfu'):
+        elif self.path.startswith('/api/hwbench/sfu'):
             from core.diagnostics import microbench
             params = self._parse_query()
             elements = int(params.get('elements', [64 * 1024 * 1024])[0])
@@ -565,7 +567,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/microbench/loopback'):
+        elif self.path.startswith('/api/hwbench/loopback'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [64])[0])
@@ -1484,6 +1486,14 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             params = self._read_json_body()
             result = self.start_ncu_capture(params)
             self.send_json_response(result)
+        elif self.path == '/api/profiler/torch':
+            params = self._read_json_body()
+            result = self.start_torch_profiler_capture(params)
+            self.send_json_response(result)
+        elif self.path == '/api/profiler/hta-capture':
+            params = self._read_json_body()
+            result = self.start_hta_capture(params)
+            self.send_json_response(result)
         elif self.path == '/api/config/bench-root':
             params = self._read_json_body()
             self.send_json_response(self.update_bench_root_config(params))
@@ -1792,6 +1802,10 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
     def get_hta_analysis(self) -> dict:
         """Get HTA (Holistic Trace Analysis) results."""
         return super().get_hta_analysis()
+
+    def get_torch_profiler(self) -> dict:
+        """Get latest torch.profiler capture summary."""
+        return super().get_torch_profiler()
     
     def get_compile_analysis(self) -> dict:
         """Get torch.compile analysis results from REAL benchmark data."""
@@ -2853,6 +2867,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         queue_only = bool(params.get("queue_only") or params.get("queue"))
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
+        force_lineinfo = bool(params.get("force_lineinfo", True))
 
         automation = NsightAutomation(output_dir)
         precheck = {
@@ -2862,6 +2877,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             "preset": preset,
             "full_timeline": full_timeline,
             "command": command_list,
+            "force_lineinfo": force_lineinfo,
         }
         if precheck_only:
             return {"precheck_only": True, **precheck}
@@ -2886,6 +2902,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 full_timeline=full_timeline,
                 trace_forks=bool(params.get("trace_forks", True)),
                 preset=preset,
+                force_lineinfo=force_lineinfo,
                 timeout_seconds=timeout_seconds,
             )
             return {
@@ -2893,6 +2910,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 "output": str(path) if path else None,
                 "preset": preset,
                 "full_timeline": full_timeline,
+                "force_lineinfo": force_lineinfo,
                 "timeout_seconds": timeout_seconds,
                 "timeout_hit": bool(getattr(auto, "last_run", {}).get("timeout_hit", False)),
                 "error": auto.last_error if path is None else None,
@@ -2919,6 +2937,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         queue_only = bool(params.get("queue_only") or params.get("queue"))
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
+        force_lineinfo = bool(params.get("force_lineinfo", True))
 
         automation = NsightAutomation(output_dir)
         precheck = {
@@ -2927,6 +2946,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             "output_dir": str(output_dir),
             "workload_type": workload_type,
             "command": command_list,
+            "force_lineinfo": force_lineinfo,
         }
         if precheck_only:
             return {"precheck_only": True, **precheck}
@@ -2947,12 +2967,14 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 output_name=output_name,
                 workload_type=workload_type,
                 kernel_filter=kernel_filter,
+                force_lineinfo=force_lineinfo,
                 timeout_seconds=timeout_seconds,
             )
             return {
                 "success": path is not None,
                 "output": str(path) if path else None,
                 "workload_type": workload_type,
+                "force_lineinfo": force_lineinfo,
                 "timeout_seconds": timeout_seconds,
                 "timeout_hit": bool(getattr(auto, "last_run", {}).get("timeout_hit", False)),
                 "error": auto.last_error if path is None else None,
@@ -2961,6 +2983,143 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
 
         if queue_only:
             return self._start_profile_job("ncu", _runner)
+        return _runner()
+
+    def start_torch_profiler_capture(self, params: dict) -> dict:
+        """Run torch.profiler capture."""
+        from core.profiling.torch_profiler import TorchProfilerAutomation
+
+        script = params.get("script")
+        if not script:
+            return {"error": "script is required"}
+
+        script_args = params.get("script_args") or params.get("args") or []
+        if isinstance(script_args, str):
+            script_args = shlex.split(script_args)
+        output_dir = Path(params.get("output_dir") or "artifacts/torch-profiles/dashboard")
+        output_name = params.get("output_name") or Path(script).stem or "dashboard_torch"
+        mode = params.get("mode", "full")
+        force_lineinfo = bool(params.get("force_lineinfo", True))
+        use_nvtx = bool(params.get("use_nvtx", True))
+        nvtx_label = params.get("nvtx_label", "dashboard_torch_profile")
+        precheck_only = bool(params.get("precheck_only"))
+        dry_run = bool(params.get("dry_run"))
+        queue_only = bool(params.get("queue_only") or params.get("queue"))
+        timeout_param = params.get("timeout_seconds")
+        timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
+
+        try:
+            import torch  # noqa: F401
+            torch_available = True
+            cuda_available = torch.cuda.is_available()  # type: ignore[attr-defined]
+            torch_error = None
+        except Exception as exc:
+            torch_available = False
+            cuda_available = False
+            torch_error = str(exc)
+
+        precheck = {
+            "torch_available": torch_available,
+            "cuda_available": cuda_available,
+            "torch_error": torch_error,
+            "output_dir": str(output_dir),
+            "mode": mode,
+            "script_exists": Path(script).exists(),
+            "force_lineinfo": force_lineinfo,
+            "nvtx_label": nvtx_label,
+        }
+        if precheck_only:
+            return {"precheck_only": True, **precheck}
+        if not Path(script).exists():
+            return {"error": f"script not found: {script}", **precheck}
+        if dry_run:
+            planned = output_dir / f"{output_name}_<timestamp>"
+            return {"dry_run": True, **precheck, "planned_output": str(planned), "timeout_seconds": timeout_seconds}
+
+        def _runner():
+            runner = TorchProfilerAutomation(output_dir)
+            res = runner.profile(
+                script=Path(script),
+                output_name=output_name,
+                mode=mode,
+                script_args=script_args,
+                force_lineinfo=force_lineinfo,
+                timeout_seconds=timeout_seconds,
+                nvtx_label=nvtx_label,
+                use_nvtx=use_nvtx,
+            )
+            res.update({"torch_available": torch_available, "cuda_available": cuda_available})
+            if not res.get("success"):
+                res.setdefault("error", runner.last_error or "torch profiler failed")
+            return res
+
+        if queue_only:
+            return self._start_profile_job("torch", _runner)
+        return _runner()
+
+    def start_hta_capture(self, params: dict) -> dict:
+        """Run nsys capture + HTA analysis."""
+        from core.profiling.hta_capture import HTACaptureAutomation
+        from core.profiling.nsight_automation import NsightAutomation
+
+        command_str = params.get("command") or ""
+        command_list = params.get("command_list") or (shlex.split(command_str) if command_str else [])
+        if not command_list:
+            return {"error": "command is required"}
+
+        preset = params.get("preset", "full")
+        output_dir = Path(params.get("output_dir") or "artifacts/hta")
+        output_name = params.get("output_name") or "dashboard_hta"
+        precheck_only = bool(params.get("precheck_only"))
+        dry_run = bool(params.get("dry_run"))
+        queue_only = bool(params.get("queue_only") or params.get("queue"))
+        timeout_param = params.get("timeout_seconds")
+        timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
+        force_lineinfo = bool(params.get("force_lineinfo", True))
+
+        nsight = NsightAutomation(output_dir)
+        try:
+            import hta  # noqa: F401
+            hta_available = True
+        except Exception:
+            hta_available = False
+
+        precheck = {
+            "nsys_available": nsight.nsys_available,
+            "hta_available": hta_available,
+            "output_dir": str(output_dir),
+            "preset": preset,
+            "command": command_list,
+            "force_lineinfo": force_lineinfo,
+        }
+        if precheck_only:
+            return {"precheck_only": True, **precheck}
+        if not nsight.nsys_available:
+            return {"error": "nsys not available", **precheck}
+        if dry_run:
+            return {
+                "dry_run": True,
+                **precheck,
+                "planned_output": str(output_dir / f"{output_name}.nsys-rep"),
+                "timeout_seconds": timeout_seconds,
+            }
+
+        def _runner():
+            runner = HTACaptureAutomation(output_dir)
+            result = runner.capture(
+                command=command_list,
+                output_name=output_name,
+                preset=preset,
+                force_lineinfo=force_lineinfo,
+                timeout_seconds=timeout_seconds,
+            )
+            result.update({"hta_available": hta_available, "nsys_available": nsight.nsys_available})
+            if not result.get("success"):
+                result.setdefault("error", runner.last_error or "HTA capture failed")
+            return result
+
+        if queue_only:
+            return self._start_profile_job("hta", _runner)
         return _runner()
 
     def generate_launch_plan_from_query(self, params: Dict[str, List[str]]) -> dict:

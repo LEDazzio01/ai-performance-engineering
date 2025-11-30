@@ -46,8 +46,9 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
         self.target_model = None
         # Match baseline dimensions for fair comparison
         self.batch_size = 4
-        self.seq_len = 32
+        self.vocab_size = 32000  # Must match baseline for input verification
         self.hidden_size = 4096
+        self.seq_len = 32
         self.speculative_k = 4  # Verify K tokens at once
         self.num_iterations = 10
         

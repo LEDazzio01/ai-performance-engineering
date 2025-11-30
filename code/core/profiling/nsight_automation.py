@@ -93,12 +93,19 @@ class NsightAutomation:
         except (subprocess.CalledProcessError, FileNotFoundError):
             return False
 
-    def _build_env(self) -> Dict[str, str]:
+    def _build_env(self, force_lineinfo: bool = False) -> Dict[str, str]:
         """Build environment with repo root on PYTHONPATH for child commands."""
         env = os.environ.copy()
         repo_root = Path(__file__).resolve().parents[2]
         existing = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = f"{repo_root}:{existing}" if existing else str(repo_root)
+        if force_lineinfo:
+            def _append_flag(key: str, flag: str) -> None:
+                current = env.get(key, "").strip()
+                if flag not in current.split():
+                    env[key] = f"{flag} {current}".strip()
+            _append_flag("NVCC_PREPEND_FLAGS", "-lineinfo")
+            _append_flag("TORCH_NVCC_FLAGS", "-lineinfo")
         return env
     
     def profile_nsys(
@@ -111,6 +118,7 @@ class NsightAutomation:
         full_timeline: bool = False,
         trace_forks: bool = True,
         preset: str = "light",
+        force_lineinfo: bool = True,
         timeout_seconds: Optional[float] = None,
     ) -> Optional[Path]:
         """Run Nsight Systems profiling.
@@ -202,7 +210,7 @@ class NsightAutomation:
                 text=True,
                 check=True,
                 timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
-                env=self._build_env(),
+                env=self._build_env(force_lineinfo=force_lineinfo),
             )
             logger.info(f"Nsight Systems trace saved to {output_path}")
             self.last_run.update(
@@ -250,6 +258,7 @@ class NsightAutomation:
         output_name: str,
         workload_type: str = 'memory_bound',
         kernel_filter: Optional[str] = None,
+        force_lineinfo: bool = True,
         timeout_seconds: Optional[float] = None,
     ) -> Optional[Path]:
         """Run Nsight Compute profiling.
@@ -307,7 +316,7 @@ class NsightAutomation:
                 text=True,
                 check=True,
                 timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
-                env=self._build_env(),
+                env=self._build_env(force_lineinfo=force_lineinfo),
             )
             logger.info(f"Nsight Compute report saved to {output_path}")
             self.last_run.update(
@@ -413,11 +422,12 @@ Examples:
     parser.add_argument('--trace-osrt', action='store_true', default=True, help='Trace OS runtime (nsys)')
     parser.add_argument('--full-timeline', action='store_true', default=False, help='Enable richer NSYS tracing (cuda-hw, cublas, cusolver, cusparse, cudnn)')
     parser.add_argument('--trace-forks', action='store_true', default=False, help='Trace child processes before exec (nsys)')
-    parser.add_argument('--preset', type=str, default='light', choices=['light', 'full'],
-                        help='NSYS preset: light (default) or full (adds cuda-hw/cublas/cusolver/cusparse/cudnn and fork tracing)')
+    parser.add_argument('--preset', type=str, default='full', choices=['light', 'full'],
+                        help='NSYS preset: full (default, adds cuda-hw/cublas/cusolver/cusparse/cudnn and fork tracing) or light (smaller/faster traces)')
     parser.add_argument('--batch-config', type=Path,
                        help='JSON config for batch profiling')
     parser.add_argument('--timeout-seconds', type=float, default=None, help='Max runtime before aborting capture (seconds)')
+    parser.add_argument('--force-lineinfo/--no-force-lineinfo', default=True, help='Force -lineinfo in NVCC/TORCH_NVCC_FLAGS for source mapping (default: on)')
     parser.add_argument('command', nargs='*',
                        help='Command to profile (after --)')
     
@@ -459,6 +469,7 @@ Examples:
             full_timeline=args.full_timeline,
             trace_forks=args.trace_forks,
             preset=args.preset,
+            force_lineinfo=args.force_lineinfo,
             timeout_seconds=args.timeout_seconds,
         )
     elif args.tool == 'ncu':
@@ -467,6 +478,7 @@ Examples:
             args.output,
             workload_type=args.workload_type,
             kernel_filter=args.kernel_filter,
+            force_lineinfo=args.force_lineinfo,
             timeout_seconds=args.timeout_seconds,
         )
     else:

@@ -23,6 +23,7 @@ BASE_TARGETS = baseline_cluster_group optimized_cluster_group \
                baseline_tma_multicast optimized_tma_multicast \
                baseline_pipeline_3stage optimized_pipeline_3stage \
                baseline_dsmem_reduction optimized_dsmem_reduction \
+               optimized_dsmem_reduction_fixed optimized_dsmem_reduction_v3 \
                optimized_dsmem_cluster_atomic optimized_dsmem_warp_specialized \
                baseline_warp_spec_pingpong optimized_warp_spec_pingpong
 

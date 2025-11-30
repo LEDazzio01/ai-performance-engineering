@@ -37,6 +37,11 @@ class RouterGraph(nn.Module):
 
 
 class CUDAGraphRouterBenchmark(BaseBenchmark):
+    """CUDA Graph routing benchmark with expert routing.
+    
+    Demonstrates CUDA graphs with a conditional routing branch
+    that toggles between two experts.
+    """
     def __init__(self) -> None:
         super().__init__()
         self.model: Optional[RouterGraph] = None
@@ -44,7 +49,9 @@ class CUDAGraphRouterBenchmark(BaseBenchmark):
         self.route: Optional[torch.Tensor] = None
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.static_out: Optional[torch.Tensor] = None
-        self._workload = WorkloadMetadata(tokens_per_iteration=4096.0)
+        # Match baseline workload signature: N represents total elements processed
+        self.N = 1 << 20  # 1M elements to match baseline
+        self._workload = WorkloadMetadata(tokens_per_iteration=float(self.N))
 
     def setup(self) -> None:
         if not torch.cuda.is_available():

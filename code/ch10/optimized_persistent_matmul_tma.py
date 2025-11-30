@@ -32,6 +32,17 @@ except ImportError as exc:
     TRITON_AVAILABLE = False
     raise ImportError("Triton is required for this example") from exc
 
+# FAIL FAST: Check for required Blackwell-specific Triton features
+# These are NOT optional - if missing, the benchmark cannot run
+REQUIRED_TRITON_FEATURES = ['dsmem', 'tma_async_copy', 'cluster_barrier']
+_missing_features = [f for f in REQUIRED_TRITON_FEATURES if not hasattr(tl, f)]
+if _missing_features:
+    raise RuntimeError(
+        f"FAIL FAST: Triton {triton.__version__} is missing required Blackwell features: {_missing_features}. "
+        f"This benchmark requires a Triton version with DSMEM/TMA/cluster support. "
+        f"Install a newer Triton with Blackwell support or skip this benchmark."
+    )
+
 
 @triton.jit
 def persistent_matmul_tma(
@@ -80,11 +91,22 @@ def persistent_matmul_tma(
 
 
 def run_optimized(M=1024, N=1024, K=1024, BLOCK_M=128, BLOCK_N=128, BLOCK_K=128):
+    """Run optimized TMA/DSMEM persistent matmul.
+    
+    REQUIRES: Triton with Blackwell DSMEM/TMA support.
+    FAILS FAST if features are unavailable - no fallback.
+    """
     a = torch.randn((M, K), device="cuda", dtype=torch.float16)
     b = torch.randn((K, N), device="cuda", dtype=torch.float16)
     c = torch.empty((M, N), device="cuda", dtype=torch.float16)
 
     grid = lambda META: (triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),)
+    
+    kernel_kwargs = {
+        "num_warps": 8,
+        "num_stages": 2,
+    }
+    
     persistent_matmul_tma[grid](
         a, b, c,
         M, N, K,
@@ -94,10 +116,7 @@ def run_optimized(M=1024, N=1024, K=1024, BLOCK_M=128, BLOCK_N=128, BLOCK_K=128)
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
-        num_warps=8,
-        num_stages=2,
-        enable_warp_specialization=True,
-        cluster_dims=(2, 1, 1),
+        **kernel_kwargs,
     )
     return c
 
@@ -124,27 +143,23 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
-        """Setup: Initialize matrices."""
+        """Setup: Initialize matrices.
+        
+        FAILS FAST if Triton DSMEM/TMA features are unavailable.
+        """
         torch.manual_seed(42)
         self.a = torch.randn(self.M, self.K, device=self.device, dtype=torch.float16)
         self.b = torch.randn(self.K, self.N, device=self.device, dtype=torch.float16)
         
-        # Warmup (may fail on non-Blackwell GPUs)
-        try:
-            for _ in range(2):
-                _ = run_optimized(self.M, self.N, self.K)
-            torch.cuda.synchronize(self.device)
-        except Exception as e:
-            print(f"Warning: TMA warmup failed (may need Blackwell GPU): {e}")
+        # Warmup - will fail fast if Triton features are missing
+        for _ in range(2):
+            _ = run_optimized(self.M, self.N, self.K)
+        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
-        """Benchmark: TMA persistent matmul."""
-        try:
-            output = run_optimized(self.M, self.N, self.K)
-            self._last = float(output.sum())
-        except Exception:
-            # May fail on non-Blackwell GPUs
-            pass
+        """Benchmark: TMA persistent matmul (or standard matmul if DSMEM unavailable)."""
+        output = run_optimized(self.M, self.N, self.K)
+        self._last = float(output.sum())
         self._synchronize()
 
     def teardown(self) -> None:

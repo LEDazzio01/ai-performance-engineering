@@ -113,6 +113,10 @@ class PerformanceCoreBase:
                 )
         return hta_data
 
+    def get_torch_profiler(self) -> dict:
+        """Load the latest torch.profiler capture summary."""
+        return profile_artifacts.load_torch_profiler(self.bench_root)
+
     def get_compile_analysis(self) -> dict:
         benchmarks = self.load_benchmark_data().get("benchmarks", [])
         return load_compile_analysis(self.bench_root, benchmarks)
