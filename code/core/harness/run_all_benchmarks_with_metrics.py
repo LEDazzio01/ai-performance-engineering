@@ -691,7 +691,7 @@ def main():
         '--targets',
         nargs='+',
         help=("Space-separated list of targets. "
-              "Use 'ch3' to test an entire chapter or 'ch3:resnet_50' "
+              "Use 'ch03' to test an entire chapter or 'ch03:resnet_50' "
               "to run baseline_resnet_50 and optimized_resnet_50. "
               "Omit this flag (or pass 'all') to run every chapter.")
     )

@@ -47,6 +47,10 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
         self.memory: Optional[torch.Tensor] = None
         self.max_length = 20
         self.speculative_length = 4
+        # Match baseline for input verification
+        self.batch_size = 4
+        self.vocab_size = 32000
+        self.hidden_size = 4096
         batch_size = 4
         seq_len = 10
         tokens = batch_size * (seq_len + self.max_length)
@@ -54,6 +58,14 @@ class OptimizedSpeculativeDecodingMathBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch_size,
+            "vocab_size": self.vocab_size,
+            "hidden_size": self.hidden_size,
+        }
 
     def setup(self) -> None:
         _disable_flash_sdp()

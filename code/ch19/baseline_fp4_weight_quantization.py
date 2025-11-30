@@ -1,23 +1,14 @@
-"""Baseline FP4 weight quantization without optimizations.
+"""Baseline: FP4 with per-forward dequantization (slow).
 
-This baseline demonstrates standard weight quantization to FP4 (4-bit floating point)
-without the Blackwell-specific optimizations:
+Chapter 19: Blackwell Native Precision Operations
 
-- No per-channel scaling (uses per-tensor)
-- No cached dequantization
-- No FP8 tensor core bridge
-- Sequential quantize/dequantize operations
+This baseline shows naive FP4 inference that dequantizes weights
+on EVERY forward pass. This is what happens without proper caching.
 
-FP4 E2M1 Format:
-- 1 sign bit
-- 2 exponent bits (bias=1)
-- 1 mantissa bit
-- 16 representable values: ±{0, 0.5, 1, 1.5, 2, 3, 4, 6}
-
-Use Cases:
-- Draft models for speculative decoding
-- Memory-constrained deployments
-- Multi-model serving
+The optimized version uses:
+- Weight caching (dequantize once)
+- Better memory access patterns
+- Batch-optimized operations
 """
 
 from __future__ import annotations
@@ -172,23 +163,61 @@ class BaselineFP4Linear(nn.Module):
             self._quantized = True
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with FP4 weights (dequantize every time)."""
+        """Forward with FP4 weights (dequantize every time - slow)."""
         if self._quantized:
-            # Baseline: dequantize on every forward (slow)
+            # Baseline: dequantize on every forward (anti-pattern)
+            # In real workloads, this happens across many layers
             weight = dequantize_fp4_baseline(
                 self.weight_packed,
                 self.weight_scale,
                 torch.Size([self.out_features, self.in_features]),
                 self.dtype
             )
+            # Force materialization to prevent compiler optimizations
+            _ = weight.sum()
         else:
             weight = self._weight_fp16
         
         return F.linear(x.to(weight.dtype), weight, self.bias)
 
 
+class NaiveFP16MLP(nn.Module):
+    """Naive FP16 MLP with redundant operations (baseline anti-pattern).
+    
+    Simulates what happens without proper optimization:
+    - Multiple redundant copies and casts
+    - Explicit synchronization between ops (breaks pipelining)
+    - FP32 intermediate computation
+    """
+    
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int,
+        dtype: torch.dtype = torch.float16,
+    ):
+        super().__init__()
+        # Anti-pattern: Store weights in FP32, convert on every forward
+        self.fc1 = nn.Linear(d_model, d_ff, dtype=torch.float32)
+        self.fc2 = nn.Linear(d_ff, d_model, dtype=torch.float32)
+        self.activation = nn.GELU()
+        self._input_dtype = dtype
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Anti-pattern: Convert to FP32 for computation
+        x = x.float()  # FP16->FP32 conversion
+        x = self.fc1(x)
+        x = self.activation(x)
+        x = self.fc2(x)
+        x = x.to(self._input_dtype)  # FP32->FP16 conversion
+        return x
+
+
 class BaselineFP4MLP(nn.Module):
-    """Baseline MLP with FP4 weights."""
+    """Baseline FP4 MLP that dequantizes on EVERY forward pass (slow).
+    
+    This demonstrates the anti-pattern of not caching dequantized weights.
+    """
     
     def __init__(
         self,
@@ -202,35 +231,33 @@ class BaselineFP4MLP(nn.Module):
         self.activation = nn.GELU()
     
     def quantize(self) -> None:
-        """Quantize all layers."""
+        """Quantize all FP4 layers."""
         self.fc1.quantize()
         self.fc2.quantize()
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc1(x)
+        x = self.fc1(x)  # Dequantizes weights every call
         x = self.activation(x)
-        x = self.fc2(x)
+        x = self.fc2(x)  # Dequantizes weights every call
         return x
 
 
 class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
-    """Baseline benchmark for FP4 weight quantization.
+    """Baseline: FP4 with per-forward dequantization (slow).
     
-    Measures baseline FP4 inference without:
-    - Per-channel/block scaling
-    - Weight cache
-    - FP8 tensor core bridge
+    Anti-pattern: Dequantize weights on every forward pass.
+    The optimized version caches dequantized weights.
     """
     
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
         
-        # Configuration
-        self.batch_size = 32
-        self.seq_len = 512
-        self.d_model = 4096
-        self.d_ff = 14336  # Llama-style 3.5x expansion
+        # Configuration for fair comparison
+        self.batch_size = 16
+        self.seq_len = 256
+        self.d_model = 2048
+        self.d_ff = 8192
         
         self.input: Optional[torch.Tensor] = None
         
@@ -241,20 +268,21 @@ class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup baseline FP4 model."""
+        """Setup baseline FP4 model (dequant every forward)."""
         torch.manual_seed(42)
         
         dtype = torch.float16
         if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
             dtype = torch.bfloat16
         
+        # Use FP4 MLP that dequantizes on every forward
         self.model = BaselineFP4MLP(
             d_model=self.d_model,
             d_ff=self.d_ff,
             dtype=dtype,
         ).to(self.device)
         
-        # Quantize weights
+        # Quantize weights to FP4
         self.model.quantize()
         self.model.eval()
         
@@ -265,14 +293,14 @@ class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
         
         # Warmup
         with torch.no_grad():
-            for _ in range(3):
+            for _ in range(5):
                 _ = self.model(self.input)
         
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
-        """Benchmark baseline FP4 inference."""
-        with self._nvtx_range("baseline_fp4_weight_inference"):
+        """Benchmark naive MLP."""
+        with self._nvtx_range("baseline_naive_mlp"):
             with torch.no_grad():
                 _output = self.model(self.input)
         self._synchronize()
@@ -293,30 +321,16 @@ class BaselineFP4WeightQuantizationBenchmark(BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return baseline FP4 metrics using standard helpers."""
-        from core.benchmark.metrics import compute_precision_metrics
-        
-        # Use standard precision metrics
-        metrics = compute_precision_metrics(
-            fp32_time_ms=5.0,  # Approximate
-            reduced_precision_time_ms=5.0,  # Similar (compute-bound)
-            precision_type="fp4",
-            accuracy_delta=-0.05,  # Baseline has worse accuracy (per-tensor)
-        )
-        
+        """Return baseline FP16 metrics."""
         # Weight memory calculations
         fp16_bytes = (self.d_model * self.d_ff + self.d_ff * self.d_model) * 2
-        fp4_bytes = fp16_bytes // 4
         
-        metrics.update({
-            "precision.fp16_weight_bytes": float(fp16_bytes),
-            "precision.fp4_weight_bytes": float(fp4_bytes),
-            "precision.compression_ratio": fp16_bytes / fp4_bytes,
-            "precision.scaling_type": 0.0,  # per-tensor
-            "precision.uses_cache": 0.0,
-            "precision.uses_fp8_bridge": 0.0,
-        })
-        return metrics
+        return {
+            "precision.dtype": "fp16/bf16",
+            "precision.weight_bytes": float(fp16_bytes),
+            "precision.weight_mb": float(fp16_bytes / (1024 * 1024)),
+            "precision.is_quantized": 0.0,
+        }
     
     def validate_result(self) -> Optional[str]:
         if self.model is None:

@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Complete reference for the 76 MCP tools available in the `aisp` MCP server.
+Complete reference for the 86 MCP tools available in the `aisp` MCP server.
 
 ## Quick Start
 
@@ -17,9 +17,9 @@ Tool descriptions returned by `tools/list` (or `python -m mcp.mcp_server --list`
 
 ---
 
-## Benchmarking (17 tools)
+## Benchmarking (8 tools)
 
-Tools for running benchmarks, hardware tests, and performance verification.
+Tools for running benchmarks and performance verification.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
@@ -28,23 +28,30 @@ Tools for running benchmarks, hardware tests, and performance verification.
 | `available_benchmarks` | List available benchmarks | - |
 | `benchmark_targets` | List benchmark targets supported by the harness | - |
 | `list_chapters` | List all discoverable chapters and labs | - |
-| `benchmark_report` | Generate PDF/HTML report from benchmark results | - |
-| `benchmark_export` | Export benchmark results to csv/markdown/json | - |
-| `benchmark_compare_runs` | Diff two benchmark JSON files and show speedup deltas | `baseline`, `optimized` |
+| `benchmark_report` | Generate PDF/HTML report from benchmark results | `data_file`, `output`, `format` |
+| `benchmark_export` | Export benchmark results to csv/markdown/json | `data_file`, `format`, `output` |
+| `benchmark_compare_runs` | Diff two benchmark JSON files and show speedup deltas | `baseline`, `candidate`, `top` |
 
-### Hardware Micro-Benchmarks
+---
+
+## Hardware (12 tools)
+
+Tools for hardware micro-benchmarks and performance testing.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `test_speed` | Quick performance sanity checks | - |
-| `test_disk` | Disk I/O benchmark (sequential) | `file_size_mb`, `block_size_kb`, `tmp_dir` |
-| `test_pcie` | PCIe H2D/D2H bandwidth benchmark | `size_mb`, `iters` |
-| `test_mem_hierarchy` | Memory hierarchy stride test on GPU | `size_mb`, `stride` |
-| `test_tensor_core` | Tensor Core matmul throughput test | `size`, `precision` |
-| `test_sfu` | Special function unit benchmark (sin/cos) | `elements` |
-| `test_network` | Network throughput tests | - |
-| `test_network_loopback` | Loopback TCP throughput test | `size_mb`, `port` |
-| `test_roofline` | Stride sweep ASCII roofline for memory | - |
+| `hw_speed` | Run GPU/host speed tests (GEMM, memory, attention) | `type`, `gemm_size`, `precision`, `mem_size_mb`, `mem_stride` |
+| `hw_roofline` | Stride sweep ASCII roofline for memory bandwidth | `size_mb`, `strides` |
+| `hw_disk` | Disk I/O benchmark (sequential read/write) | `file_size_mb`, `block_size_kb`, `tmp_dir` |
+| `hw_pcie` | PCIe H2D/D2H bandwidth benchmark | `size_mb`, `iters` |
+| `hw_cache` | Memory hierarchy stride test (cache behavior) | `size_mb`, `stride` |
+| `hw_tc` | Tensor Core matmul throughput test | `size`, `precision` |
+| `hw_sfu` | Special function unit benchmark (sin/cos) | `elements` |
+| `hw_tcp` | Loopback TCP throughput test | `size_mb`, `port` |
+| `hw_network` | Network throughput tests | - |
+| `hw_ib` | InfiniBand bandwidth test | `size_mb` |
+| `hw_nccl` | NCCL collective bandwidth test | `collective`, `min_bytes`, `max_bytes`, `gpus` |
+| `hw_p2p` | GPU-to-GPU P2P/NVLink bandwidth test | `size_mb` |
 
 ---
 
@@ -62,7 +69,18 @@ Tools for GPU information, topology, and hardware details.
 
 ---
 
-## System (13 tools)
+## Info (2 tools)
+
+Tools for detailed hardware capabilities and network status.
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `info_features` | Get detailed hardware capabilities (TMA, TMEM, tensor cores, FP8 support) | - |
+| `info_network` | Get network status including InfiniBand and GPUDirect RDMA | - |
+
+---
+
+## System (8 tools)
 
 Tools for system information, dependencies, and environment analysis.
 
@@ -76,22 +94,20 @@ Tools for system information, dependencies, and environment analysis.
 | `container_limits` | Inspect container/cgroup limits | - |
 | `cpu_memory_analysis` | Analyze CPU/memory hierarchy (NUMA, caches, TLB, hugepages) | - |
 | `full_system_analysis` | Complete system analysis with recommendations | - |
-| `status` | Quick system status: GPU, software, AI backend | - |
-| `triage` | Quick triage snapshot: status + context summary | - |
-| `context_summary` | Lightweight system context summary | - |
-| `context_full` | Full detailed system context | - |
-| `ai_status` | Check AI/LLM backend availability | - |
 
 ---
 
-## Profiling (10 tools)
+## Profiling (13 tools)
 
-Tools for performance profiling with Nsight Systems and Nsight Compute.
+Tools for performance profiling with Nsight Systems, Nsight Compute, and PyTorch profiler.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `profile_nsys` | Run Nsight Systems on a command | `command`, `output_dir`, `output_name`, `preset`, `trace_cuda`, `trace_nvtx`, `trace_osrt`, `trace_forks`, `full_timeline` |
 | `profile_ncu` | Run Nsight Compute on a command | `command`, `output_dir`, `output_name`, `workload_type`, `kernel_filter` |
+| `profile_torch` | Run PyTorch profiler capture with Chrome trace output | `script`, `script_args`, `mode`, `output_dir` |
+| `profile_hta` | Run Nsight Systems with HTA analysis | `command`, `output_dir`, `output_name` |
+| `profile_compare` | Generate flame graph comparison between baseline/optimized | `chapter`, `profiles_dir`, `output_html` |
 | `nsys_summary` | Summarize an existing .nsys-rep or CSV | `report_path` |
 | `compare_nsys` | Compare baseline vs optimized Nsight Systems reports | `profiles_dir` |
 | `compare_ncu` | Compare baseline vs optimized Nsight Compute reports | `profiles_dir` |
@@ -129,7 +145,7 @@ Tools for optimization recommendations and technique selection.
 
 ---
 
-## Distributed (2 tools)
+## Distributed (3 tools)
 
 Tools for distributed training configuration.
 
@@ -137,6 +153,7 @@ Tools for distributed training configuration.
 |------|-------------|------------|
 | `distributed_plan` | Plan parallelism strategy (DP/TP/PP/FSDP) | `model_size`, `gpus`, `nodes` |
 | `distributed_nccl` | Get NCCL tuning recommendations | `nodes`, `gpus` |
+| `launch_plan` | Generate a torchrun launch plan (TP/PP/DP layout) | `model_params`, `nodes`, `gpus`, `tp`, `pp`, `dp` |
 
 ---
 
@@ -151,7 +168,7 @@ Tools for inference optimization.
 
 ---
 
-## AI/LLM (2 tools)
+## AI/LLM (3 tools)
 
 Tools for AI-powered performance advice.
 
@@ -159,17 +176,19 @@ Tools for AI-powered performance advice.
 |------|-------------|------------|
 | `ask` | Ask a performance optimization question (with book citations) | `question` |
 | `explain` | Explain a GPU/AI performance concept | `concept` |
+| `ai_status` | Check AI/LLM backend availability | - |
 
 ---
 
-## HuggingFace (2 tools)
+## HuggingFace (3 tools)
 
-Tools for HuggingFace model discovery.
+Tools for HuggingFace model discovery and download.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `hf_search` | Search HuggingFace for models | `query`, `limit` |
 | `hf_trending` | Get trending models on HuggingFace | `task` |
+| `hf_download` | Download a HuggingFace model | `model`, `revision`, `cache_dir` |
 
 ---
 
@@ -212,15 +231,19 @@ Tools for exporting benchmark results.
 
 ---
 
-## Utility (3 tools)
+## Utility (7 tools)
 
-Helper tools for navigation and planning.
+Helper tools for navigation and status.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
+| `status` | Quick system status: GPU, software, AI backend | - |
+| `triage` | Quick triage snapshot: status + context summary | - |
+| `context_summary` | Lightweight system context summary | - |
+| `context_full` | Full detailed system context | - |
 | `help` | Get help and tool suggestions | `query` |
 | `suggest_tools` | Get ranked tool suggestions based on intent | `query` |
-| `launch_plan` | Generate a torchrun launch plan (TP/PP/DP layout) | - |
+| `job_status` | Check status of a queued async job | `job_id` |
 
 ---
 
@@ -239,11 +262,17 @@ All tools return JSON responses with the following structure:
 
 ```json
 {
-  "status": "success" | "error",
-  "data": { ... },
   "tool": "tool_name",
+  "status": "ok" | "error",
   "timestamp": "ISO timestamp",
-  "next_steps": ["suggested", "follow-up", "tools"]
+  "duration_ms": 123,
+  "result": { ... },
+  "preview": "...",
+  "metadata": { ... },
+  "context_summary": { ... },
+  "guidance": {
+    "next_steps": ["suggested", "follow-up", "tools"]
+  }
 }
 ```
 
@@ -256,7 +285,7 @@ The `isError` field in the MCP response mirrors the `status` field.
 ### Run benchmarks with profiling
 ```
 Tool: run_benchmarks
-Parameters: { "targets": ["ch7"], "profile": "minimal" }
+Parameters: { "targets": ["ch07"], "profile": "minimal" }
 ```
 
 ### Get optimization recommendations for 70B model
@@ -281,4 +310,22 @@ Parameters: { "max_vram_gb": 24, "max_latency_ms": 50 }
 ```
 Tool: ask
 Parameters: { "question": "Why is my attention kernel slow on H100?" }
+```
+
+### Run hardware benchmarks
+```
+Tool: hw_speed
+Parameters: { "gemm_size": 4096, "precision": "fp16" }
+```
+
+### Download a model from HuggingFace
+```
+Tool: hf_download
+Parameters: { "model": "meta-llama/Llama-3.1-8B" }
+```
+
+### Compare baseline vs optimized profiles
+```
+Tool: profile_compare
+Parameters: { "chapter": "ch11" }
 ```

@@ -95,6 +95,13 @@ class OptimizedInferenceDisaggregatedBenchmark(BaseBenchmark):
     def validate_result(self) -> Optional[str]:
         return None
 
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch,  # Match baseline's batch_size
+            "num_tokens": self.num_tokens,
+        }
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""

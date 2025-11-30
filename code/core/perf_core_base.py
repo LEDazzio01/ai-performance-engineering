@@ -1495,7 +1495,7 @@ class PerformanceCoreBase:
     def get_data_loading_analysis(self) -> dict:
         """Provide dataloader recommendations; optimized for Grace-Blackwell if available."""
         try:
-            from ch4.gb200_grace_numa_optimization import (
+            from ch04.gb200_grace_numa_optimization import (
                 optimize_data_loading_for_grace,
                 detect_grace_cpu,
                 setup_grace_affinity,

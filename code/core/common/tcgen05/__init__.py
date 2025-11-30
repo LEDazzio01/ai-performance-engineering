@@ -13,6 +13,7 @@ import torch
 from torch.utils.cpp_extension import load
 
 from core.benchmark.tcgen05_requirements import ensure_tcgen05_supported
+from core.harness.hardware_capabilities import detect_capabilities
 
 try:  # Ensure TORCH_CUDA_ARCH_LIST stays clamped for GB-series hosts.
     import arch_config  # noqa: F401
@@ -31,13 +32,22 @@ _SM100_CUTLASS_CANDIDATES = (
 _FALLBACK_CUTLASS_CANDIDATES = (
     _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include",
 )
+# Compute capability helper (prefer probed capabilities, fallback to torch)
+def _current_compute_capability() -> tuple[int, int]:
+    cap = detect_capabilities()
+    if cap is not None:
+        parts = cap.compute_capability.split(".")
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
+        return major, minor
+    if torch.cuda.is_available():
+        return torch.cuda.get_device_capability()
+    raise RuntimeError("CUDA hardware capabilities unavailable and no CUDA device detected.")
+
 # Check if we have SM100+ GPU - if so, prefer the full CUTLASS
 _sm100_gpu = False
-try:
-    major, _ = torch.cuda.get_device_capability()
-    _sm100_gpu = major >= 10
-except Exception:
-    pass
+major_cc, minor_cc = _current_compute_capability()
+_sm100_gpu = major_cc >= 10
 
 _candidates = _SM100_CUTLASS_CANDIDATES + _FALLBACK_CUTLASS_CANDIDATES if _sm100_gpu else \
               _FALLBACK_CUTLASS_CANDIDATES + _SM100_CUTLASS_CANDIDATES
@@ -59,7 +69,7 @@ def _tcgen05_cuda_flags() -> list[str]:
         flags.append(f"-I{inc}")
     # For SM100 (Blackwell), we need sm_100a to enable tcgen05/TMEM features
     # The 'a' suffix enables architecture-specific features
-    major, minor = torch.cuda.get_device_capability()
+    major, minor = _current_compute_capability()
     if major >= 10:
         # Use sm_100a for Blackwell to enable TMEM/tcgen05 features
         flags.append("-gencode=arch=compute_100a,code=sm_100a")
@@ -153,12 +163,8 @@ def _compute_build_fingerprint(sources: Sequence[Path], cuda_flags: list[str]) -
     hasher.update(f"env:{_get_env_fingerprint()}\n".encode())
     
     # Include GPU architecture
-    try:
-        if torch.cuda.is_available():
-            major, minor = torch.cuda.get_device_capability()
-            hasher.update(f"gpu_arch:sm_{major}{minor}\n".encode())
-    except Exception:
-        pass
+    major, minor = _current_compute_capability()
+    hasher.update(f"gpu_arch:sm_{major}{minor}\n".encode())
     
     # Include all compiler flags (sorted for consistency)
     for flag in sorted(cuda_flags):
@@ -311,7 +317,7 @@ def load_tiling_tcgen05_module():
     from core.benchmark.smoke import is_smoke_mode
     if is_smoke_mode():
         raise RuntimeError("SKIPPED: tcgen05 extension disabled in low-memory mode")
-    return _load_extension("ch8_tiling_tcgen05_ext", [_REPO_ROOT / "ch8" / "tiling_kernels_tcgen05.cu"])
+    return _load_extension("ch08_tiling_tcgen05_ext", [_REPO_ROOT / "ch08" / "tiling_kernels_tcgen05.cu"])
 
 
 def matmul_tcgen05(a: torch.Tensor, b: torch.Tensor, *, module_name: str = "tcgen05 matmul") -> torch.Tensor:

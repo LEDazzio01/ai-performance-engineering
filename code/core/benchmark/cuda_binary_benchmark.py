@@ -9,7 +9,6 @@ can participate in the standardized harness / metrics pipeline.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +19,7 @@ import torch
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.harness.cuda_capabilities import pipeline_runtime_allowed
 from core.benchmark.tma_checks import require_tma_instructions
+from core.benchmark.timing_parser import parse_kernel_time_ms
 
 ARCH_SUFFIX = {
     "sm_100": "_sm100",
@@ -67,22 +67,22 @@ class CudaBinaryBenchmark(BaseBenchmark):
         *,
         iterations: int = 3,
         warmup: int = 5,
-        timeout_seconds: int = 15,  # 15 second timeout to prevent hangs
+        timeout_seconds: int = 15,
         run_args: Sequence[str] = (),
-        time_regex: Optional[str] = r"([0-9]+(?:\.[0-9]+)?)\s*ms",
         requires_pipeline_api: bool = False,
         require_tma_instructions: bool = False,
         workload_params: Optional[dict] = None,
+        time_regex: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.chapter_dir = chapter_dir
         self.binary_name = binary_name
         self.friendly_name = friendly_name
         self.iterations = iterations
+        self.time_regex = time_regex  # Custom regex for parsing timing output
         self.warmup = warmup
         self.timeout_seconds = timeout_seconds
         self.run_args = list(run_args)
-        self.time_pattern = re.compile(time_regex) if time_regex is not None else None
         self.requires_pipeline_api = requires_pipeline_api
         self.require_tma_instructions = require_tma_instructions
         self.use_reported_time = True
@@ -138,7 +138,7 @@ class CudaBinaryBenchmark(BaseBenchmark):
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout_seconds,  # Use configured timeout
+                timeout=self.timeout_seconds,
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Execution timeout: {self.exec_path.name} exceeded {self.timeout_seconds} seconds")
@@ -150,14 +150,13 @@ class CudaBinaryBenchmark(BaseBenchmark):
                 f"stderr:\n{completed.stderr}"
             )
         
-        match = self.time_pattern.search(completed.stdout) if self.time_pattern else None
-        if self.time_pattern and not match:
+        time_ms = parse_kernel_time_ms(completed.stdout, self.time_regex)
+        if time_ms is None:
             raise RuntimeError(
                 f"Could not parse execution time from output of {self.exec_path.name}.\n"
                 f"stdout:\n{completed.stdout}"
             )
         
-        time_ms = float(match.group(1)) if match else None
         return BinaryRunResult(time_ms=time_ms, raw_stdout=completed.stdout, raw_stderr=completed.stderr)
     
     # ------------------------------------------------------------------ Benchmark API
@@ -192,7 +191,7 @@ class CudaBinaryBenchmark(BaseBenchmark):
         """Ensure we captured at least one timing measurement."""
         if self._last_result is None:
             return "Binary did not execute"
-        if self.time_pattern and (self._last_result.time_ms is None or self._last_result.time_ms <= 0):
+        if self._last_result.time_ms is None or self._last_result.time_ms <= 0:
             return f"Invalid runtime parsed: {self._last_result.time_ms} ms"
         return None
     

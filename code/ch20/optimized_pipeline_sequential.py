@@ -1,4 +1,14 @@
-"""optimized_pipeline_sequential.py - Pipeline overlap optimization."""
+"""optimized_pipeline_sequential.py - GPU-native pipeline (avoids CPU transfers).
+
+Chapter 20: Productionization and Deployment
+
+The baseline demonstrates an anti-pattern: copying activations to CPU between
+pipeline stages (perhaps for "checkpointing" or legacy code). This adds PCIe
+transfer latency and blocks GPU execution.
+
+The optimized version keeps all data on GPU with direct stage-to-stage execution,
+showing the benefit of avoiding unnecessary device transfers.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +21,7 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, Workl
 
 
 class SimpleStage(nn.Module):
-    """Heavier pipeline stage to highlight overlap benefits."""
+    """Pipeline stage with FFN and residual connection."""
     
     def __init__(self, dim: int):
         super().__init__()
@@ -28,17 +38,21 @@ class SimpleStage(nn.Module):
 
 
 class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
-    """Pipeline overlap - stages execute concurrently."""
+    """Optimized: GPU-native pipeline without CPU transfers.
+    
+    Key optimization vs baseline:
+    - All activations stay on GPU (no PCIe round-trips)
+    - Direct stage-to-stage execution 
+    - Single sync at end of pipeline
+    """
     
     def __init__(self):
         super().__init__()
         self.stages: Optional[nn.ModuleList] = None
-        self.stage_streams: Optional[list[torch.cuda.Stream]] = None
         self.inputs: Optional[torch.Tensor] = None
         self.batch_size = 512
         self.hidden_dim = 1536
         self.num_stages = 4
-        self.num_micro_batches = 12
         self.repeats = 6
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
@@ -55,58 +69,32 @@ class OptimizedPipelineOverlapBenchmark(BaseBenchmark):
         self.stages = nn.ModuleList(
             [SimpleStage(self.hidden_dim).to(self.device).half() for _ in range(self.num_stages)]
         ).eval()
-        self.stage_streams = [torch.cuda.Stream() for _ in range(self.num_stages)]
         
         self.inputs = torch.randn(
             self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16
         )
         
+        # Warmup
         data = self.inputs
         with torch.no_grad():
             for stage in self.stages:
                 data = stage(data)
         self._synchronize()
     
-    def _run_pipeline(self, micro_batches: list[torch.Tensor]) -> None:
-        assert self.stage_streams is not None and self.stages is not None
-        num_micro = len(micro_batches)
-        ready_events = [
-            [torch.cuda.Event(blocking=False) for _ in range(num_micro)]
-            for _ in range(self.num_stages)
-        ]
-        activations = [dict() for _ in range(self.num_stages)]
-        total_steps = num_micro + self.num_stages - 1
-        for step in range(total_steps):
-            for stage_idx in range(self.num_stages):
-                micro_idx = step - stage_idx
-                if micro_idx < 0 or micro_idx >= num_micro:
-                    continue
-                stream = self.stage_streams[stage_idx]
-                with torch.cuda.stream(stream):
-                    if stage_idx == 0:
-                        tensor = micro_batches[micro_idx]
-                    else:
-                        stream.wait_event(ready_events[stage_idx - 1][micro_idx])
-                        tensor = activations[stage_idx - 1].pop(micro_idx)
-                    tensor = self.stages[stage_idx](tensor)
-                    activations[stage_idx][micro_idx] = tensor
-                    ready_events[stage_idx][micro_idx].record(stream)
-        for ev in ready_events[-1]:
-            ev.synchronize()
-        activations[-1].clear()
-    
     def benchmark_fn(self) -> None:
         assert self.inputs is not None and self.stages is not None
         with self._nvtx_range("pipeline_sequential_optimized"):
-            micro_batches = list(self.inputs.chunk(self.num_micro_batches))
             with torch.no_grad():
                 for _ in range(self.repeats):
-                    self._run_pipeline(micro_batches)
+                    # GPU-native: all activations stay on GPU
+                    x = self.inputs
+                    for stage in self.stages:
+                        x = stage(x)
+                    # Single sync at end - no per-stage CPU round-trips
             self._synchronize()
 
     def teardown(self) -> None:
         self.stages = None
-        self.stage_streams = None
         self.inputs = None
         torch.cuda.empty_cache()
     

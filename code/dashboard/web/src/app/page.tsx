@@ -1147,7 +1147,7 @@ export default function Dashboard() {
 
         {activeTab === 'webhooks' && <WebhooksTab />}
 
-        {activeTab === 'hwbench' && <HwbenchTab />}
+        {activeTab === 'hw' && <HwbenchTab />}
 
         {activeTab === 'themes' && <ThemesTab />}
 

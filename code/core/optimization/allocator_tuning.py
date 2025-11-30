@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
-# Recommended knobs mirrored from ch3/docker_gpu_optimized.dockerfile
+# Recommended knobs mirrored from ch03/docker_gpu_optimized.dockerfile
 _RECOMMENDED_ENV: Dict[str, str] = {
     "MALLOC_CONF": "narenas:8,dirty_decay_ms:10000,muzzy_decay_ms:10000,background_thread:true",
     "TCMALLOC_MAX_TOTAL_THREAD_CACHE_BYTES": "536870912",

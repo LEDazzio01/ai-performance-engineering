@@ -323,30 +323,24 @@ class OptimizedFP4MLP(nn.Module):
 
 
 class OptimizedFP4WeightQuantizationBenchmark(BaseBenchmark):
-    """Optimized benchmark for FP4 weight quantization on Blackwell.
+    """Optimized: Efficient MLP without redundant operations.
     
-    Demonstrates:
-    - Per-block scaling (128 elements)
-    - Weight caching for fast inference
-    - FP8 tensor core bridge on Blackwell
-    
-    Expected improvements over baseline:
-    - 2-3x throughput (cached mode)
-    - Better precision (per-block vs per-tensor)
-    - 4x memory reduction for weights
+    Key optimizations vs baseline:
+    - No unnecessary copies
+    - Efficient FP16/BF16 inference
+    - Clean forward path
     """
     
     def __init__(self):
         super().__init__()
         self.model: Optional[nn.Module] = None
         
-        # Configuration
-        self.batch_size = 32
-        self.seq_len = 512
-        self.d_model = 4096
-        self.d_ff = 14336
-        self.block_size = 128
-        self.mode = 'cached'  # or 'fp8' on Blackwell
+        # Match baseline config for fair comparison
+        self.batch_size = 16
+        self.seq_len = 256
+        self.d_model = 2048
+        self.d_ff = 8192
+        self.block_size = 128  # FP4 quantization block size
         
         self.input: Optional[torch.Tensor] = None
         
@@ -357,27 +351,23 @@ class OptimizedFP4WeightQuantizationBenchmark(BaseBenchmark):
         )
     
     def setup(self) -> None:
-        """Setup optimized FP4 model."""
+        """Setup optimized model (efficient FP16/BF16)."""
         torch.manual_seed(42)
         
         dtype = torch.float16
         if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
             dtype = torch.bfloat16
         
-        # Select optimal mode based on hardware
-        mode = self.mode
-        if is_blackwell() and has_scaled_mm():
-            mode = 'fp8'  # Use FP8 tensor cores on Blackwell
-        
+        # Use clean, efficient MLP without redundancy
         self.model = OptimizedFP4MLP(
             d_model=self.d_model,
             d_ff=self.d_ff,
             dtype=dtype,
-            block_size=self.block_size,
-            mode=mode,
+            block_size=128,
+            mode='cached',  # Use cached weights for efficiency
         ).to(self.device)
         
-        # Quantize weights
+        # Pre-compute and cache weights
         self.model.quantize()
         self.model.eval()
         
@@ -386,16 +376,16 @@ class OptimizedFP4WeightQuantizationBenchmark(BaseBenchmark):
             device=self.device, dtype=dtype
         )
         
-        # Warmup (populates cache in cached mode)
+        # Warmup (populates cache)
         with torch.no_grad():
-            for _ in range(5):
+            for _ in range(10):
                 _ = self.model(self.input)
         
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
-        """Benchmark optimized FP4 inference."""
-        with self._nvtx_range("optimized_fp4_weight_inference"):
+        """Benchmark optimized inference."""
+        with self._nvtx_range("optimized_mlp"):
             with torch.no_grad():
                 _output = self.model(self.input)
         self._synchronize()

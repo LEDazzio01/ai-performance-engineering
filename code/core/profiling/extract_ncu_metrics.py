@@ -3,11 +3,11 @@
 Lightweight helper to regenerate Nsight Compute CSV metrics for chapter examples.
 
 Usage examples:
-  python core/profiling/extract_ncu_metrics.py --example ch6_add_parallel \
+  python core/profiling/extract_ncu_metrics.py --example ch06_add_parallel \
       --metrics gpu__time_duration.avg,gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed
 
-  python core/profiling/extract_ncu_metrics.py --example ch6_add_parallel \
-      --metrics default --output output/metrics/ch6_add_parallel.csv
+  python core/profiling/extract_ncu_metrics.py --example ch06_add_parallel \
+      --metrics default --output output/metrics/ch06_add_parallel.csv
 
 By default we collect a set of latency/throughput counters that are useful when
 contrasting vectorised vs scalar kernels. The script reuses the profiling harness'
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--example",
         required=True,
-        help="Example name registered in example_registry (e.g. ch6_add_parallel).",
+        help="Example name registered in example_registry (e.g. ch06_add_parallel).",
     )
     parser.add_argument(
         "--metrics",

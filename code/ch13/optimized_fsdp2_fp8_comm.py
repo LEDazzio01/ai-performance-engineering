@@ -178,11 +178,12 @@ class OptimizedFSDP2FP8CommBenchmark(BaseBenchmark):
         with self._nvtx_range("optimized_fsdp2_fp8_comm"):
             self.optimizer.zero_grad(set_to_none=True)
             
-            # Forward - same as baseline
-            output = self.model(self.x)
-            loss = output.sum()
+            # Forward - same as baseline (use autocast for proper gradient dtypes)
+            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                output = self.model(self.x)
+                loss = output.sum()
             
-            # Backward - same as baseline
+            # Backward - gradients will match model dtype with autocast
             loss.backward()
             
             # FP8 compression would happen here in distributed hooks

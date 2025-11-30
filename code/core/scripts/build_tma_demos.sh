@@ -2,7 +2,7 @@
 #
 # Build helper for the CUDA 13 Blackwell TMA demonstrations.
 # This script compiles:
-#   - ch7/async_prefetch_tma  (1D double-buffered TMA pipeline)
+#   - ch07/async_prefetch_tma  (1D double-buffered TMA pipeline)
 #   - ch10/tma_2d_pipeline_blackwell (2D TMA tile pipeline)
 #
 # Usage:
@@ -35,8 +35,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo ">>> Building Blackwell TMA demos (ARCH=${ARCH})"
 
-pushd "${repo_root}/ch7" >/dev/null
-echo "-> ch7/async_prefetch_tma"
+pushd "${repo_root}/ch07" >/dev/null
+echo "-> ch07/async_prefetch_tma"
 make ARCH="${ARCH}" async_prefetch_tma
 popd >/dev/null
 
@@ -46,5 +46,5 @@ make ARCH="${ARCH}" tma_2d_pipeline_blackwell
 popd >/dev/null
 
 echo "Builds complete. Binaries:"
-echo "  - ${repo_root}/ch7/async_prefetch_tma"
+echo "  - ${repo_root}/ch07/async_prefetch_tma"
 echo "  - ${repo_root}/ch10/tma_2d_pipeline_blackwell"

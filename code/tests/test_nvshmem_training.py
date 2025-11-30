@@ -29,7 +29,7 @@ def _setup_env(world_size: int, port: int, rank: int) -> None:
 
 def _gradient_worker(rank: int, world_size: int, seq_len: int, port: int) -> None:
     _setup_env(world_size, port, rank)
-    from ch4.nvshmem_training_example import (
+    from ch04.nvshmem_training_example import (
         TransformerBlock,
         demo_gradient_buckets,
     )
@@ -44,7 +44,7 @@ def _gradient_worker(rank: int, world_size: int, seq_len: int, port: int) -> Non
 
 def _pipeline_worker(rank: int, world_size: int, seq_len: int, port: int) -> None:
     _setup_env(world_size, port, rank)
-    from ch4.nvshmem_training_example import demo_pipeline_parallel
+    from ch04.nvshmem_training_example import demo_pipeline_parallel
 
     torch.manual_seed(0)
     microbatch = torch.randn(2, seq_len, 16)
@@ -55,7 +55,7 @@ def _pipeline_worker(rank: int, world_size: int, seq_len: int, port: int) -> Non
 
 @pytest.mark.skipif(not dist.is_available(), reason="torch.distributed not available")
 def test_gradient_bucket_demo_runs_on_gloo():
-    from ch4.nvshmem_training_example import nvshmem_available
+    from ch04.nvshmem_training_example import nvshmem_available
 
     if not nvshmem_available() or torch.cuda.device_count() < 2:
         return
@@ -68,7 +68,7 @@ def test_gradient_bucket_demo_runs_on_gloo():
 
 @pytest.mark.skipif(not dist.is_available(), reason="torch.distributed not available")
 def test_pipeline_demo_runs_on_gloo():
-    from ch4.nvshmem_training_example import nvshmem_available
+    from ch04.nvshmem_training_example import nvshmem_available
 
     if not nvshmem_available() or torch.cuda.device_count() < 2:
         return

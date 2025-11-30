@@ -17,12 +17,12 @@ pip install -r requirements.txt
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0)}')"
 
 # Run a benchmark
-python ch7/optimized_memory_access.py
+python ch07/optimized_memory_access.py
 
 # Or use the CLI
-python -m cli.aisp bench run --targets ch7 --profile minimal
+python -m cli.aisp bench run --targets ch07 --profile minimal
 # Point at a different benchmark root (defaults to this repo)
-python -m cli.aisp bench run --bench-root /path/to/benchmarks --targets ch7
+python -m cli.aisp bench run --bench-root /path/to/benchmarks --targets ch07
 ```
 
 ---
@@ -31,7 +31,7 @@ python -m cli.aisp bench run --bench-root /path/to/benchmarks --targets ch7
 
 | Path | Description |
 |------|-------------|
-| `ch1` - `ch20` | One directory per chapter with baseline/optimized benchmarks |
+| `ch01` - `ch20` | One directory per chapter with baseline/optimized benchmarks |
 | `labs/` | Deep-dive labs for matmul, MoE, FlexAttention, distributed training, etc. |
 
 ---
@@ -52,7 +52,7 @@ make metrics        # Check get_custom_metrics() status
 ### Project root selection
 - Default project root: the repo directory you're in (e.g., `ai-performance-engineering/code`).
 - Override everywhere with `--bench-root /path/to/project`.
-  - CLI: `python -m cli.aisp bench run --bench-root /path/to/project --targets ch7`
+  - CLI: `python -m cli.aisp bench run --bench-root /path/to/project --targets ch07`
   - Full runner: `python -m core.harness.run_all_benchmarks --bench-root /path/to/project`
   - Dashboard backend: `python -m dashboard.api.server serve --bench-root /path/to/project --data /path/to/benchmark_test_results.json`
 - Environment variables are ignored for project-root selection; use flags only.
@@ -60,28 +60,28 @@ make metrics        # Check get_custom_metrics() status
 
 ### Direct Execution
 ```bash
-python ch7/optimized_memory_access.py
+python ch07/optimized_memory_access.py
 ```
 
 ### Using the CLI
 ```bash
 # List available targets
-python -m cli.aisp bench list-targets --chapter ch7
+python -m cli.aisp bench list-targets --chapter ch07
 
 # Run with profiling
-python -m cli.aisp bench run --targets ch7 --profile minimal
+python -m cli.aisp bench run --targets ch07 --profile minimal
 
 # Compare baseline vs optimized
-python -m cli.aisp bench compare ch7.baseline_memory_access ch7.optimized_memory_access
+python -m cli.aisp bench compare ch07.baseline_memory_access ch07.optimized_memory_access
 
 # Quick verification (lightweight smoke test)
-python -m cli.aisp bench verify --targets ch7
+python -m cli.aisp bench verify --targets ch07
 ```
 
 ### Using the Harness Directly
 ```python
 from core.harness.benchmark_harness import BenchmarkHarness
-from ch7.optimized_memory_access import get_benchmark
+from ch07.optimized_memory_access import get_benchmark
 
 harness = BenchmarkHarness()
 results = harness.run(get_benchmark())
@@ -94,10 +94,10 @@ print(results)
 
 ```bash
 # Timeline profile (nsys)
-nsys profile -o timeline python ch7/optimized_memory_access.py
+nsys profile -o timeline python ch07/optimized_memory_access.py
 
 # Kernel analysis (ncu)
-ncu -o kernel_analysis python ch7/optimized_memory_access.py
+ncu -o kernel_analysis python ch07/optimized_memory_access.py
 
 # Open in NVIDIA Nsight
 nsys-ui timeline.nsys-rep
@@ -406,8 +406,8 @@ These are valuable for learning HOW to implement patterns, even if not faster on
 ```python
 # In run_all_benchmarks.py
 INFORMATIONAL_BENCHMARKS = {
-    "ch3": {"numa_unaware"},        # NUMA topology dependent
-    "ch4": {"dataparallel_basic"},  # Requires multi-GPU
+    "ch03": {"numa_unaware"},        # NUMA topology dependent
+    "ch04": {"dataparallel_basic"},  # Requires multi-GPU
     "ch14": {"sliding_window_bench"},  # FlexAttention API
     "ch15": {"disaggregated_inference", "inference_placement"},  # Multi-GPU
     # ...

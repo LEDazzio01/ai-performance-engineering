@@ -30,6 +30,7 @@ from labs.persistent_decode.persistent_decode_common import (
     tokens_per_iteration,
 )
 from core.benchmark.blackwell_requirements import ensure_blackwell_tma_supported
+from core.harness.cuda_capabilities import tma_support_status
 
 
 def _enable_blackwell_compiler_defaults() -> None:
@@ -303,8 +304,9 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
         ensure_blackwell_tma_supported("optimized_tma_prefill_decode")
         self.inputs = build_inputs(self.device)
         # Skip on GPUs without TMA support to avoid false regressions.
-        if torch.cuda.get_device_capability(self.device) < (10, 0):
-            raise RuntimeError("SKIP: TMA not supported on this GPU (need SM 10.0+)")
+        supported, reason = tma_support_status()
+        if not supported:
+            raise RuntimeError(f"SKIP: TMA not supported on this GPU ({reason})")
         self._tma_ext = _load_cp_async_tma_ext()
         self.prefill_src = torch.randn(
             self.prefill_chunks, self.prefill_chunk_elems, device=self.device

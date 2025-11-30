@@ -5,7 +5,7 @@
 #   ./core/scripts/nvshmem_launch_multinode.sh <nodes> <gpus_per_node> [binary] [args...]
 #
 # Example:
-#   ./core/scripts/nvshmem_launch_multinode.sh 2 8 ./ch4/nvshmem_multinode_example --gpus-per-node 8
+#   ./core/scripts/nvshmem_launch_multinode.sh 2 8 ./ch04/nvshmem_multinode_example --gpus-per-node 8
 #
 # Requires NVSHMEM to be installed and nvshmemrun in PATH. Host selection is
 # controlled via NVSHMEM_HOSTFILE (defaults to localhost for single-node tests).
@@ -20,7 +20,7 @@ fi
 NODES=$1
 GPUS_PER_NODE=$2
 shift 2
-BINARY=${1:-./ch4/nvshmem_multinode_example}
+BINARY=${1:-./ch04/nvshmem_multinode_example}
 shift || true
 EXTRA_ARGS=("$@")
 

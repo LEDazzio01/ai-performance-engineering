@@ -159,7 +159,7 @@ ENTRIES["README.md"] = Entry(
         "Validate peak hardware characteristics before grading optimizations against stored expectations.",
     ],
     contents=[
-        ("`ch1` - `ch20`", "One directory per chapter with baseline/optimized benchmarks, workload configs, and `compare.py` harness entrypoints."),
+        ("`ch01` - `ch20`", "One directory per chapter with baseline/optimized benchmarks, workload configs, and `compare.py` harness entrypoints."),
         ("`labs/`", "Deep-dive labs for matmul, routing, FlexAttention, MoE, persistent decode, distributed training, and more."),
         ("`core/benchmark/`, `profiling/`, `core/`, `optimization/`, `analysis/`", "Shared harness, logging, workload metadata, profiling, and optimization utilities used by every chapter."),
         ("`cli/aisp.py bench`", "Typer-based CLI for running, profiling, and verifying targets with reproducible artifacts."),
@@ -170,8 +170,8 @@ ENTRIES["README.md"] = Entry(
             "cd ai-performance-engineering",
             "python3 -m venv .venv && source .venv/bin/activate",
             "pip install -r requirements_latest.txt",
-            "python cli/aisp.py bench list-targets --chapter ch1",
-            "python cli/aisp.py bench run --targets ch1 --profile minimal",
+            "python cli/aisp.py bench list-targets --chapter ch01",
+            "python cli/aisp.py bench run --targets ch01 --profile minimal",
         ],
         notes=[
             "`setup.sh` installs system prerequisites (drivers, CUDA, Nsight) and should be rerun after driver upgrades.",
@@ -191,8 +191,8 @@ ENTRIES["README.md"] = Entry(
     ],
 )
 
-ENTRIES["ch1"] = chapter_entry(
-    slug="ch1",
+ENTRIES["ch01"] = chapter_entry(
+    slug="ch01",
     title="Chapter 1 - Performance Fundamentals",
     summary=dedent(
         """\
@@ -223,8 +223,8 @@ ENTRIES["ch1"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch2"] = chapter_entry(
-    slug="ch2",
+ENTRIES["ch02"] = chapter_entry(
+    slug="ch02",
     title="Chapter 2 - GPU Hardware Architecture",
     summary=dedent(
         """\
@@ -254,8 +254,8 @@ ENTRIES["ch2"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch3"] = chapter_entry(
-    slug="ch3",
+ENTRIES["ch03"] = chapter_entry(
+    slug="ch03",
     title="Chapter 3 - System Tuning",
     summary=dedent(
         """\
@@ -286,8 +286,8 @@ ENTRIES["ch3"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch4"] = chapter_entry(
-    slug="ch4",
+ENTRIES["ch04"] = chapter_entry(
+    slug="ch04",
     title="Chapter 4 - Multi-GPU Distribution",
     summary=dedent(
         """\
@@ -319,8 +319,8 @@ ENTRIES["ch4"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch5"] = chapter_entry(
-    slug="ch5",
+ENTRIES["ch05"] = chapter_entry(
+    slug="ch05",
     title="Chapter 5 - Storage and IO Optimization",
     summary=dedent(
         """\
@@ -351,8 +351,8 @@ ENTRIES["ch5"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch6"] = chapter_entry(
-    slug="ch6",
+ENTRIES["ch06"] = chapter_entry(
+    slug="ch06",
     title="Chapter 6 - CUDA Programming Fundamentals",
     summary=dedent(
         """\
@@ -384,8 +384,8 @@ ENTRIES["ch6"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch7"] = chapter_entry(
-    slug="ch7",
+ENTRIES["ch07"] = chapter_entry(
+    slug="ch07",
     title="Chapter 7 - Memory Access Patterns",
     summary=dedent(
         """\
@@ -417,8 +417,8 @@ ENTRIES["ch7"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch8"] = chapter_entry(
-    slug="ch8",
+ENTRIES["ch08"] = chapter_entry(
+    slug="ch08",
     title="Chapter 8 - Occupancy & Pipeline Tuning",
     summary=dedent(
         """\
@@ -450,8 +450,8 @@ ENTRIES["ch8"] = chapter_entry(
     ],
 )
 
-ENTRIES["ch9"] = chapter_entry(
-    slug="ch9",
+ENTRIES["ch09"] = chapter_entry(
+    slug="ch09",
     title="Chapter 9 - Arithmetic Intensity & Kernel Fusion",
     summary=dedent(
         """\

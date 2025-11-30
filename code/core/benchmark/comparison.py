@@ -435,7 +435,7 @@ def get_chapter_metric_config(chapter: str) -> Dict[str, Tuple[str, MetricDirect
     Handles unknown metrics gracefully (skips with warning) and uses metadata when available.
     
     Args:
-        chapter: Chapter identifier (e.g., "ch7")
+        chapter: Chapter identifier (e.g., "ch07")
         
     Returns:
         Dictionary mapping metric paths to METRIC_CONFIG tuples
@@ -788,7 +788,7 @@ def compare_all_metrics(
         include_raw_metrics: Include raw profiler metrics (NCU/NSYS raw counters).
             Required for chapter bandwidth metrics (nvlink_bandwidth_gbs, hbm3e_bandwidth_tbs, etc.)
             and other raw metrics (shared_memory_throughput_percent, etc.)
-        chapter: Chapter identifier (e.g., "ch7") to enable chapter-specific metrics (default: None)
+        chapter: Chapter identifier (e.g., "ch07") to enable chapter-specific metrics (default: None)
     
     Returns:
         ComprehensiveComparison with all metric comparisons
@@ -1083,7 +1083,7 @@ def compare_and_display_all_metrics(
         format_style: Output format - "table", "summary", or "both" (default: "table")
         show_only_significant: If True, only show metrics with significant changes (default: False)
         include_raw_metrics: If True, include raw profiler metrics (default: False)
-        chapter: Chapter identifier (e.g., "ch7") to enable chapter-specific metrics (default: None)
+        chapter: Chapter identifier (e.g., "ch07") to enable chapter-specific metrics (default: None)
         
     Returns:
         ComprehensiveComparison object
@@ -1096,7 +1096,7 @@ def compare_and_display_all_metrics(
         ...     name="My Benchmark",
         ...     format_style="both",
         ...     include_raw_metrics=True,
-        ...     chapter="ch7"
+        ...     chapter="ch07"
         ... )
     """
     # Perform comprehensive comparison

@@ -44,12 +44,12 @@ def example_with_raw_metrics(baseline_result, optimized_result):
 def example_with_chapter_config(baseline_result, optimized_result):
     """Example: Use chapter-specific metrics from performance_targets.py."""
     
-    # Enable chapter-specific metrics (e.g., ch7 for memory access patterns)
+    # Enable chapter-specific metrics (e.g., ch07 for memory access patterns)
     comprehensive = compare_and_display_all_metrics(
         baseline_result=baseline_result,
         optimized_result=optimized_result,
         name="My Benchmark",
-        chapter="ch7"  # Loads metrics from performance_targets.py for ch7
+        chapter="ch07"  # Loads metrics from performance_targets.py for ch07
     )
     
     return comprehensive

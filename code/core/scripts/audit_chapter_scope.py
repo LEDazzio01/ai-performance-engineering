@@ -15,12 +15,12 @@ USAGE:
 
 EXAMPLE OUTPUT:
     Chapter 1 Violations:
-      ch1/optimized_foo.py:
+      ch01/optimized_foo.py:
         Line 45: Uses CUDA graphs (introduced in Ch12)
 
 NOTES:
     - cudaEvent* patterns are ALLOWED everywhere (basic timing, not concurrency)
-    - Triton is allowed in ch7+ when used for TMA demonstrations
+    - Triton is allowed in ch07+ when used for TMA demonstrations
     - Forward references to future chapters are allowed with comments
 """
 
@@ -261,7 +261,7 @@ class AuditResult:
 
 
 def get_chapter_from_path(path: Path) -> Optional[int]:
-    """Extract chapter number from path like 'ch1/foo.py'."""
+    """Extract chapter number from path like 'ch01/foo.py'."""
     match = re.match(r'ch(\d+)', path.parts[0] if path.parts else "")
     if match:
         return int(match.group(1))

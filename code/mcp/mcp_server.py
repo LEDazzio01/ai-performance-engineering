@@ -23,12 +23,12 @@ Architecture:
       Profiling: aisp_profile_flame, aisp_profile_memory, aisp_profile_kernels, aisp_profile_roofline, aisp_profile_nsys, aisp_profile_ncu, aisp_nsys_summary
       Context helpers: aisp_context_summary, aisp_context_full
       Status: aisp_status
-      Tests: aisp_test_speed, aisp_test_network
+      Hardware: aisp_hw_speed, aisp_hw_network, aisp_hw_disk, aisp_hw_pcie, aisp_hw_cache, aisp_hw_tc, aisp_hw_sfu, aisp_hw_tcp
       HuggingFace: aisp_hf_search, aisp_hf_trending
       Cluster/Cost: aisp_cluster_slurm, aisp_cost_estimate
       Benchmark: aisp_run_benchmarks, aisp_verify_benchmarks, aisp_benchmark_targets, aisp_available_benchmarks
       Nsight: aisp_profile_nsys, aisp_profile_ncu, aisp_nsys_summary, aisp_compare_nsys, aisp_compare_ncu, aisp_profile_compare
-      Hardware benchmarks: aisp_test_disk, aisp_test_pcie, aisp_test_mem_hierarchy, aisp_test_tensor_core, aisp_test_sfu, aisp_test_network_loopback
+      Info: aisp_info_features, aisp_info_network
       Exports: aisp_export_csv, aisp_export_pdf, aisp_export_html
       System/Analysis: aisp_system_capabilities, aisp_full_system_analysis, aisp_nsys_ncu_available
 """
@@ -45,7 +45,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, NotRequired
 
 # Ensure repository root is on sys.path for imports (e.g., analysis.advanced_analysis)
 CODE_ROOT = Path(__file__).resolve().parent.parent
@@ -66,6 +66,80 @@ class ToolResult:
     """MCP Tool result."""
     content: List[Dict[str, Any]]
     is_error: bool = False
+
+
+# =============================================================================
+# RESULT TYPE DEFINITIONS (TypedDict for type safety)
+# =============================================================================
+
+class ToolResultBase(TypedDict, total=False):
+    """Base shape for all tool results."""
+    success: bool
+    error: NotRequired[str]
+    context: NotRequired[Dict[str, Any]]
+    context_error: NotRequired[str]
+
+
+class BenchmarkExportResult(ToolResultBase):
+    """Result shape for benchmark export operations."""
+    output: str
+    format: str
+    benchmarks_written: int
+
+
+class JobStatusResult(ToolResultBase):
+    """Result shape for job status queries."""
+    job_id: str
+    status: str
+    tool: NotRequired[str]
+    submitted_at: NotRequired[float]
+    finished_at: NotRequired[float]
+    duration_ms: NotRequired[int]
+    result: NotRequired[Any]
+    note: NotRequired[str]
+
+
+class SuggestionResult(ToolResultBase):
+    """Result shape for tool suggestions."""
+    suggestions: List[Dict[str, Any]]
+    count: int
+
+
+class ContextResult(ToolResultBase):
+    """Result shape for context provider tools."""
+    context: Dict[str, Any]
+
+
+# =============================================================================
+# CONTEXT PARAMS SCHEMA (DRY helper for tool definitions)
+# =============================================================================
+
+_CONTEXT_PARAMS_SCHEMA: Dict[str, Any] = {
+    "include_context": {
+        "type": "boolean",
+        "description": "Include full system context in the response",
+        "default": False
+    },
+    "context_level": {
+        "type": "string",
+        "description": "Context level: summary or full",
+        "enum": ["summary", "full"],
+        "default": "summary"
+    }
+}
+
+
+def with_context_params(props: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge tool-specific properties with standard context params."""
+    return {**props, **_CONTEXT_PARAMS_SCHEMA}
+
+
+def extract_context_opts(params: Dict[str, Any]) -> Tuple[bool, str]:
+    """Extract include_context and context_level from params."""
+    return (
+        bool(params.get("include_context", False)),
+        params.get("context_level", "summary")
+    )
 
 
 # =============================================================================
@@ -90,12 +164,12 @@ _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_compare_nsys": "Parses Nsight Systems reports and may traverse multiple files; allow extra runtime.",
     "aisp_compare_ncu": "Parses Nsight Compute reports and may traverse multiple files; allow extra runtime.",
     "aisp_profile_compare": "Generates flame graph comparison; parses NSYS reports and may traverse multiple files; allow extra runtime.",
-    "aisp_test_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_disk": "Runs disk I/O hardware benchmark; writes temporary files to tmp_dir. Supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_pcie": "Runs PCIe hardware benchmark; exercises host↔GPU transfers. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_mem_hierarchy": "Runs memory hierarchy hardware benchmark; exercises GPU memory. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    "aisp_test_tensor_core": "Runs tensor core hardware benchmark; exercises GPU math units. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_hw_speed": "Runs GPU/host micro-benchmarks; stresses hardware briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_hw_roofline": "Runs roofline micro-benchmark; stresses memory subsystem briefly. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_hw_disk": "Runs disk I/O hardware benchmark; writes temporary files to tmp_dir. Supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_hw_pcie": "Runs PCIe hardware benchmark; exercises host↔GPU transfers. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_hw_cache": "Runs memory hierarchy hardware benchmark; exercises GPU cache. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_hw_tc": "Runs tensor core hardware benchmark; exercises GPU math units. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
 }
 
 def _property_implies_output(prop: str) -> bool:
@@ -165,8 +239,8 @@ def _expectations_from_name_and_schema(name: str, schema: Optional[Dict[str, Any
         notes.append("Runs benchmarks; can be long-running and GPU-intensive.")
     elif "profile" in name_key:
         notes.append("Runs profiling; may be slower and produce trace files.")
-    elif name_key.startswith("aisp_test_"):
-        notes.append("Runs micro-benchmarks; may briefly stress hardware.")
+    elif name_key.startswith("aisp_hw_") or name_key.startswith("aisp_test_"):
+        notes.append("Runs hardware benchmarks; may briefly stress hardware.")
     else:
         notes.append("Typically fast, read-only snapshot.")
 
@@ -227,7 +301,8 @@ def register_tool(name: str, description: str, schema: Dict[str, Any] = None):
             try:
                 return func(call_params)
             except Exception as exc:  # pragma: no cover - defensive
-                return {"error": str(exc)}
+                # Return normalized error with success=False for consistency
+                return {"error": str(exc), "success": False}
 
         HANDLERS[name] = wrapper
         return func
@@ -311,7 +386,96 @@ def attach_context_if_requested(result: Any, include_context: bool, context_leve
     return {"result": result, "context": context}
 
 
+def make_error(
+    msg: str,
+    include_context: bool = False,
+    context_level: str = "summary",
+    **extra: Any
+) -> Dict[str, Any]:
+    """Build standardized error response with optional context attachment.
+    
+    Args:
+        msg: The error message.
+        include_context: Whether to attach system context.
+        context_level: Level of context to attach ("summary" or "full").
+        **extra: Additional fields to include in the error response.
+    
+    Returns:
+        A normalized error dict with success=False and optional context.
+    """
+    result: Dict[str, Any] = {"error": msg, "success": False, **extra}
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+def ensure_result(
+    result: Dict[str, Any],
+    include_context: bool,
+    context_level: str
+) -> Dict[str, Any]:
+    """Normalize result and optionally attach context - single exit point for handlers.
+    
+    Args:
+        result: The raw result dict from a tool handler.
+        include_context: Whether to attach system context.
+        context_level: Level of context to attach.
+    
+    Returns:
+        Normalized result with success flag and optional context.
+    """
+    normalized = dict(result)
+    if "success" not in normalized:
+        normalized["success"] = not bool(normalized.get("error"))
+    return attach_context_if_requested(normalized, include_context, context_level)
+
+
 _BENCH_CLI_TIMEOUT = 900  # generous default; keeps CLI invocations from hanging forever
+
+
+def _run_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT) -> Dict[str, Any]:
+    """Invoke aisp CLI directly (without bench prefix) and return stdout/stderr/exit code."""
+    cmd = [sys.executable, "-m", "cli.aisp", *args]
+    env = _subprocess_env()
+    started_at = time.time()
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=None if timeout is None or timeout <= 0 else timeout,
+            env=env,
+        )
+        result = {
+            "command": " ".join(cmd),
+            "returncode": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "timeout_seconds": timeout if timeout and timeout > 0 else None,
+            "timeout_hit": False,
+            "duration_seconds": round(time.time() - started_at, 2),
+        }
+        return result
+    except subprocess.TimeoutExpired as te:
+        return {
+            "command": " ".join(cmd),
+            "returncode": -1,
+            "stdout": te.stdout.decode() if te.stdout else "",
+            "stderr": te.stderr.decode() if te.stderr else "",
+            "timeout_seconds": timeout,
+            "timeout_hit": True,
+            "duration_seconds": round(time.time() - started_at, 2),
+            "error": f"Timed out after {timeout}s",
+        }
+    except Exception as exc:
+        return {
+            "command": " ".join(cmd),
+            "returncode": -1,
+            "stdout": "",
+            "stderr": str(exc),
+            "timeout_seconds": timeout if timeout and timeout > 0 else None,
+            "timeout_hit": False,
+            "duration_seconds": round(time.time() - started_at, 2),
+            "error": str(exc),
+        }
 
 
 def _run_bench_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT) -> Dict[str, Any]:
@@ -444,6 +608,16 @@ def _looks_like_error(result: Any, had_exception: bool = False) -> bool:
         if result.get("success") is False:
             return True
     return False
+
+
+def _normalize_result(result: Any) -> Any:
+    """Ensure results consistently expose a success flag when possible."""
+    if isinstance(result, dict):
+        normalized = dict(result)
+        if "success" not in normalized:
+            normalized["success"] = not bool(normalized.get("error"))
+        return normalized
+    return result
 
 
 _JOB_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("AISP_MCP_JOB_WORKERS", "4") or "4"))
@@ -582,49 +756,57 @@ def _content_from_payload(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
 @register_tool(
     "aisp_gpu_info",
     "Tags: gpu, info, snapshot. Get detailed GPU information including name, memory, temperature, power usage. Use for quick hardware sanity checks before tuning. Example: \"Show GPU names, memory, temps before profiling.\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_gpu_info(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get GPU information."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().gpu.info()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().gpu.info()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_gpu_bandwidth",
     "Tags: bandwidth, memory, nvlink. Run GPU memory bandwidth test to measure actual vs theoretical bandwidth. Use when validating memory throughput or PCIe/NVLink issues. Example: \"Check H100 bandwidth vs spec\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_gpu_bandwidth(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run GPU bandwidth test."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().gpu.bandwidth_test()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().gpu.bandwidth_test()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_gpu_topology",
     "Tags: topology, nvlink, pcie, multi-gpu. Get multi-GPU topology showing NVLink/PCIe connections. Use when planning parallelism or debugging P2P issues. Example: \"Show NVLink/PCIe layout on 8x GPU server\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_gpu_topology(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get GPU topology."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().gpu.topology()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().gpu.topology()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_gpu_power",
     "Tags: power, thermal, headroom. Get current GPU power consumption and limits. Use when checking throttling or headroom. Example: \"Are GPUs power-throttling right now?\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_gpu_power(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get GPU power info."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().analyze.power()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.power()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 # =============================================================================
@@ -634,38 +816,44 @@ def tool_gpu_power(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_system_software",
     "Tags: software, versions, pytorch, cuda. Get software stack info: PyTorch version, CUDA version, Python version, installed libraries. Use when confirming versions for repros or support tickets. Example: \"What PyTorch and CUDA versions are installed?\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_system_software(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get software information."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().system.software()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().system.software()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_system_dependencies",
     "Tags: deps, health, missing libs. Check health of installed ML/AI dependencies. Use when diagnosing missing/broken deps or install issues. Example: \"Why does torch.cuda fail to import?\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_system_dependencies(params: Dict[str, Any]) -> Dict[str, Any]:
     """Check dependency health."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().system.dependencies()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().system.dependencies()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_gpu_topology_matrix",
     "Tags: topology, nvlink, pcie. Get GPU/NUMA topology matrix (nvidia-smi topo -m).",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
     try:
         proc = subprocess.run(["nvidia-smi", "topo", "-m"], capture_output=True, text=True, timeout=5)
-        return {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        result = {"returncode": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+        return attach_context_if_requested(result, include_context, context_level)
     except Exception as exc:
-        return {"error": str(exc)}
+        return make_error(str(exc), include_context, context_level)
 
 
 # =============================================================================
@@ -677,7 +865,7 @@ def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
     "Tags: benchmarks, run, profiling. Run benchmarks via the bench CLI with optional profiling/LLM analysis. Slow/interactive; run aisp_status or aisp_triage first. Supports precheck_only/dry_run/timeout_seconds to avoid kicking off long runs by default. Example: \"Run standard benchmarks and include profiling.\"",
     {
         "type": "object",
-        "properties": {
+        "properties": with_context_params({
             "targets": {"type": "array", "items": {"type": "string"}},
             "profile": {"type": "string"},
             "llm_analysis": {"type": "boolean"},
@@ -697,18 +885,7 @@ def tool_gpu_topology_matrix(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Max runtime before returning with partial output; set 0/null for no timeout",
                 "default": 900
             },
-            "include_context": {
-                "type": "boolean",
-                "description": "Include full system context in the response",
-                "default": False
-            },
-            "context_level": {
-                "type": "string",
-                "description": "Context level: summary or full",
-                "enum": ["summary", "full"],
-                "default": "summary"
-            }
-        },
+        }),
         "required": ["targets"],
     },
 )
@@ -721,8 +898,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     cuda_check = _cuda_precheck()
 
     args: List[str] = ["run", "--profile", profile]
@@ -766,7 +942,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     "Tags: benchmarks, verify. Verify benchmarks via the bench CLI. Slow/interactive; run aisp_status or aisp_triage first. Supports precheck_only/dry_run/timeout_seconds to avoid surprise execution. Example: \"Validate previous benchmark runs.\"",
     {
         "type": "object",
-        "properties": {
+        "properties": with_context_params({
             "targets": {"type": "array", "items": {"type": "string"}},
             "precheck_only": {
                 "type": "boolean",
@@ -783,18 +959,7 @@ def tool_run_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
                 "description": "Max runtime before returning partial output; set 0/null for no timeout",
                 "default": 900
             },
-            "include_context": {
-                "type": "boolean",
-                "description": "Include full system context in the response",
-                "default": False
-            },
-            "context_level": {
-                "type": "string",
-                "description": "Context level: summary or full",
-                "enum": ["summary", "full"],
-                "default": "summary"
-            }
-        },
+        }),
     },
 )
 def tool_verify_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -805,8 +970,7 @@ def tool_verify_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
     cuda_check = _cuda_precheck()
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     for t in targets:
         args.extend(["-t", t])
     if precheck_only:
@@ -840,81 +1004,92 @@ def tool_verify_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_system_context",
     "Tags: context, environment, inventory. Get full system context for AI analysis (GPU + software + capabilities). Use for comprehensive environment dumps. Example: \"Provide full context for LLM analysis.\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
-def tool_system_context(params: Dict[str, Any]) -> Dict[str, Any]:
+def tool_system_context(params: Dict[str, Any]) -> ContextResult:
     """Get full system context."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().system.context()
+    include_context, context_level = extract_context_opts(params)
+    result: ContextResult = {"success": True, "context": get_engine().system.context()}
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_system_capabilities",
     "Get hardware capabilities summary. Use when checking supported features.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_system_capabilities(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get hardware capabilities."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().system.capabilities()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().system.capabilities()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_available_benchmarks",
     "List available benchmarks. Use before running benchmarks.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_available_benchmarks(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get available benchmarks."""
     from core.perf_core import get_core
     from core.engine import get_engine
-    return get_engine().system.available()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().system.available()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_benchmark_targets",
     "List available benchmark targets with chapter:example format (same as bench list-targets).",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "chapter": {"type": "string", "description": "Optional chapter or lab slug"},
-    }}
+    })}
 )
 def tool_benchmark_targets(params: Dict[str, Any]) -> Dict[str, Any]:
     """List benchmark targets."""
+    include_context, context_level = extract_context_opts(params)
     args: List[str] = ["list-targets"]
     chapter = params.get("chapter")
     if chapter:
         args.extend(["--chapter", chapter])
-    return _run_bench_cli(args)
+    result = _run_bench_cli(args)
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_list_chapters",
     "List all discoverable chapters and labs (bench list-chapters).",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_list_chapters(params: Dict[str, Any]) -> Dict[str, Any]:
-    return _run_bench_cli(["list-chapters"])
+    include_context, context_level = extract_context_opts(params)
+    result = _run_bench_cli(["list-chapters"])
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_benchmark_report",
     "Generate PDF/HTML report from benchmark results via bench report. Expects benchmark_test_results.json; outputs default to artifacts/ if not provided.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "data_file": {"type": "string", "description": "Path/URL to benchmark_test_results.json"},
         "output": {"type": "string", "description": "Output file (.pdf or .html)", "default": "report.pdf"},
         "format": {"type": "string", "description": "pdf or html", "default": "pdf"},
         "title": {"type": "string", "description": "Report title"},
         "author": {"type": "string", "description": "Report author"},
-    }}
+    })}
 )
 def tool_benchmark_report(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
     args = ["report"]
     data_file = params.get("data_file")
     if data_file:
         if not Path(data_file).exists():
-            return {"error": f"data_file not found: {data_file}", "data_file": data_file}
+            return make_error(f"data_file not found: {data_file}", include_context, context_level, data_file=data_file)
         args.extend(["--data-file", data_file])
     if params.get("output"):
         args.extend(["--output", params["output"]])
@@ -928,33 +1103,38 @@ def tool_benchmark_report(params: Dict[str, Any]) -> Dict[str, Any]:
         args.extend(["--title", params["title"]])
     if params.get("author"):
         args.extend(["--author", params["author"]])
-    return _run_bench_cli(args)
+    result = _run_bench_cli(args)
+    if isinstance(result, dict) and "success" not in result:
+        returncode = result.get("returncode", 0)
+        result["success"] = returncode == 0 and not result.get("error")
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_benchmark_export",
     "Export benchmark results to csv/markdown/json via bench export. Expects benchmark_test_results.json; outputs default to artifacts/ if not provided.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "data_file": {"type": "string", "description": "Path to benchmark_test_results.json"},
         "format": {"type": "string", "description": "csv|markdown|json", "default": "csv"},
         "output": {"type": "string", "description": "Output file path"},
-    }}
+    })}
 )
-def tool_benchmark_export(params: Dict[str, Any]) -> Dict[str, Any]:
+def tool_benchmark_export(params: Dict[str, Any]) -> BenchmarkExportResult:
     """Export benchmark results without spawning the bench CLI."""
     from core.analysis.performance_analyzer import PerformanceAnalyzer, load_benchmark_data
 
+    include_context, context_level = extract_context_opts(params)
     fmt = (params.get("format") or "csv").strip().lower()
     data_file = params.get("data_file")
     output = params.get("output")
 
     valid_formats = {"csv", "markdown", "json"}
     if fmt not in valid_formats:
-        return {"error": f"format must be one of {sorted(valid_formats)}"}
+        return make_error(f"format must be one of {sorted(valid_formats)}", include_context, context_level)
 
     data_path = Path(data_file) if data_file else None
     if data_path and not data_path.exists():
-        return {"error": f"data_file not found: {data_path}", "data_file": str(data_path)}
+        return make_error(f"data_file not found: {data_path}", include_context, context_level, data_file=str(data_path))
     output_path = Path(output) if output else Path(f"benchmark_export.{fmt}")
     _ensure_dir(output_path)
 
@@ -988,33 +1168,36 @@ def tool_benchmark_export(params: Dict[str, Any]) -> Dict[str, Any]:
                         ]
                     )
     except Exception as exc:
-        return {"error": f"failed to export benchmarks: {exc}", "output": str(output_path)}
+        return make_error(f"failed to export benchmarks: {exc}", include_context, context_level, output=str(output_path))
 
-    return {
+    result: BenchmarkExportResult = {
         "output": str(output_path),
         "format": fmt,
         "benchmarks_written": len(benchmarks),
+        "success": True,
     }
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_benchmark_compare_runs",
     "Diff two benchmark JSON files and show speedup deltas (bench compare-runs).",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "baseline": {"type": "string", "description": "Baseline benchmark_test_results.json"},
         "candidate": {"type": "string", "description": "Candidate benchmark_test_results.json"},
         "top": {"type": "integer", "description": "Top regressions/improvements", "default": 10},
-    }, "required": ["baseline", "candidate"]}
+    }), "required": ["baseline", "candidate"]}
 )
 def tool_benchmark_compare_runs(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
     baseline = params.get("baseline")
     candidate = params.get("candidate")
     if not baseline or not candidate:
-        return {"error": "baseline and candidate benchmark files are required"}
+        return make_error("baseline and candidate benchmark files are required", include_context, context_level)
     if baseline and not Path(baseline).exists():
-        return {"error": f"baseline file not found: {baseline}", "baseline": baseline}
+        return make_error(f"baseline file not found: {baseline}", include_context, context_level, baseline=baseline)
     if candidate and not Path(candidate).exists():
-        return {"error": f"candidate file not found: {candidate}", "candidate": candidate}
+        return make_error(f"candidate file not found: {candidate}", include_context, context_level, candidate=candidate)
 
     args = [
         "compare-runs",
@@ -1022,22 +1205,28 @@ def tool_benchmark_compare_runs(params: Dict[str, Any]) -> Dict[str, Any]:
         "--candidate", candidate,
         "--top", str(params.get("top", 10)),
     ]
-    return _run_bench_cli(args)
+    result = _run_bench_cli(args)
+    if isinstance(result, dict) and "success" not in result:
+        returncode = result.get("returncode", 0)
+        result["success"] = returncode == 0 and not result.get("error")
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_full_system_analysis",
     "Get complete system analysis (CPU/mem, system params, container limits, recs). Use for deep environment auditing.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_full_system_analysis(params: Dict[str, Any]) -> Dict[str, Any]:
     """Full system analysis bundle."""
+    include_context, context_level = extract_context_opts(params)
     try:
         from core import engine as core_engine
         handler = core_engine._get_handler()  # type: ignore
-        return handler.get_full_system_analysis()
+        result = handler.get_full_system_analysis()
+        return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
-        return {"error": f"full system analysis failed: {e}"}
+        return make_error(f"full system analysis failed: {e}", include_context, context_level)
 
 
 # =============================================================================
@@ -1047,7 +1236,7 @@ def tool_full_system_analysis(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_analyze_bottlenecks",
     "Tags: bottleneck, slow, latency, utilization. Identify performance bottlenecks in the current workload. Use when the workload is slow and you need likely bottleneck types. Example: \"Why is my 7B model slow on 8xH100 at batch 32, seq 4k?\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "analysis_type": {
             "type": "string",
             "description": "Type of analysis: bottleneck, memory, compute",
@@ -1059,26 +1248,14 @@ def tool_full_system_analysis(params: Dict[str, Any]) -> Dict[str, Any]:
             "enum": ["profile", "llm", "both"],
             "default": "both"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_analyze_bottlenecks(params: Dict[str, Any]) -> Dict[str, Any]:
     """Analyze bottlenecks."""
     from core.engine import get_engine
     analysis_type = params.get("analysis_type", "bottleneck")
     mode = params.get("mode", "both")
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().analyze.bottlenecks(
         "profile" if mode == "profile" else "llm" if mode == "llm" else analysis_type
     )
@@ -1107,25 +1284,12 @@ def tool_analyze_bottlenecks(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_analyze_pareto",
     "Tags: pareto, tradeoff, throughput, latency, memory. Find Pareto-optimal benchmarks balancing throughput, latency, and memory. Use when comparing configs or choosing a target operating point. Example: \"Show Pareto frontier for 7B on 4xA100.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_analyze_pareto(params: Dict[str, Any]) -> Dict[str, Any]:
     """Pareto analysis."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().analyze.pareto()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1133,25 +1297,12 @@ def tool_analyze_pareto(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_analyze_scaling",
     "Tags: scaling, throughput, gpus, nodes. Analyze how optimizations scale with workload size. Use when projecting performance to larger inputs or more GPUs. Example: \"Predict throughput if I double sequence length\" or \"scale from 4 to 8 GPUs.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_analyze_scaling(params: Dict[str, Any]) -> Dict[str, Any]:
     """Scaling analysis."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().analyze.scaling()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1159,25 +1310,12 @@ def tool_analyze_scaling(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_analyze_stacking",
     "Tags: stacking, combinations, techniques. Show which optimization techniques work well together. Use when composing multiple optimizations to avoid conflicts. Example: \"Can FlashAttention + torch.compile + CUDA graphs coexist?\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_analyze_stacking(params: Dict[str, Any]) -> Dict[str, Any]:
     """Stacking analysis."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().analyze.stacking()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1185,7 +1323,7 @@ def tool_analyze_stacking(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_analyze_whatif",
     "Tags: constraints, latency, vram, throughput. What-if analysis: Find optimizations that meet your constraints. Use when targeting latency/VRAM/throughput bounds. Example: \"Need <50ms latency with <24GB VRAM\" or \"Hit 2k tok/s without exceeding 32GB.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "max_vram_gb": {
             "type": "number",
             "description": "Maximum VRAM in GB"
@@ -1198,24 +1336,12 @@ def tool_analyze_stacking(params: Dict[str, Any]) -> Dict[str, Any]:
             "type": "number",
             "description": "Minimum throughput (tokens/sec or samples/sec)"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_analyze_whatif(params: Dict[str, Any]) -> Dict[str, Any]:
     """What-if analysis."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().analyze.whatif(params)
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1227,7 +1353,7 @@ def tool_analyze_whatif(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_recommend",
     "Tags: recommend, playbook, throughput, latency, memory. Get optimization recommendations for a model configuration. Use when you need a starting playbook given model size, GPUs, and goal. Example: \"Recommend for 13B on 4xA100 focused on throughput\" or \"Low-latency 7B on single H100\".",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model_size": {
             "type": "number",
             "description": "Model size in billions of parameters (e.g., 7, 13, 70)",
@@ -1243,24 +1369,12 @@ def tool_analyze_whatif(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Optimization goal: throughput, latency, or memory",
             "default": "throughput"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": []}
+    }), "required": []}
 )
 def tool_recommend(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get recommendations."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().optimize.recommend(
         model_size=params.get("model_size", 7),
         gpus=params.get("gpus", 1),
@@ -1272,25 +1386,12 @@ def tool_recommend(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_optimize_roi",
     "Tags: ROI, prioritize, cost-benefit. Calculate ROI (return on investment) of optimization techniques. Use when deciding which techniques to implement first. Example: \"Which optimizations give best ROI for my workload?\" or \"Rank techniques by cost vs gain.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_optimize_roi(params: Dict[str, Any]) -> Dict[str, Any]:
     """Calculate optimization ROI."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().optimize.roi()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1298,25 +1399,12 @@ def tool_optimize_roi(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_optimize_techniques",
     "Tags: techniques, list, options. Get list of all available optimization techniques with details. Use when exploring the option space. Example: \"List all optimization techniques you know.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_optimize_techniques(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get all optimization techniques."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().optimize.all_techniques()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1328,7 +1416,7 @@ def tool_optimize_techniques(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_distributed_plan",
     "Tags: distributed, dp, tp, pp, fsdp. Plan parallelism strategy for distributed training. Use when choosing DP/TP/PP/FSDP layouts for a model size and GPU count. Example: \"Plan 70B on 2 nodes x 8 GPUs\" or \"Pick TP/PP for 14B on 4 GPUs.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model_size": {
             "type": "number",
             "description": "Model size in billions of parameters",
@@ -1344,24 +1432,12 @@ def tool_optimize_techniques(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Number of nodes",
             "default": 1
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_distributed_plan(params: Dict[str, Any]) -> Dict[str, Any]:
     """Plan parallelism."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().distributed.plan(
         model_size=params.get("model_size", 7),
         gpus=params.get("gpus", 8),
@@ -1373,27 +1449,15 @@ def tool_distributed_plan(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_distributed_nccl",
     "Tags: nccl, multi-node, collective. Get NCCL tuning recommendations for distributed training. Use when tuning NCCL env vars for multi-node runs. Example: \"NCCL settings for 2-node 8xH100\".",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "nodes": {"type": "integer", "default": 1},
         "gpus": {"type": "integer", "default": 8},
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_distributed_nccl(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get NCCL tuning."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().distributed.nccl(
         nodes=params.get("nodes", 1),
         gpus=params.get("gpus", 8)
@@ -1408,7 +1472,7 @@ def tool_distributed_nccl(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_inference_vllm",
     "Tags: vllm, inference, serving. Generate vLLM configuration for inference optimization. Use when configuring vLLM for throughput or latency goals. Example: \"vLLM settings for 7B low latency on A100\".",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model": {
             "type": "string",
             "description": "Model name or size (e.g., 'llama-7b', '70b')",
@@ -1419,24 +1483,12 @@ def tool_distributed_nccl(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Optimization target: throughput or latency",
             "default": "throughput"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_inference_vllm(params: Dict[str, Any]) -> Dict[str, Any]:
     """Generate vLLM config."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().inference.vllm_config(
         model=params.get("model", "7b"),
         target=params.get("target", "throughput")
@@ -1447,29 +1499,17 @@ def tool_inference_vllm(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_inference_quantization",
     "Tags: quantization, fp8, int8, int4. Get quantization recommendations (FP8, INT8, INT4) for a model. Use when selecting precision for inference. Example: \"Should I use FP8 or INT8 for 70B inference?\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model_size": {
             "type": "number",
             "description": "Model size in billions of parameters"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_inference_quantization(params: Dict[str, Any]) -> Dict[str, Any]:
     """Quantization recommendations."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().inference.quantization(params)
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1481,30 +1521,18 @@ def tool_inference_quantization(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_ask",
     "Tags: question, advice, why slow. Ask a performance optimization question. Returns answer with book citations from the AI Performance Engineering book. Use when you want targeted guidance. Example: \"Is Flash Attention worth it on Llama-2 7B?\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "question": {
             "type": "string",
             "description": "Your performance question (e.g., 'Why is my attention kernel slow?')"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["question"]}
+    }), "required": ["question"]}
 )
 def tool_ask(params: Dict[str, Any]) -> Dict[str, Any]:
     """Ask a performance question."""
     from core.engine import get_engine
     question = params.get("question", "")
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().ai.ask(question)
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1512,30 +1540,18 @@ def tool_ask(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_explain",
     "Tags: explain, concept, definition. Explain a GPU/AI performance concept with book citations (e.g., 'flash-attention', 'tensor parallelism'). Use when clarifying a concept. Example: \"Explain tensor parallelism vs pipeline parallelism.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "concept": {
             "type": "string",
             "description": "The concept to explain"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["concept"]}
+    }), "required": ["concept"]}
 )
 def tool_explain(params: Dict[str, Any]) -> Dict[str, Any]:
     """Explain a concept."""
     from core.engine import get_engine
     concept = params.get("concept", "")
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().ai.explain(concept)
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1543,25 +1559,12 @@ def tool_explain(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_ai_status",
     "Check AI/LLM backend availability and configuration. Use when verifying LLM connectivity before issuing AI queries. Example: \"Is the LLM backend reachable right now?\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_ai_status(params: Dict[str, Any]) -> Dict[str, Any]:
     """Check AI status."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().ai.status()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1573,25 +1576,12 @@ def tool_ai_status(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_flame",
     "Tags: profile, flame, hotspots. Get flame graph data for visualizing execution time breakdown. Use when you need to see time hotspots. Example: \"Show flame graph for my training loop.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_profile_flame(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get flame graph."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().profile.flame_graph()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1599,25 +1589,12 @@ def tool_profile_flame(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_memory",
     "Tags: memory, timeline, spikes, leaks. Get memory allocation timeline showing memory usage over time. Use when tracking memory spikes or leaks. Example: \"Graph VRAM over time during batch 32 run.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_profile_memory(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get memory timeline."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().profile.memory_timeline()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1625,25 +1602,12 @@ def tool_profile_memory(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_kernels",
     "Tags: kernel, cuda, hotspots. Get kernel execution breakdown showing CUDA kernel times. Use when analyzing CUDA hotspots. Example: \"Which CUDA kernels are slow in this profile?\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_profile_kernels(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get kernel breakdown."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().profile.kernel_breakdown()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1651,25 +1615,12 @@ def tool_profile_kernels(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_roofline",
     "Tags: roofline, compute-bound, memory-bound. Get roofline model data for analyzing compute vs memory bound. Use when checking if kernels are compute- or memory-bound. Example: \"Are my kernels memory-bound?\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_profile_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get roofline data."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().profile.roofline()
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -1677,23 +1628,12 @@ def tool_profile_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_compare_nsys",
     "Compare baseline vs optimized Nsight Systems reports in a directory. Expects a directory containing baseline/optimized .nsys-rep files.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "profiles_dir": {
             "type": "string",
             "description": "Directory containing baseline/optimized *.nsys-rep"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["profiles_dir"]}
+    }), "required": ["profiles_dir"]}
 )
 def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     """Compare Nsight Systems profiles."""
@@ -1701,38 +1641,26 @@ def tool_compare_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     from core import profile_insights
 
     profiles_dir = Path(params.get("profiles_dir"))
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
 
     if not profiles_dir.exists():
-        return {"error": f"profiles_dir not found: {profiles_dir}", "profiles_dir": str(profiles_dir)}
+        return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level, profiles_dir=str(profiles_dir))
 
     result = profile_insights.compare_nsys_files(profiles_dir)
     if result is None:
-        result = {"error": "No comparable nsys files found"}
+        result = {"error": "No comparable nsys files found", "success": False}
     return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_compare_ncu",
     "Compare baseline vs optimized Nsight Compute reports in a directory. Expects a directory containing baseline/optimized .ncu-rep files.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "profiles_dir": {
             "type": "string",
             "description": "Directory containing baseline/optimized *.ncu-rep"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["profiles_dir"]}
+    }), "required": ["profiles_dir"]}
 )
 def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     """Compare Nsight Compute profiles."""
@@ -1740,22 +1668,21 @@ def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     from core import profile_insights
 
     profiles_dir = Path(params.get("profiles_dir"))
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
 
     if not profiles_dir.exists():
-        return {"error": f"profiles_dir not found: {profiles_dir}", "profiles_dir": str(profiles_dir)}
+        return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level, profiles_dir=str(profiles_dir))
 
     result = profile_insights.compare_ncu_files(profiles_dir)
     if result is None:
-        result = {"error": "No comparable ncu files found"}
+        result = {"error": "No comparable ncu files found", "success": False}
     return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_profile_compare",
     "Tags: compare, flamegraph, baseline, optimized, speedup. Generate flame graph comparison between baseline and optimized profiles showing CUDA API distribution, kernel breakdown, and speedup metrics. Use for understanding WHY optimized code is faster. Example: \"Compare baseline vs optimized streams profiles\".",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "chapter": {
             "type": "string",
             "description": "Chapter name or profile directory name (e.g., 'ch11-streams-comparison', 'ch11')"
@@ -1769,18 +1696,7 @@ def tool_compare_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Path to write HTML flame graph comparison (optional)",
             "default": None
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     """Generate flame graph comparison between baseline and optimized profiles."""
@@ -1791,8 +1707,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
     chapter = params.get("chapter")
     profiles_dir_param = params.get("profiles_dir")
     output_html = params.get("output_html")
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     
     # Resolve the profile directory
     if profiles_dir_param:
@@ -1816,7 +1731,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
         }
     
     if not profiles_dir or not profiles_dir.exists():
-        return {"error": f"profiles_dir not found: {profiles_dir}"}
+        return make_error(f"profiles_dir not found: {profiles_dir}", include_context, context_level)
     
     result = profile_insights.generate_flamegraph_comparison(profiles_dir)
     if result is None:
@@ -1846,7 +1761,7 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_nsys",
     "Run Nsight Systems on a command. Slow/interactive; run aisp_status or aisp_triage first. Default preset is full; set preset=light explicitly to shrink traces. Supports precheck_only/dry_run/timeout_seconds/queue_only so you can opt in before firing a capture. Example: \"Profile python train.py with nsys\". Command is an argv list; output_dir defaults to artifacts/mcp-profiles.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "command": {
             "type": "array",
             "items": {"type": "string"},
@@ -1898,27 +1813,17 @@ def tool_profile_compare(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 300
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["command"]}
+    }), "required": ["command"]}
 )
 def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run Nsight Systems profiling for an arbitrary command."""
     from pathlib import Path
     from core.profiling.nsight_automation import NsightAutomation
 
+    include_context, context_level = extract_context_opts(params)
     command = params.get("command") or []
     if not command:
-        return {"error": "command is required"}
+        return make_error("command is required", include_context, context_level)
 
     output_name = params.get("output_name", "mcp_nsys")
     output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles"))
@@ -1934,8 +1839,6 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
     queue_only = bool(params.get("queue_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
-    include_context = bool(params.get("include_context", True))
-    context_level = params.get("context_level", "summary")
 
     automation = NsightAutomation(output_dir)
     cuda_check = _cuda_precheck()
@@ -1955,11 +1858,11 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     if not precheck["command_provided"]:
-        return {"error": "command is required", **precheck}
+        return make_error("command is required", include_context, context_level, **precheck)
     if not automation.nsys_available:
-        return {"error": "nsys is not installed or not on PATH", **precheck}
+        return make_error("nsys is not installed or not on PATH", include_context, context_level, **precheck)
     if not cuda_check.get("ok", True):
-        return {"error": cuda_check.get("reason", "CUDA not available"), **precheck}
+        return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, **precheck)
 
     output_path = output_dir / f"{output_name}.nsys-rep"
     if dry_run:
@@ -2021,7 +1924,7 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_ncu",
     "Run Nsight Compute on a command. Slow/interactive; run aisp_status or aisp_triage first. Defaults to lightest metric set; opt into heavier modes explicitly. Supports precheck_only/dry_run/timeout_seconds/queue_only so you can opt in before firing a capture. Example: \"Profile python train.py with ncu\". Command is an argv list; output_dir defaults to artifacts/mcp-profiles.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "command": {
             "type": "array",
             "items": {"type": "string"},
@@ -2071,39 +1974,28 @@ def tool_profile_nsys(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 300
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["command"]}
+    }), "required": ["command"]}
 )
 def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run Nsight Compute profiling for an arbitrary command."""
     from pathlib import Path
     from core.profiling.nsight_automation import NsightAutomation
 
+    include_context, context_level = extract_context_opts(params)
     command = params.get("command") or []
     if not command:
-        return {"error": "command is required"}
+        return make_error("command is required", include_context, context_level)
 
     output_name = params.get("output_name", "mcp_ncu")
     output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles"))
     workload_type = params.get("workload_type", "memory_bound")
     kernel_filter = params.get("kernel_filter")
+    force_lineinfo = bool(params.get("force_lineinfo", True))
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     queue_only = bool(params.get("queue_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
-    include_context = bool(params.get("include_context", True))
-    context_level = params.get("context_level", "summary")
 
     automation = NsightAutomation(output_dir)
     cuda_check = _cuda_precheck()
@@ -2123,11 +2015,11 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     if not precheck["command_provided"]:
-        return {"error": "command is required", **precheck}
+        return make_error("command is required", include_context, context_level, **precheck)
     if not automation.ncu_available:
-        return {"error": "ncu is not installed or not on PATH", **precheck}
+        return make_error("ncu is not installed or not on PATH", include_context, context_level, **precheck)
     if not cuda_check.get("ok", True):
-        return {"error": cuda_check.get("reason", "CUDA not available"), **precheck}
+        return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, **precheck)
 
     output_path = output_dir / f"{output_name}.ncu-rep"
     if dry_run:
@@ -2179,7 +2071,7 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_torch",
     "Run PyTorch autograd/torch.profiler capture and emit a Chrome trace + summary. Requires torch installed. Defaults to NVTX + force_lineinfo for correlation with nsys.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "script": {"type": "string", "description": "Path to Python script to profile"},
         "script_args": {"type": "array", "items": {"type": "string"}, "description": "Args forwarded to the script"},
         "output_name": {"type": "string", "description": "Base name for the capture folder", "default": "mcp_torch"},
@@ -2192,18 +2084,17 @@ def tool_profile_ncu(params: Dict[str, Any]) -> Dict[str, Any]:
         "dry_run": {"type": "boolean", "description": "Describe the capture without executing (alias: estimate_only)", "default": False},
         "queue_only": {"type": "boolean", "description": "Return a job ticket and run capture in background; poll with aisp_job_status", "default": False},
         "timeout_seconds": {"type": "integer", "description": "Max runtime before returning partial output; set 0/null for no timeout", "default": 300},
-        "include_context": {"type": "boolean", "description": "Include full system context in the response", "default": True},
-        "context_level": {"type": "string", "enum": ["summary", "full"], "default": "summary"},
-    }, "required": ["script"]}
+    }), "required": ["script"]}
 )
 def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run torch.profiler for a Python script and return summary + trace paths."""
     from pathlib import Path
     from core.profiling.torch_profiler import TorchProfilerAutomation
 
+    include_context, context_level = extract_context_opts(params)
     script = params.get("script")
     if not script:
-        return {"error": "script is required"}
+        return make_error("script is required", include_context, context_level)
 
     script_path = Path(script)
     output_dir = Path(params.get("output_dir", "artifacts/mcp-profiles/torch"))
@@ -2221,8 +2112,6 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     queue_only = bool(params.get("queue_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
-    include_context = bool(params.get("include_context", True))
-    context_level = params.get("context_level", "summary")
 
     try:
         import torch  # noqa: F401
@@ -2246,7 +2135,7 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
     if precheck_only:
         return {"precheck_only": True, **precheck}
     if not script_path.exists():
-        return {"error": f"script not found: {script}", **precheck}
+        return make_error(f"script not found: {script}", include_context, context_level, **precheck)
     if dry_run:
         planned = output_dir / f"{output_name}_<timestamp>"
         return {
@@ -2287,7 +2176,7 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_profile_hta",
     "Run an Nsight Systems capture with HTA-friendly flags and analyze with HTAAnalyzer. Produces .nsys-rep, exported trace.json, and hta_report.json.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "command": {"type": "array", "items": {"type": "string"}, "description": "Command to profile (argv list)"},
         "output_name": {"type": "string", "description": "Base name for output files", "default": "mcp_hta"},
         "output_dir": {"type": "string", "description": "Directory for outputs (default: artifacts/hta)", "default": "artifacts/hta"},
@@ -2297,9 +2186,7 @@ def tool_profile_torch(params: Dict[str, Any]) -> Dict[str, Any]:
         "dry_run": {"type": "boolean", "description": "Describe the capture without executing", "default": False},
         "queue_only": {"type": "boolean", "description": "Run in background and return job_id", "default": False},
         "timeout_seconds": {"type": "integer", "description": "Max runtime before returning partial output; set 0/null for none", "default": 300},
-        "include_context": {"type": "boolean", "description": "Include full system context in the response", "default": True},
-        "context_level": {"type": "string", "enum": ["summary", "full"], "default": "summary"},
-    }, "required": ["command"]}
+    }), "required": ["command"]}
 )
 def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run nsys + HTA analysis."""
@@ -2308,11 +2195,12 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.profiling.hta_capture import HTACaptureAutomation
     from core.profiling.nsight_automation import NsightAutomation
 
+    include_context, context_level = extract_context_opts(params)
     command_list = params.get("command") or []
     if isinstance(command_list, str):
         command_list = shlex.split(command_list)
     if not command_list:
-        return {"error": "command is required"}
+        return make_error("command is required", include_context, context_level)
 
     output_dir = Path(params.get("output_dir", "artifacts/hta"))
     output_name = params.get("output_name", "mcp_hta")
@@ -2323,8 +2211,6 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     queue_only = bool(params.get("queue_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
-    include_context = bool(params.get("include_context", True))
-    context_level = params.get("context_level", "summary")
 
     nsight = NsightAutomation(output_dir)
     try:
@@ -2344,7 +2230,7 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
     if precheck_only:
         return {"precheck_only": True, **precheck}
     if not nsight.nsys_available:
-        return {"error": "nsys is not installed or not on PATH", **precheck}
+        return make_error("nsys is not installed or not on PATH", include_context, context_level, **precheck)
     if dry_run:
         base = output_dir / f"{output_name}.nsys-rep"
         return {
@@ -2380,44 +2266,32 @@ def tool_profile_hta(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_nsys_summary",
     "Summarize an existing Nsight Systems report (.nsys-rep or CSV). Expects report_path to an existing file you already captured.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "report_path": {
             "type": "string",
             "description": "Path to .nsys-rep or exported CSV"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }, "required": ["report_path"]}
+    }), "required": ["report_path"]}
 )
 def tool_nsys_summary(params: Dict[str, Any]) -> Dict[str, Any]:
     """Summarize an Nsight Systems report."""
     from pathlib import Path
     from core.profiling.extract_nsys_summary import harvest
 
+    include_context, context_level = extract_context_opts(params)
     report_path = params.get("report_path")
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
 
     if not report_path:
-        return {"error": "report_path is required"}
+        return make_error("report_path is required", include_context, context_level)
 
     path = Path(report_path)
     if not path.exists():
-        return {"error": f"report_path not found: {path}", "report_path": str(path)}
+        return make_error(f"report_path not found: {path}", include_context, context_level, report_path=str(path))
 
     try:
         metrics = harvest(path)
     except Exception as e:
-        return {"error": f"Failed to parse nsys report: {e}"}
+        return make_error(f"Failed to parse nsys report: {e}", include_context, context_level)
 
     result = {
         "report": str(path),
@@ -2430,47 +2304,37 @@ def tool_nsys_summary(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_nsys_ncu_available",
     "Check availability of Nsight Systems and Nsight Compute.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_nsys_ncu_available(params: Dict[str, Any]) -> Dict[str, Any]:
     """Check Nsight tool availability."""
     from core.profiling.nsight_automation import NsightAutomation
+    include_context, context_level = extract_context_opts(params)
     automation = NsightAutomation(Path("artifacts/mcp-profiles"))
-    return {
+    result = {
         "nsys_available": automation.nsys_available,
         "ncu_available": automation.ncu_available,
         "output_dir": str(automation.output_dir),
     }
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_export_csv",
     "Export benchmarks to CSV. Use to share results.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "detailed": {
             "type": "boolean",
             "description": "Use detailed CSV",
             "default": False
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_export_csv(params: Dict[str, Any]) -> Dict[str, Any]:
     """Export benchmarks to CSV."""
     from core.engine import get_engine
     detailed = bool(params.get("detailed", False))
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     export = get_engine().export.csv_detailed() if detailed else get_engine().export.csv()
     result = {"csv": export, "detailed": detailed}
     return attach_context_if_requested(result, include_context, context_level)
@@ -2479,25 +2343,12 @@ def tool_export_csv(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_export_pdf",
     "Export benchmarks to PDF report. Use for sharing summary reports.",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_export_pdf(params: Dict[str, Any]) -> Dict[str, Any]:
     """Export benchmarks to PDF."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     pdf_bytes = get_engine().export.pdf()
     result = {"pdf_base64": pdf_bytes if isinstance(pdf_bytes, str) else str(pdf_bytes)}
     return attach_context_if_requested(result, include_context, context_level)
@@ -2506,25 +2357,12 @@ def tool_export_pdf(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_export_html",
     "Export benchmarks to HTML report. Use for sharing interactive reports.",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_export_html(params: Dict[str, Any]) -> Dict[str, Any]:
     """Export benchmarks to HTML."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     html = get_engine().export.html()
     result = {"html": html}
     return attach_context_if_requested(result, include_context, context_level)
@@ -2535,9 +2373,15 @@ def tool_export_html(params: Dict[str, Any]) -> Dict[str, Any]:
 # =============================================================================
 
 @register_tool(
-    "aisp_test_speed",
+    "aisp_hw_speed",
     "Run speed tests on the system. Run aisp_status or aisp_triage first; supports precheck_only/dry_run/timeout_seconds so you can opt in before executing. Example: \"Quickly benchmark host/GPU speed.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
+        "type": {
+            "type": "string",
+            "description": "Test selection: all, gemm, memory, or attention",
+            "default": "all",
+            "enum": ["all", "gemm", "memory", "attention"]
+        },
         "gemm_size": {"type": "integer", "description": "GEMM size", "default": 512},
         "precision": {"type": "string", "description": "Precision (fp16/bf16/tf32/fp32/fp8)", "default": "fp16"},
         "mem_size_mb": {"type": "integer", "description": "Memory test size MB", "default": 16},
@@ -2557,41 +2401,32 @@ def tool_export_html(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 300
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
-def tool_test_speed(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Run speed tests."""
+def tool_hw_speed(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Run speed tests without invoking the bench CLI."""
+    from core.diagnostics import microbench
+
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    include_context, context_level = extract_context_opts(params)
     cuda_check = _cuda_precheck()
-    args = [
-        "test", "speed",
-        "--type", "all",
-        "--gemm-size", str(params.get("gemm_size", 512)),
-        "--precision", params.get("precision", "fp16"),
-        "--mem-size-mb", str(params.get("mem_size_mb", 16)),
-        "--mem-stride", str(params.get("mem_stride", 128)),
-    ]
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+
+    planned = {
+        "type": params.get("type", "all"),
+        "gemm_size": params.get("gemm_size", 512),
+        "precision": params.get("precision", "fp16"),
+        "mem_size_mb": params.get("mem_size_mb", 16),
+        "mem_stride": params.get("mem_stride", 128),
+    }
+
     if precheck_only:
         return {
             "precheck_only": True,
             "cuda": cuda_check,
-            "planned_args": args,
+            "planned": planned,
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
 
@@ -2599,26 +2434,64 @@ def tool_test_speed(params: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "error": cuda_check.get("reason", "CUDA not available"),
             "cuda": cuda_check,
-            "planned_args": args,
         }
 
     if dry_run:
         return {
             "dry_run": True,
             "cuda": cuda_check,
-            "command": " ".join([sys.executable, "-m", "cli.aisp", "bench", *args]),
+            "planned": planned,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "note": "Set dry_run=false to execute; run aisp_status first.",
         }
 
-    result = _run_bench_cli(args, timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+    choice = str(params.get("type", "all")).lower()
+    results: List[Dict[str, Any]] = []
+
+    if choice in ("all", "gemm"):
+        res = microbench.tensor_core_bench(
+            size=int(params.get("gemm_size", 512)),
+            precision=params.get("precision", "fp16"),
+            timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+        )
+        res["name"] = "tensor_core_gemm"
+        results.append(res)
+
+    if choice in ("all", "memory"):
+        res = microbench.mem_hierarchy_test(
+            size_mb=int(params.get("mem_size_mb", 16)),
+            stride=int(params.get("mem_stride", 128)),
+            timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+        )
+        res["name"] = "mem_hierarchy"
+        results.append(res)
+
+    if choice in ("all", "attention"):
+        attn: Dict[str, Any] = {"name": "attention_softmax"}
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                q = torch.randn(256, 256, device="cuda")
+                torch.cuda.synchronize()
+                start = time.perf_counter()
+                torch.softmax(q, dim=-1)
+                torch.cuda.synchronize()
+                attn["latency_ms"] = (time.perf_counter() - start) * 1000
+            else:
+                attn["error"] = "CUDA not available"
+        except Exception as exc:
+            attn["error"] = str(exc)
+        results.append(attn)
+
+    result = {"tests": results}
     return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
-    "aisp_test_roofline",
-    "Stride sweep ASCII roofline for memory (bench test roofline). Run aisp_status first; supports precheck_only/dry_run/timeout_seconds to keep this opt-in.",
-    {"type": "object", "properties": {
+    "aisp_hw_roofline",
+    "Stride sweep ASCII roofline for memory. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds to keep this opt-in.",
+    {"type": "object", "properties": with_context_params({
         "size_mb": {"type": "integer", "description": "Buffer size MB", "default": 32},
         "strides": {"type": "array", "items": {"type": "integer"}, "description": "Stride values"},
         "precheck_only": {
@@ -2636,44 +2509,61 @@ def tool_test_speed(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 300
         },
-    }}
+    })}
 )
-def tool_test_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
-    args: List[str] = ["test", "roofline", "--size-mb", str(params.get("size_mb", 32))]
+def tool_hw_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
+    from core.diagnostics import microbench
+
+    size_mb = int(params.get("size_mb", 32))
+    strides = [int(s) for s in params.get("strides") or []]
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    include_context, context_level = extract_context_opts(params)
     cuda_check = _cuda_precheck()
-    for s in params.get("strides") or []:
-        args.extend(["--stride", str(s)])
+
+    planned = {"size_mb": size_mb, "strides": strides or None}
+
     if precheck_only:
         return {
             "precheck_only": True,
             "cuda": cuda_check,
-            "planned_args": args,
+            "planned": planned,
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
     if not cuda_check.get("ok", True):
         return {
             "error": cuda_check.get("reason", "CUDA not available"),
             "cuda": cuda_check,
-            "planned_args": args,
+            "planned": planned,
         }
     if dry_run:
         return {
             "dry_run": True,
             "cuda": cuda_check,
-            "command": " ".join([sys.executable, "-m", "cli.aisp", "bench", *args]),
+            "planned": planned,
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
             "note": "Set dry_run=false to execute; run aisp_status first.",
         }
-    return _run_bench_cli(args, timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+
+    sweep_strides = strides or [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    rows = []
+    for stride in sweep_strides:
+        res = microbench.mem_hierarchy_test(
+            size_mb=size_mb,
+            stride=stride,
+            timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+        )
+        rows.append((stride, res.get("bandwidth_gbps")))
+
+    result = {"size_mb": size_mb, "rows": rows}
+    return attach_context_if_requested(result, include_context, context_level)
 
 @register_tool(
-    "aisp_test_disk",
+    "aisp_hw_disk",
     "Disk I/O benchmark (sequential). Supports precheck_only/dry_run/timeout_seconds; optional tmp_dir will be created if missing.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "file_size_mb": {"type": "integer", "default": 256},
         "block_size_kb": {"type": "integer", "default": 1024},
         "tmp_dir": {"type": "string"},
@@ -2692,7 +2582,7 @@ def tool_test_roofline(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 120
         },
-    }}
+    })}
 )
 def tool_test_disk(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.diagnostics import microbench
@@ -2700,6 +2590,7 @@ def tool_test_disk(params: Dict[str, Any]) -> Dict[str, Any]:
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    include_context, context_level = extract_context_opts(params)
     tmp_dir = params.get("tmp_dir")
     tmp_path = Path(tmp_dir) if tmp_dir else None
     precheck = {
@@ -2724,19 +2615,20 @@ def tool_test_disk(params: Dict[str, Any]) -> Dict[str, Any]:
         try:
             _ensure_dir(Path(tmp_dir))
         except Exception:
-            return {"error": f"failed to create tmp_dir: {tmp_dir}", "tmp_dir": tmp_dir}
-    return microbench.disk_io_test(
+            return make_error(f"failed to create tmp_dir: {tmp_dir}", include_context, context_level, tmp_dir=tmp_dir)
+    result = microbench.disk_io_test(
         file_size_mb=int(params.get("file_size_mb", 256)),
         block_size_kb=int(params.get("block_size_kb", 1024)),
         tmp_dir=tmp_dir,
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
-    "aisp_test_pcie",
+    "aisp_hw_pcie",
     "PCIe H2D/D2H bandwidth benchmark using CUDA (torch). Run aisp_status first; supports precheck_only/dry_run/timeout_seconds so you can opt in to execution.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "size_mb": {"type": "integer", "default": 256},
         "iters": {"type": "integer", "default": 10},
         "precheck_only": {
@@ -2754,10 +2646,11 @@ def tool_test_disk(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 120
         },
-    }}
+    })}
 )
 def tool_test_pcie(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.diagnostics import microbench
+    include_context, context_level = extract_context_opts(params)
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
@@ -2770,7 +2663,7 @@ def tool_test_pcie(params: Dict[str, Any]) -> Dict[str, Any]:
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
     if not cuda_check.get("ok", True):
-        return {"error": cuda_check.get("reason", "CUDA not available"), "cuda": cuda_check}
+        return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, cuda=cuda_check)
     if dry_run:
         return {
             "dry_run": True,
@@ -2778,17 +2671,18 @@ def tool_test_pcie(params: Dict[str, Any]) -> Dict[str, Any]:
             "params": {"size_mb": params.get("size_mb", 256), "iters": params.get("iters", 10)},
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         }
-    return microbench.pcie_bandwidth_test(
+    result = microbench.pcie_bandwidth_test(
         size_mb=int(params.get("size_mb", 256)),
         iters=int(params.get("iters", 10)),
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
-    "aisp_test_mem_hierarchy",
+    "aisp_hw_cache",
     "Memory hierarchy stride test on GPU to gauge bandwidth. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "size_mb": {"type": "integer", "default": 256},
         "stride": {"type": "integer", "default": 128},
         "precheck_only": {
@@ -2806,10 +2700,11 @@ def tool_test_pcie(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 120
         },
-    }}
+    })}
 )
 def tool_test_mem_hierarchy(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.diagnostics import microbench
+    include_context, context_level = extract_context_opts(params)
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
@@ -2822,7 +2717,7 @@ def tool_test_mem_hierarchy(params: Dict[str, Any]) -> Dict[str, Any]:
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
     if not cuda_check.get("ok", True):
-        return {"error": cuda_check.get("reason", "CUDA not available"), "cuda": cuda_check}
+        return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, cuda=cuda_check)
     if dry_run:
         return {
             "dry_run": True,
@@ -2830,17 +2725,18 @@ def tool_test_mem_hierarchy(params: Dict[str, Any]) -> Dict[str, Any]:
             "params": {"size_mb": params.get("size_mb", 256), "stride": params.get("stride", 128)},
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         }
-    return microbench.mem_hierarchy_test(
+    result = microbench.mem_hierarchy_test(
         size_mb=int(params.get("size_mb", 256)),
         stride=int(params.get("stride", 128)),
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
-    "aisp_test_tensor_core",
+    "aisp_hw_tc",
     "Tensor Core matmul throughput test for various precisions. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "size": {"type": "integer", "default": 4096},
         "precision": {"type": "string", "default": "fp16"},
         "precheck_only": {
@@ -2858,10 +2754,11 @@ def tool_test_mem_hierarchy(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 120
         },
-    }}
+    })}
 )
 def tool_test_tensor_core(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.diagnostics import microbench
+    include_context, context_level = extract_context_opts(params)
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
@@ -2874,7 +2771,7 @@ def tool_test_tensor_core(params: Dict[str, Any]) -> Dict[str, Any]:
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
     if not cuda_check.get("ok", True):
-        return {"error": cuda_check.get("reason", "CUDA not available"), "cuda": cuda_check}
+        return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, cuda=cuda_check)
     if dry_run:
         return {
             "dry_run": True,
@@ -2882,17 +2779,18 @@ def tool_test_tensor_core(params: Dict[str, Any]) -> Dict[str, Any]:
             "params": {"size": params.get("size", 4096), "precision": params.get("precision", "fp16")},
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         }
-    return microbench.tensor_core_bench(
+    result = microbench.tensor_core_bench(
         size=int(params.get("size", 4096)),
         precision=params.get("precision", "fp16"),
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
-    "aisp_test_sfu",
+    "aisp_hw_sfu",
     "SFU-heavy benchmark (sin/cos) to gauge special function performance. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "elements": {"type": "integer", "default": 67108864},
         "precheck_only": {
             "type": "boolean",
@@ -2909,10 +2807,11 @@ def tool_test_tensor_core(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 120
         },
-    }}
+    })}
 )
 def tool_test_sfu(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.diagnostics import microbench
+    include_context, context_level = extract_context_opts(params)
     precheck_only = bool(params.get("precheck_only", False))
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
@@ -2925,7 +2824,7 @@ def tool_test_sfu(params: Dict[str, Any]) -> Dict[str, Any]:
             "note": "Run aisp_status or aisp_triage first, then rerun without precheck_only.",
         }
     if not cuda_check.get("ok", True):
-        return {"error": cuda_check.get("reason", "CUDA not available"), "cuda": cuda_check}
+        return make_error(cuda_check.get("reason", "CUDA not available"), include_context, context_level, cuda=cuda_check)
     if dry_run:
         return {
             "dry_run": True,
@@ -2933,16 +2832,17 @@ def tool_test_sfu(params: Dict[str, Any]) -> Dict[str, Any]:
             "params": {"elements": params.get("elements", 64 * 1024 * 1024)},
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         }
-    return microbench.sfu_bench(
+    result = microbench.sfu_bench(
         size=int(params.get("elements", 64 * 1024 * 1024)),
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
-    "aisp_test_network_loopback",
+    "aisp_hw_tcp",
     "Loopback TCP throughput test (localhost). Supports precheck_only/dry_run/timeout_seconds for opt-in execution.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "size_mb": {"type": "integer", "default": 64},
         "port": {"type": "integer", "default": 50007},
         "precheck_only": {
@@ -2960,7 +2860,7 @@ def tool_test_sfu(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Max runtime before returning partial output; set 0/null for no timeout",
             "default": 60
         },
-    }}
+    })}
 )
 def tool_test_network_loopback(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.diagnostics import microbench
@@ -2968,6 +2868,7 @@ def tool_test_network_loopback(params: Dict[str, Any]) -> Dict[str, Any]:
     dry_run = bool(params.get("dry_run") or params.get("estimate_only"))
     timeout_param = params.get("timeout_seconds")
     timeout_seconds = None if timeout_param is None else int(timeout_param)
+    include_context, context_level = extract_context_opts(params)
     port = int(params.get("port", 50007))
     if precheck_only:
         return {
@@ -2982,50 +2883,30 @@ def tool_test_network_loopback(params: Dict[str, Any]) -> Dict[str, Any]:
             "params": {"size_mb": params.get("size_mb", 64)},
             "timeout_seconds": timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         }
-    return microbench.network_loopback_test(
+    result = microbench.network_loopback_test(
         size_mb=int(params.get("size_mb", 64)),
         port=port,
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 
 @register_tool(
-    "aisp_test_network",
+    "aisp_hw_network",
     "Run network throughput tests. Use when checking interconnect or host network bandwidth. Example: \"Test network bandwidth between nodes.\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_test_network(params: Dict[str, Any]) -> Dict[str, Any]:
     """Run network tests."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().test.network()
     return attach_context_if_requested(result, include_context, context_level)
 
 
-@register_tool(
-    "aisp_benchmark_targets",
-    "List benchmark targets supported by the harness. Use when choosing what to run.",
-    {"type": "object", "properties": {}}
-)
-def tool_benchmark_targets(params: Dict[str, Any]) -> Dict[str, Any]:
-    """List benchmark targets."""
-    from core.engine import get_engine
-    return get_engine().test.targets()
-
+# NOTE: aisp_benchmark_targets is defined earlier in this file with bench CLI integration
+# This duplicate registration was removed to avoid conflicts.
 
 # =============================================================================
 # ADVANCED ANALYSIS TOOLS
@@ -3034,117 +2915,137 @@ def tool_benchmark_targets(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_cpu_memory_analysis",
     "Analyze CPU/memory hierarchy (NUMA, caches, TLB, hugepages). Use for host-side bottlenecks.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_cpu_memory_analysis(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.cpu_memory()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.cpu_memory()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_system_parameters",
     "Inspect kernel/system parameters (swappiness, dirty ratios, etc.). Use for host tuning.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_system_parameters(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.system_params()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.system_params()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_container_limits",
     "Inspect container/cgroup limits. Use when running in containers.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_container_limits(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.container_limits()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.container_limits()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_warp_divergence",
     "Analyze code for warp divergence patterns.",
-    {"type": "object", "properties": {
-        "code": {"type": "string", "description": "Kernel code or snippet"}
-    }}
+    {"type": "object", "properties": with_context_params({
+        "code": {"type": "string", "description": "Kernel code or snippet"},
+    })}
 )
 def tool_warp_divergence(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.warp_divergence()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.warp_divergence()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_bank_conflicts",
     "Analyze shared memory bank conflicts.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "stride": {"type": "integer", "default": 1},
-        "element_size": {"type": "integer", "default": 4}
-    }}
+        "element_size": {"type": "integer", "default": 4},
+    })}
 )
 def tool_bank_conflicts(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.bank_conflicts()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.bank_conflicts()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_memory_access",
     "Analyze memory access patterns for coalescing.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "stride": {"type": "integer", "default": 1},
-        "element_size": {"type": "integer", "default": 4}
-    }}
+        "element_size": {"type": "integer", "default": 4},
+    })}
 )
 def tool_memory_access(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.memory_access()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.memory_access()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_comm_overlap",
     "Analyze communication overlap for a model.",
-    {"type": "object", "properties": {
-        "model": {"type": "string", "default": "llama-3.1-70b"}
-    }}
+    {"type": "object", "properties": with_context_params({
+        "model": {"type": "string", "default": "llama-3.1-70b"},
+    })}
 )
 def tool_comm_overlap(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.comm_overlap(params.get("model", "default"))
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.comm_overlap(params.get("model", "default"))
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_data_loading",
     "Analyze data loading pipeline.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_data_loading(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.data_loading()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.data_loading()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_energy_analysis",
     "Analyze energy efficiency.",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_energy_analysis(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.energy()
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.energy()
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_predict_scaling",
     "Predict scaling behavior for model size and GPU count.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model_size": {"type": "number", "description": "Model size in billions", "default": 7},
-        "gpus": {"type": "integer", "description": "GPU count", "default": 8}
-    }}
+        "gpus": {"type": "integer", "description": "GPU count", "default": 8},
+    })}
 )
 def tool_predict_scaling(params: Dict[str, Any]) -> Dict[str, Any]:
     from core.engine import get_engine
-    return get_engine().analyze.predict_scaling(
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().analyze.predict_scaling(
         model_size=params.get("model_size", 7),
         gpus=params.get("gpus", 8),
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 # =============================================================================
@@ -3154,7 +3055,7 @@ def tool_predict_scaling(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_hf_search",
     "Tags: huggingface, search, models. Search HuggingFace for models. Use when finding candidate models to run. Example: \"Search HF for code generation models.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "query": {
             "type": "string",
             "description": "Search query (e.g., 'llama', 'code generation')"
@@ -3163,33 +3064,312 @@ def tool_predict_scaling(params: Dict[str, Any]) -> Dict[str, Any]:
             "type": "integer",
             "description": "Maximum number of results",
             "default": 10
-        }
-    }, "required": ["query"]}
+        },
+    }), "required": ["query"]}
 )
 def tool_hf_search(params: Dict[str, Any]) -> Dict[str, Any]:
     """Search HuggingFace."""
     from core.engine import get_engine
-    return get_engine().hf.search(
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().hf.search(
         query=params.get("query", ""),
         limit=params.get("limit", 10)
     )
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_hf_trending",
     "Tags: huggingface, trending, browse. Get trending models on HuggingFace. Use when browsing popular models. Example: \"What models are trending for text-generation?\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "task": {
             "type": "string",
             "description": "Task type: text-generation, image-classification, etc.",
             "default": "text-generation"
-        }
-    }}
+        },
+    })}
 )
 def tool_hf_trending(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get trending models."""
     from core.engine import get_engine
-    return get_engine().hf.trending(task=params.get("task", "text-generation"))
+    include_context, context_level = extract_context_opts(params)
+    result = get_engine().hf.trending(task=params.get("task", "text-generation"))
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_hf_download",
+    "Tags: huggingface, download, model. Download a HuggingFace model. Use when you need to fetch model weights. Example: \"Download meta-llama/Llama-3.1-8B\"",
+    {"type": "object", "properties": with_context_params({
+        "model": {
+            "type": "string",
+            "description": "Model ID (e.g., 'meta-llama/Llama-3.1-8B')"
+        },
+        "revision": {
+            "type": "string",
+            "description": "Branch, tag, or commit"
+        },
+        "cache_dir": {
+            "type": "string",
+            "description": "Custom cache directory"
+        },
+    }), "required": ["model"]}
+)
+def tool_hf_download(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Download a HuggingFace model."""
+    include_context, context_level = extract_context_opts(params)
+    try:
+        from huggingface_hub import snapshot_download
+        import os
+        
+        model = params.get("model")
+        if not model:
+            return {"success": False, "error": "Model ID required"}
+        
+        path = snapshot_download(
+            model,
+            revision=params.get("revision"),
+            cache_dir=params.get("cache_dir"),
+            token=os.environ.get("HF_TOKEN"),
+        )
+        result = {"success": True, "model": model, "path": str(path)}
+        return attach_context_if_requested(result, include_context, context_level)
+    except ImportError:
+        return {"success": False, "error": "huggingface_hub not installed"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# INFO TOOLS (Hardware Features, Network)
+# =============================================================================
+
+@register_tool(
+    "aisp_info_features",
+    "Tags: hardware, features, tma, tmem, fp8, tensor cores. Get detailed hardware capabilities including TMA, TMEM, tensor cores, FP8 support. Use when checking what GPU features are available. Example: \"What hardware features does my GPU support?\"",
+    {"type": "object", "properties": with_context_params({})}
+)
+def tool_info_features(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get hardware features and capabilities."""
+    try:
+        from core.harness.hardware_capabilities import detect_capabilities
+        include_context = bool(params.get("include_context", False))
+        context_level = params.get("context_level", "summary")
+        
+        cap = detect_capabilities()
+        if cap is None:
+            return {"success": False, "error": "CUDA not available"}
+        
+        result = {
+            "success": True,
+            "gpu": {
+                "name": cap.device_name,
+                "architecture": cap.name,
+                "sm_version": cap.sm_version,
+                "compute_capability": cap.compute_capability,
+                "memory_gb": cap.total_memory_gb,
+                "memory_bandwidth_tbps": cap.memory_bandwidth_tbps,
+                "num_sms": cap.num_sms,
+            },
+            "features": {
+                "tensor_cores": cap.tensor_cores,
+                "tma_supported": cap.tma_supported,
+                "tma_compiler_supported": cap.tma_compiler_supported,
+                "tma_limits": cap.tma_limits.to_dict() if cap.tma_limits else None,
+                "cluster_supported": cap.cluster.supports_clusters if cap.cluster else False,
+                "dsmem_supported": cap.cluster.has_dsmem if cap.cluster else False,
+                "max_cluster_size": cap.cluster.max_cluster_size if cap.cluster else 0,
+                "nvlink_c2c": cap.nvlink_c2c,
+                "grace_coherence": cap.grace_coherence,
+                "fp8": cap.architecture.lower() in ["hopper", "blackwell"] or "FP8" in cap.features,
+                "hbm3e": "HBM3e" in cap.features,
+            },
+            "limits": {
+                "max_threads_per_block": cap.max_threads_per_block,
+                "max_threads_per_sm": cap.max_threads_per_sm,
+                "max_shared_mem_per_block": cap.max_shared_mem_per_block,
+                "max_shared_mem_per_sm": cap.max_shared_mem_per_sm,
+                "l2_cache_kb": cap.l2_cache_kb,
+            },
+            "driver_version": cap.driver_version,
+            "cuda_runtime_version": cap.cuda_runtime_version,
+            "notes": cap.notes,
+        }
+        return attach_context_if_requested(result, include_context, context_level)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@register_tool(
+    "aisp_info_network",
+    "Tags: network, infiniband, gpudirect, rdma. Get network status including InfiniBand and GPUDirect RDMA. Use when debugging multi-node connectivity. Example: \"What's the InfiniBand status?\"",
+    {"type": "object", "properties": with_context_params({})}
+)
+def tool_info_network(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get network and InfiniBand status."""
+    import shutil
+    import os
+    include_context, context_level = extract_context_opts(params)
+    
+    result = {"success": True, "infiniband": {}, "gpudirect_rdma": {}, "nccl_env": {}}
+    
+    # Check InfiniBand
+    ibstat = shutil.which("ibstat")
+    if ibstat:
+        try:
+            proc = subprocess.run([ibstat], capture_output=True, text=True, timeout=5)
+            if proc.returncode == 0:
+                result["infiniband"]["status"] = "available"
+                result["infiniband"]["raw"] = proc.stdout[:2000]  # Truncate
+            else:
+                result["infiniband"]["status"] = "no devices"
+        except Exception as e:
+            result["infiniband"]["status"] = f"error: {e}"
+    else:
+        result["infiniband"]["status"] = "ibstat not found"
+    
+    # Check GPUDirect RDMA
+    try:
+        proc = subprocess.run(["lsmod"], capture_output=True, text=True, timeout=5)
+        if "nv_peer_mem" in proc.stdout or "nvidia_peermem" in proc.stdout:
+            result["gpudirect_rdma"]["status"] = "enabled"
+        else:
+            result["gpudirect_rdma"]["status"] = "disabled (peer memory module not loaded)"
+    except Exception:
+        result["gpudirect_rdma"]["status"] = "unknown"
+    
+    # NCCL environment
+    nccl_vars = ["NCCL_IB_DISABLE", "NCCL_NET_GDR_LEVEL", "NCCL_P2P_LEVEL", 
+                 "NCCL_IB_GID_INDEX", "NCCL_SOCKET_IFNAME"]
+    for var in nccl_vars:
+        result["nccl_env"][var] = os.environ.get(var, "(not set)")
+    
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+# =============================================================================
+# ADDITIONAL HW TOOLS (IB, NCCL, P2P)
+# =============================================================================
+
+@register_tool(
+    "aisp_hw_ib",
+    "Tags: infiniband, bandwidth, rdma. InfiniBand bandwidth test info. Use when checking IB connectivity. Example: \"How do I test InfiniBand bandwidth?\"",
+    {"type": "object", "properties": with_context_params({
+        "size_mb": {"type": "integer", "description": "Transfer size MB", "default": 64},
+    })}
+)
+def tool_hw_ib(params: Dict[str, Any]) -> Dict[str, Any]:
+    """InfiniBand bandwidth test guidance."""
+    import shutil
+    include_context, context_level = extract_context_opts(params)
+    
+    ib_write_bw = shutil.which("ib_write_bw")
+    result = {
+        "success": True,
+        "ib_write_bw_available": ib_write_bw is not None,
+        "instructions": {
+            "server": "ib_write_bw -d mlx5_0",
+            "client": "ib_write_bw -d mlx5_0 <server_ip>",
+            "install": "apt install perftest  # or yum install perftest",
+        },
+        "alternative": "Use NCCL tests: all_reduce_perf -b 8M -e 256M -g 8"
+    }
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_hw_nccl",
+    "Tags: nccl, collective, allreduce, bandwidth. NCCL collective bandwidth test. Use when measuring distributed training communication. Example: \"Test NCCL all_reduce bandwidth\"",
+    {"type": "object", "properties": with_context_params({
+        "collective": {"type": "string", "description": "Collective type", "default": "all_reduce"},
+        "min_bytes": {"type": "string", "description": "Min message size", "default": "8M"},
+        "max_bytes": {"type": "string", "description": "Max message size", "default": "256M"},
+        "gpus": {"type": "integer", "description": "Number of GPUs", "default": 8},
+    })}
+)
+def tool_hw_nccl(params: Dict[str, Any]) -> Dict[str, Any]:
+    """NCCL collective bandwidth test guidance."""
+    import shutil
+    include_context, context_level = extract_context_opts(params)
+    
+    collective = params.get("collective", "all_reduce")
+    bin_name = f"{collective}_perf"
+    bin_path = shutil.which(bin_name)
+    
+    result = {
+        "success": True,
+        "tool_available": bin_path is not None,
+        "command": f"{bin_name} -b {params.get('min_bytes', '8M')} -e {params.get('max_bytes', '256M')} -g {params.get('gpus', 8)}",
+        "install": "git clone https://github.com/NVIDIA/nccl-tests && cd nccl-tests && make MPI=1",
+        "collectives": ["all_reduce", "all_gather", "reduce_scatter", "broadcast", "reduce", "alltoall"]
+    }
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_hw_p2p",
+    "Tags: p2p, nvlink, gpu to gpu, bandwidth. GPU-to-GPU P2P bandwidth test. Use when checking NVLink/P2P performance. Example: \"Test GPU P2P bandwidth\"",
+    {"type": "object", "properties": with_context_params({
+        "size_mb": {"type": "integer", "description": "Transfer size MB", "default": 256},
+    })}
+)
+def tool_hw_p2p(params: Dict[str, Any]) -> Dict[str, Any]:
+    """GPU P2P bandwidth test."""
+    try:
+        import torch
+        include_context = bool(params.get("include_context", False))
+        context_level = params.get("context_level", "summary")
+        
+        if not torch.cuda.is_available():
+            return {"success": False, "error": "CUDA not available"}
+        
+        num_gpus = torch.cuda.device_count()
+        if num_gpus < 2:
+            return {"success": False, "error": "P2P test requires at least 2 GPUs", "gpu_count": num_gpus}
+        
+        size_mb = params.get("size_mb", 256)
+        size_bytes = size_mb * 1024 * 1024
+        
+        results = []
+        for i in range(min(num_gpus, 2)):  # Test first pair only for speed
+            for j in range(min(num_gpus, 2)):
+                if i == j:
+                    continue
+                
+                can_access = torch.cuda.can_device_access_peer(i, j)
+                
+                with torch.cuda.device(i):
+                    src = torch.empty(size_bytes // 4, dtype=torch.float32, device=f"cuda:{i}")
+                with torch.cuda.device(j):
+                    dst = torch.empty(size_bytes // 4, dtype=torch.float32, device=f"cuda:{j}")
+                
+                dst.copy_(src)
+                torch.cuda.synchronize()
+                
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                
+                iters = 5
+                start.record()
+                for _ in range(iters):
+                    dst.copy_(src)
+                end.record()
+                torch.cuda.synchronize()
+                
+                elapsed_ms = start.elapsed_time(end)
+                bw_gbps = (size_bytes * iters / (elapsed_ms / 1000)) / 1e9
+                
+                results.append({
+                    "src": i,
+                    "dst": j,
+                    "p2p_enabled": can_access,
+                    "bandwidth_gbps": round(bw_gbps, 2)
+                })
+        
+        result = {"success": True, "gpu_count": num_gpus, "results": results}
+        return attach_context_if_requested(result, include_context, context_level)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
@@ -3199,7 +3379,7 @@ def tool_hf_trending(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_cluster_slurm",
     "Tags: slurm, batch, cluster. Generate SLURM script for cluster job submission. Use when creating batch jobs on a cluster. Example: \"Create SLURM script for 2 nodes x 8 GPUs.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model": {
             "type": "string",
             "description": "Model size (e.g., '7b', '70b')",
@@ -3215,24 +3395,12 @@ def tool_hf_trending(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "GPUs per node",
             "default": 8
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_cluster_slurm(params: Dict[str, Any]) -> Dict[str, Any]:
     """Generate SLURM script."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().cluster.slurm(
         model=params.get("model", "7b"),
         nodes=params.get("nodes", 1),
@@ -3244,7 +3412,7 @@ def tool_cluster_slurm(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_cost_estimate",
     "Tags: cost, budget, cloud. Estimate cloud costs for training/inference. Use when budgeting for runs. Example: \"Estimate cost to train 70B with 200B tokens on AWS.\"",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model_size": {
             "type": "number",
             "description": "Model size in billions"
@@ -3258,24 +3426,12 @@ def tool_cluster_slurm(params: Dict[str, Any]) -> Dict[str, Any]:
             "description": "Cloud provider: aws, gcp, azure",
             "default": "aws"
         },
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": False
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    })}
 )
 def tool_cost_estimate(params: Dict[str, Any]) -> Dict[str, Any]:
     """Estimate cloud costs."""
     from core.engine import get_engine
-    include_context = bool(params.get("include_context", False))
-    context_level = params.get("context_level", "summary")
+    include_context, context_level = extract_context_opts(params)
     result = get_engine().cost.cloud_estimate(params)
     return attach_context_if_requested(result, include_context, context_level)
 
@@ -3283,7 +3439,7 @@ def tool_cost_estimate(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_launch_plan",
     "Generate a torchrun launch plan (dry-run) with TP/PP/DP layout. Returns JSON and command string.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "model_params": {"type": "integer", "description": "Model size in billions", "default": 70},
         "nodes": {"type": "integer", "default": 1},
         "gpus": {"type": "integer", "description": "GPUs per node", "default": 8},
@@ -3293,9 +3449,10 @@ def tool_cost_estimate(params: Dict[str, Any]) -> Dict[str, Any]:
         "batch_size": {"type": "integer", "default": 1},
         "script": {"type": "string", "default": "train.py"},
         "extra_args": {"type": "string", "description": "Extra args appended to command"},
-    }}
+    })}
 )
 def tool_launch_plan(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
     try:
         from core.optimization.parallelism_planner.launch_plan import generate_launch_plan
         plan = generate_launch_plan(
@@ -3309,9 +3466,10 @@ def tool_launch_plan(params: Dict[str, Any]) -> Dict[str, Any]:
             script=params.get("script", "train.py"),
             extra_args=params.get("extra_args"),
         )
-        return {"plan": plan.to_json(), "command": plan.command}
+        result = {"plan": plan.to_json(), "command": plan.command}
+        return attach_context_if_requested(result, include_context, context_level)
     except Exception as exc:
-        return {"error": str(exc)}
+        return make_error(str(exc), include_context, context_level)
 
 
 # =============================================================================
@@ -3321,19 +3479,7 @@ def tool_launch_plan(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_status",
     "Tags: status, health, quick check. Get quick system status: GPU, software, AI backend. Use when you need a fast snapshot before deeper analysis. Example: \"Show quick status before running profiling.\" or \"Is everything healthy before a long job?\"",
-    {"type": "object", "properties": {
-        "include_context": {
-            "type": "boolean",
-            "description": "Include full system context in the response",
-            "default": True
-        },
-        "context_level": {
-            "type": "string",
-            "description": "Context level: summary or full",
-            "enum": ["summary", "full"],
-            "default": "summary"
-        }
-    }}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_status(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get quick status."""
@@ -3347,52 +3493,60 @@ def tool_status(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_context_summary",
     "Get a lightweight system context summary (GPU + software). Use when you need context for other tool calls. Example: \"Give me a quick env summary before optimizing.\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_context_summary(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get cached summary context."""
-    return get_cached_context("summary")
+    include_context, context_level = extract_context_opts(params)
+    result = {"success": True, "context": get_cached_context("summary")}
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_context_full",
     "Get full system context (may be heavier). Use when detailed environment is required. Example: \"Full context dump for LLM analysis.\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_context_full(params: Dict[str, Any]) -> Dict[str, Any]:
     """Get cached full context."""
-    return get_cached_context("full")
+    include_context, context_level = extract_context_opts(params)
+    result = {"success": True, "context": get_cached_context("full")}
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_triage",
     "Quick triage snapshot: status + context summary. Use as a first call before other tools. Example: \"Start with triage before choosing tools.\"",
-    {"type": "object", "properties": {}}
+    {"type": "object", "properties": with_context_params({})}
 )
 def tool_triage(params: Dict[str, Any]) -> Dict[str, Any]:
     """Return quick status plus context summary to guide next actions."""
     from core.engine import get_engine
     engine = get_engine()
-    return {
+    result = {
+        "success": True,
         "status": engine.status(),
         "context": get_cached_context("summary"),
     }
+    include_context, context_level = extract_context_opts(params)
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 @register_tool(
     "aisp_job_status",
     "Check the status/result of a queued tool (e.g., aisp_profile_nsys/aisp_profile_ncu with queue_only=true). Use job_id returned by the queueing call.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "job_id": {
             "type": "string",
             "description": "Job ID returned from queue_only=true call"
-        }
-    }, "required": ["job_id"]}
+        },
+    }), "required": ["job_id"]}
 )
 def tool_job_status(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
     job_id = params.get("job_id")
     if not job_id:
-        return {"error": "job_id is required"}
+        return make_error("job_id is required", include_context, context_level)
     with _JOB_LOCK:
         record = _JOB_STORE.get(job_id)
     if not record:
@@ -3409,18 +3563,20 @@ def tool_job_status(params: Dict[str, Any]) -> Dict[str, Any]:
             payload["error"] = result.get("error")
         else:
             payload["error"] = "Job failed"
-    return payload
+    if "success" not in payload:
+        payload["success"] = payload.get("status") not in {"error", "not_found"}
+    return attach_context_if_requested(payload, include_context, context_level)
 
 
 @register_tool(
     "aisp_help",
     "Start here if unsure: call aisp_suggest_tools with your intent to get ranked tool suggestions.",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "query": {
             "type": "string",
             "description": "What the user wants (forwarded to aisp_suggest_tools)"
-        }
-    }, "required": ["query"]}
+        },
+    }), "required": ["query"]}
 )
 def tool_help(params: Dict[str, Any]) -> Dict[str, Any]:
     """Forward to suggest_tools with the provided query."""
@@ -3430,16 +3586,17 @@ def tool_help(params: Dict[str, Any]) -> Dict[str, Any]:
 @register_tool(
     "aisp_suggest_tools",
     "When unsure which tool to use, call this first with the user intent to get ranked tool suggestions. Suggest relevant MCP tools based on a short intent. Example: \"I keep OOMing on 24GB VRAM\" or \"Need lower latency on vLLM\".",
-    {"type": "object", "properties": {
+    {"type": "object", "properties": with_context_params({
         "query": {
             "type": "string",
             "description": "User intent or question"
-        }
-    }, "required": ["query"]}
+        },
+    }), "required": ["query"]}
 )
 def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
     """Return a ranked list of suggested tools given a query."""
     query = (params.get("query") or "").lower()
+    include_context, context_level = extract_context_opts(params)
 
     rules = [
         {
@@ -3448,32 +3605,32 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "Diagnose bottlenecks for slow workload/latency issues",
         },
         {
-            "tool": "aisp_test_disk",
+            "tool": "aisp_hw_disk",
             "keywords": ["disk", "io", "storage"],
             "reason": "Disk I/O benchmark (sequential)",
         },
         {
-            "tool": "aisp_test_pcie",
+            "tool": "aisp_hw_pcie",
             "keywords": ["pcie", "h2d", "d2h", "pci-e"],
             "reason": "PCIe H2D/D2H bandwidth benchmark",
         },
         {
-            "tool": "aisp_test_mem_hierarchy",
+            "tool": "aisp_hw_cache",
             "keywords": ["memory stride", "cache", "l2", "hbm"],
             "reason": "Stride/bandwidth test for memory hierarchy",
         },
         {
-            "tool": "aisp_test_tensor_core",
+            "tool": "aisp_hw_tc",
             "keywords": ["tensor core", "tflops", "matmul"],
             "reason": "Tensor core throughput test",
         },
         {
-            "tool": "aisp_test_sfu",
+            "tool": "aisp_hw_sfu",
             "keywords": ["sfu", "sin", "cos"],
             "reason": "SFU throughput benchmark",
         },
         {
-            "tool": "aisp_test_network_loopback",
+            "tool": "aisp_hw_tcp",
             "keywords": ["loopback", "tcp", "network", "nic"],
             "reason": "Loopback TCP throughput test",
         },
@@ -3669,7 +3826,7 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "Diff two benchmark JSON runs",
         },
         {
-            "tool": "aisp_test_roofline",
+            "tool": "aisp_hw_roofline",
             "keywords": ["stride", "roofline", "memory sweep"],
             "reason": "Quick stride sweep roofline for memory hierarchy",
         },
@@ -3717,7 +3874,8 @@ def tool_suggest_tools(params: Dict[str, Any]) -> Dict[str, Any]:
         seen.add(rule["tool"])
         suggestions.append({"tool": rule["tool"], "reason": rule["reason"], "score": sc})
 
-    return {"suggestions": suggestions, "count": len(suggestions)}
+    result = {"suggestions": suggestions, "count": len(suggestions), "success": True}
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 # =============================================================================
@@ -3762,7 +3920,8 @@ class MCPServer:
             )
         
         try:
-            result = HANDLERS[name](arguments)
+            raw_result = HANDLERS[name](arguments)
+            result = _normalize_result(raw_result)
             duration_ms = int((time.time() - start_ts) * 1000)
             payload = _build_enriched_tool_payload(
                 name,
@@ -3782,7 +3941,7 @@ class MCPServer:
             payload = _build_enriched_tool_payload(
                 name,
                 arguments,
-                {"error": str(e), "traceback": tb},
+                _normalize_result({"error": str(e), "traceback": tb}),
                 duration_ms=duration_ms,
                 had_exception=True,
                 server_info=server_info,

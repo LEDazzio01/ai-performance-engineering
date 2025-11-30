@@ -7,62 +7,88 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
+from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch10.workload_config import WORKLOAD
 
 
 class BaselineBatchBenchmark(BaseBenchmark):
-    """Baseline: small batch size, limited GPU utilization."""
+    """Baseline: small batch size, limited GPU utilization.
+    
+    Processes the same data as optimized but in small micro-batches,
+    demonstrating the overhead of multiple small kernel launches.
+    """
     
     def __init__(self):
         super().__init__()
         self.model: nn.Sequential | None = None
-        self.inputs: torch.Tensor | None = None
+        self.input_flat: torch.Tensor | None = None
+        self.inputs_chunked: torch.Tensor | None = None
+        self.output: torch.Tensor | None = None
         self.workload = WORKLOAD
         self.micro_batch_size = self.workload.baseline_micro_batch_size
         self.micro_batches = self.workload.baseline_micro_batches
+        self.total_batch_size = self.micro_batch_size * self.micro_batches  # 512
         self.hidden_dim = self.workload.hidden_dim
         self.ffn_dim = self.workload.ffn_dim
-        tokens = self.micro_batches * self.micro_batch_size * self.hidden_dim
+        tokens = self.total_batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.micro_batches),
             tokens_per_iteration=float(tokens),
         )
-        self._last_total = 0.0
     
     def setup(self) -> None:
         """Setup: Initialize model with small batch size."""
-        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
+            enable_tf32()
+        # Harness provides seeding - model and input creation order must match optimized
         self.model = nn.Sequential(
             nn.Linear(self.hidden_dim, self.ffn_dim),
             nn.ReLU(),
             nn.Linear(self.ffn_dim, self.hidden_dim),
         ).to(self.device).eval()
         
-        self.inputs = torch.randn(
+        # Generate flat input (same shape/order as optimized for verification)
+        self.input_flat = torch.randn(
+            self.total_batch_size,
+            self.hidden_dim,
+            device=self.device,
+        )
+        # Reshape for micro-batch processing
+        self.inputs_chunked = self.input_flat.view(
             self.micro_batches,
             self.micro_batch_size,
+            self.hidden_dim,
+        )
+        # Pre-allocate output buffer
+        self.output = torch.empty(
+            self.total_batch_size,
             self.hidden_dim,
             device=self.device,
         )
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Operations with small batch size."""
-        if self.model is None or self.inputs is None:
+        """Benchmark: Operations with small batch size (multiple kernel launches)."""
+        if self.model is None or self.inputs_chunked is None or self.output is None:
             raise RuntimeError("Benchmark not configured")
         with self._nvtx_range("batch_baseline"):
-            total = 0.0
-            for idx in range(self.micro_batches):
-                output = self.model(self.inputs[idx])
-                total += float(output.sum())
-            self._last_total = total
+            with torch.no_grad():
+                # Process each micro-batch separately (many small kernel launches)
+                for idx in range(self.micro_batches):
+                    start = idx * self.micro_batch_size
+                    end = start + self.micro_batch_size
+                    self.output[start:end] = self.model(self.inputs_chunked[idx])
         self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
-        self.inputs = None
+        self.input_flat = None
+        self.inputs_chunked = None
+        self.output = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -87,9 +113,26 @@ class BaselineBatchBenchmark(BaseBenchmark):
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
-        if self.inputs is None:
+        if self.inputs_chunked is None:
             return "Inputs not initialized"
+        if self.output is None:
+            return "Output not initialized"
         return None
+
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        """Return output tensor for verification against optimized version."""
+        return self.output
+    
+    def get_output_tolerance(self) -> tuple[float, float]:
+        """Return (rtol, atol) for output verification.
+        
+        Micro-batching vs large-batch can have numerical differences due to:
+        - Different CUDA kernel parallelism patterns
+        - Different floating-point reduction order
+        - TF32 precision accumulation across multiple operations
+        """
+        return (0.05, 0.05)  # 5% relative tolerance for batch size comparisons
+
 
 def get_benchmark() -> BaselineBatchBenchmark:
     """Factory function for harness discovery."""

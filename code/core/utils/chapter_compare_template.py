@@ -145,7 +145,7 @@ def create_standard_metrics(
     Ensures all chapters return consistent metrics format.
     
     Args:
-        chapter: Chapter identifier (e.g., 'ch1', 'ch16')
+        chapter: Chapter identifier (e.g., 'ch01', 'ch16')
         all_metrics: Dictionary of collected metrics (will be modified in place)
         default_tokens_per_s: Default throughput if not calculated
         default_requests_per_s: Default request rate if not calculated
@@ -186,7 +186,7 @@ def profile_template(
     Standard implementation that all chapters should use or adapt.
     
     Args:
-        chapter: Chapter identifier (e.g., 'ch1', 'ch16')
+        chapter: Chapter identifier (e.g., 'ch01', 'ch16')
         chapter_dir: Path to chapter directory
         harness_config: Optional BenchmarkConfig override (default: iterations=20, warmup=5)
         custom_metrics_callback: Optional function to add custom metrics: f(all_metrics) -> None

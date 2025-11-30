@@ -113,11 +113,11 @@ def example_scan_benchmarks():
     # Example of what the scan would return
     print("""
 Example output:
-  ch5:matmul_tiling: current speedup 1.02x < 1.1x
+  ch05:matmul_tiling: current speedup 1.02x < 1.1x
     ✅ Optimized: 1.02x → 1.45x
     Techniques: torch.compile, memory_coalescing
     
-  ch7:async_prefetch: current speedup 1.08x < 1.1x
+  ch07:async_prefetch: current speedup 1.08x < 1.1x
     ✅ Optimized: 1.08x → 1.32x
     Techniques: cuda_streams, prefetching
 """)
@@ -211,7 +211,7 @@ def example_input_adapters():
     print("\nBenchmarkAdapter:")
     print("""
     adapter = BenchmarkAdapter(
-        directory="./ch5/",
+        directory="./ch05/",
         threshold=1.1,
         pattern="optimized_*.py"
     )

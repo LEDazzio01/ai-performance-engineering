@@ -302,16 +302,16 @@ class TestChapterConfig:
     
     def test_chapter_config_loading(self):
         """Test that chapter config loads correctly."""
-        config = get_chapter_metric_config("ch7")
+        config = get_chapter_metric_config("ch07")
         
-        # Should return a dict (may be empty if ch7 has no metrics)
+        # Should return a dict (may be empty if ch07 has no metrics)
         assert isinstance(config, dict)
     
     def test_unknown_metric_handling(self):
         """Test that unknown metrics are handled gracefully."""
         # This tests the warning/logging behavior
         # We can't easily test logging, but we can verify it doesn't crash
-        config = get_chapter_metric_config("ch1")  # ch1 has no metrics in performance_targets
+        config = get_chapter_metric_config("ch01")  # ch01 has no metrics in performance_targets
         assert isinstance(config, dict)
     
     def test_chapter_config_merges_with_base(self):
@@ -322,7 +322,7 @@ class TestChapterConfig:
         comprehensive = compare_all_metrics(
             baseline,
             optimized,
-            chapter="ch7"  # ch7 has utilization_percent metric
+            chapter="ch07"  # ch07 has utilization_percent metric
         )
         
         # Should still work even if chapter has metrics
@@ -353,7 +353,7 @@ class TestChapterConfig:
             baseline_result=baseline,
             optimized_result=optimized,
             include_timing=True,
-            chapter="ch7",
+            chapter="ch07",
             include_raw_metrics=True
         )
         
@@ -423,7 +423,7 @@ class TestAPIPropagation:
             baseline,
             optimized,
             include_raw_metrics=True,
-            chapter="ch7"
+            chapter="ch07"
         )
         
         assert comprehensive is not None
@@ -439,7 +439,7 @@ class TestAPIPropagation:
             optimized,
             name="Test",
             include_raw_metrics=True,
-            chapter="ch7"
+            chapter="ch07"
         )
         
         assert comprehensive is not None

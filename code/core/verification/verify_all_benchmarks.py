@@ -47,7 +47,7 @@ def resolve_target_chapters(
     Translate CLI target tokens into chapter directories + per-chapter filters.
 
     Args:
-        targets: List like ["ch7", "ch7:memory_access"] (None/"all" -> every chapter)
+        targets: List like ["ch07", "ch07:memory_access"] (None/"all" -> every chapter)
 
     Returns:
         (chapter_dirs, chapter_filters)

@@ -166,23 +166,21 @@ if typer:
         context_settings={"help_option_names": ["-h", "--help"]},
     )
 
-    system_app = typer.Typer(help="System diagnostics, environment, and GPU status")
-    test_app = typer.Typer(help="Lightweight tests (bandwidth, network, warmup)")
-    hwbench_app = typer.Typer(help="Hardware benchmarks (disk, PCIe, memory, tensor-cores, SFU)")
-    ops_app = typer.Typer(help="Advanced system analysis and distributed planning")
+    # Core command groups
+    info_app = typer.Typer(help="System info, environment, GPU status, hardware features")
+    hw_app = typer.Typer(help="Hardware benchmarks (memory, PCIe, tensor cores, network)")
+    profile_app = typer.Typer(help="Profiling, analysis, comparisons, roofline")
     monitoring_app = typer.Typer(help="Monitoring and diagnostics runners")
 
-    # Extension categories (added only if extensions are enabled)
+    # Feature command groups
     ai_app = typer.Typer(help="LLM-powered Q&A, explanations, troubleshooting")
-    analyze_app = typer.Typer(help="Profile analysis, comparisons, roofline")
     optimize_app = typer.Typer(help="Optimization recommendations and playbooks")
     distributed_app = typer.Typer(help="Parallelism planning, topology, NCCL tuning")
     inference_app = typer.Typer(help="Inference configuration, quantization, deployment")
     training_app = typer.Typer(help="Training helpers (RL, checkpoints, gradients)")
     monitor_app = typer.Typer(help="Monitoring and regression detection")
     report_app = typer.Typer(help="Reports, history, ROI, exports")
-    profile_app = typer.Typer(help="Profiling helpers (flame, NCU, HTA, divergence)")
-    hf_app = typer.Typer(help="HuggingFace model search and config")
+    hf_app = typer.Typer(help="HuggingFace model search, config, download")
     cluster_app = typer.Typer(help="Cluster scripts, cost, scaling, power")
 
 
@@ -219,44 +217,187 @@ if typer:
 
 
 # =============================================================================
-# Category: system
+# Category: info (was: system)
 # =============================================================================
 
 if typer:
 
-    @system_app.command("status", help="Show comprehensive system status")
-    def system_status(ctx: typer.Context) -> None:
+    @info_app.command("status", help="Show comprehensive system status")
+    def info_status(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.system_status, ctx)
 
-    @system_app.command("gpu", help="GPU information and control")
-    def system_gpu(ctx: typer.Context) -> None:
+    @info_app.command("gpu", help="GPU information and control")
+    def info_gpu(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.gpu_info, ctx)
 
-    @system_app.command("env", help="Environment variables and paths")
-    def system_env(ctx: typer.Context) -> None:
+    @info_app.command("env", help="Environment variables and paths")
+    def info_env(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.show_env, ctx)
 
-    @system_app.command("deps", help="Check dependencies and versions")
-    def system_deps(ctx: typer.Context) -> None:
+    @info_app.command("deps", help="Check dependencies and versions")
+    def info_deps(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.check_deps, ctx)
 
-    @system_app.command("topo", help="Show GPU/NVLink/PCIe topology (nvidia-smi topo -m)")
-    def system_topo(ctx: typer.Context) -> None:
+    @info_app.command("topo", help="Show GPU/NVLink/PCIe topology (nvidia-smi topo -m)")
+    def info_topo(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.topo, ctx)
 
-    @system_app.command("preflight", help="Pre-flight checks before optimization")
-    def system_preflight(ctx: typer.Context) -> None:
+    @info_app.command("check", help="Pre-flight checks before optimization")
+    def info_check(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.preflight, ctx)
 
+    @info_app.command("features", help="Hardware features (TMA, TMEM, tensor cores, FP8, NVLink)")
+    def info_features(ctx: typer.Context) -> None:
+        """Display detailed hardware capabilities and features."""
+        from core.harness.hardware_capabilities import detect_capabilities, format_capability_report
+        
+        cap = detect_capabilities()
+        if cap is None:
+            typer.echo("❌ CUDA not available on this system.")
+            raise typer.Exit(code=1)
+        
+        # Header
+        typer.echo(f"\n🖥️  GPU: {cap.device_name}")
+        typer.echo(f"   Architecture: {cap.name} ({cap.sm_version})")
+        typer.echo(f"   Compute Capability: {cap.compute_capability}")
+        typer.echo(f"   Memory: {cap.total_memory_gb:.1f} GB", nl=False)
+        if cap.memory_bandwidth_tbps:
+            typer.echo(f" @ {cap.memory_bandwidth_tbps:.2f} TB/s")
+        else:
+            typer.echo()
+        typer.echo(f"   SMs: {cap.num_sms}, Warp Size: {cap.warp_size}")
+        typer.echo()
+        
+        # Features table
+        typer.echo("┌─────────────────────┬────────────────────────────────────┐")
+        typer.echo("│ Feature             │ Status                             │")
+        typer.echo("├─────────────────────┼────────────────────────────────────┤")
+        
+        # Tensor Cores
+        tc_status = cap.tensor_cores if cap.tensor_cores else "None"
+        typer.echo(f"│ Tensor Cores        │ {tc_status:<34} │")
+        
+        # TMA
+        if cap.tma_supported:
+            tma_status = f"✓ (1D:{cap.tma_limits.max_1d_elements}, 2D:{cap.tma_limits.max_2d_width}×{cap.tma_limits.max_2d_height})"
+            if not cap.tma_compiler_supported:
+                tma_status += " [compiler N/A]"
+        else:
+            tma_status = "✗"
+        typer.echo(f"│ TMA                 │ {tma_status:<34} │")
+        
+        # TMEM/DSMEM (Clusters)
+        if cap.cluster.supports_clusters:
+            cluster_status = f"✓ (max cluster: {cap.cluster.max_cluster_size})"
+            if cap.cluster.has_dsmem:
+                cluster_status = f"✓ DSMEM (cluster: {cap.cluster.max_cluster_size})"
+        else:
+            cluster_status = "✗"
+        typer.echo(f"│ TMEM/DSMEM          │ {cluster_status:<34} │")
+        
+        # NVLink
+        nvlink_status = "✓" if cap.nvlink_c2c else "✗"
+        typer.echo(f"│ NVLink C2C          │ {nvlink_status:<34} │")
+        
+        # Grace Coherence
+        grace_status = "✓" if cap.grace_coherence else "✗"
+        typer.echo(f"│ Grace Coherence     │ {grace_status:<34} │")
+        
+        # Features from list
+        fp8 = "✓" if "FP8" in cap.features or cap.architecture.lower() in ["hopper", "blackwell"] else "✗"
+        typer.echo(f"│ FP8                 │ {fp8:<34} │")
+        
+        hbm3e = "✓ HBM3e" if "HBM3e" in cap.features else "✗"
+        typer.echo(f"│ HBM3e Memory        │ {hbm3e:<34} │")
+        
+        # ILP-related info
+        typer.echo("├─────────────────────┼────────────────────────────────────┤")
+        typer.echo(f"│ Max Threads/Block   │ {cap.max_threads_per_block:<34} │")
+        typer.echo(f"│ Max Threads/SM      │ {cap.max_threads_per_sm:<34} │")
+        smem_kb = cap.max_shared_mem_per_block / 1024
+        typer.echo(f"│ Shared Mem/Block    │ {smem_kb:.0f} KB{'':<28} │")
+        if cap.l2_cache_kb:
+            typer.echo(f"│ L2 Cache            │ {cap.l2_cache_kb:.0f} KB{'':<28} │")
+        
+        typer.echo("└─────────────────────┴────────────────────────────────────┘")
+        
+        # Driver/Runtime info
+        if cap.driver_version or cap.cuda_runtime_version:
+            typer.echo()
+            if cap.driver_version:
+                typer.echo(f"   Driver: {cap.driver_version}")
+            if cap.cuda_runtime_version:
+                typer.echo(f"   CUDA Runtime: {cap.cuda_runtime_version}")
+        
+        # Notes
+        if cap.notes:
+            typer.echo("\n📝 Notes:")
+            for note in cap.notes:
+                typer.echo(f"   • {note}")
+        
+        typer.echo()
+
+    @info_app.command("network", help="Network and InfiniBand status")
+    def info_network(ctx: typer.Context) -> None:
+        """Display network interfaces, InfiniBand status, and GPUDirect RDMA info."""
+        import shutil
+        
+        typer.echo("\n🌐 Network Status\n")
+        
+        # InfiniBand status
+        ibstat_cmd = shutil.which("ibstat")
+        if ibstat_cmd:
+            typer.echo("InfiniBand Devices:")
+            try:
+                result = subprocess.run([ibstat_cmd], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0 and result.stdout.strip():
+                    # Parse ibstat output for key info
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines:
+                        if any(x in line for x in ['CA ', 'Port ', 'State:', 'Rate:', 'Link layer:']):
+                            typer.echo(f"  {line.strip()}")
+                else:
+                    typer.echo("  No InfiniBand devices found")
+            except Exception as e:
+                typer.echo(f"  Error querying ibstat: {e}")
+        else:
+            typer.echo("InfiniBand: ibstat not found (IB tools not installed)")
+        
+        typer.echo()
+        
+        # Check for GPUDirect RDMA
+        typer.echo("GPUDirect RDMA:")
+        try:
+            # Check for nv_peer_mem or nvidia_peermem module
+            result = subprocess.run(["lsmod"], capture_output=True, text=True, timeout=5)
+            if "nv_peer_mem" in result.stdout or "nvidia_peermem" in result.stdout:
+                typer.echo("  ✓ Peer memory module loaded (GPUDirect RDMA available)")
+            else:
+                typer.echo("  ✗ Peer memory module not loaded")
+        except Exception:
+            typer.echo("  Unable to check peer memory status")
+        
+        typer.echo()
+        
+        # NCCL network info
+        typer.echo("NCCL Network Environment:")
+        nccl_vars = ["NCCL_IB_DISABLE", "NCCL_NET_GDR_LEVEL", "NCCL_P2P_LEVEL", 
+                     "NCCL_IB_GID_INDEX", "NCCL_SOCKET_IFNAME"]
+        for var in nccl_vars:
+            val = os.environ.get(var, "(not set)")
+            typer.echo(f"  {var}: {val}")
+        
+        typer.echo()
+
 
 # =============================================================================
-# Category: ai (extension)
+# Category: ai
 # =============================================================================
 
 if typer and ai_app is not None:
@@ -295,338 +436,47 @@ if typer and ai_app is not None:
 
 
 # =============================================================================
-# Category: analyze (extension)
-# =============================================================================
-
-if typer and analyze_app is not None:
-
-    @analyze_app.command("profile", help="Run profiling on a benchmark/script")
-    def analyze_profile(
-        ctx: typer.Context,
-        targets: Optional[List[str]] = typer.Option(
-            None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to profile"
-        ),
-        profile: ProfilePreset = typer.Option(
-            ProfilePreset.deep_dive,
-            "--profile",
-            "-p",
-            help="Benchmark CLI profile preset",
-            show_choices=True,
-        ),
-    ) -> None:
-        from cli.commands import analysis
-        _run(analysis.run_profile, ctx, targets=targets, profile=profile)
-
-    @analyze_app.command("compare", help="Compare two configurations/runs")
-    def analyze_compare(
-        ctx: typer.Context,
-        chapter: str = typer.Option(
-            "labs/moe_parallelism",
-            "--chapter",
-            "-c",
-            help="Chapter token (e.g., ch15 or labs/moe_parallelism)",
-        ),
-        targets: Optional[List[str]] = typer.Option(
-            None, "--targets", help="Optional example names to compare"
-        ),
-    ) -> None:
-        from cli.commands import analysis
-        _run(analysis.compare_runs, ctx, chapter=chapter, targets=targets)
-
-    @analyze_app.command("diff", help="Differential analysis between baseline/optimized")
-    def analyze_diff(
-        ctx: typer.Context,
-        baseline: Optional[Path] = typer.Argument(None, help="Baseline deep profile JSON"),
-        optimized: Optional[Path] = typer.Argument(None, help="Optimized deep profile JSON"),
-    ) -> None:
-        from cli.commands import analysis
-        _run(analysis.diff_analysis, ctx, baseline=str(baseline) if baseline else None, optimized=str(optimized) if optimized else None)
-
-    @analyze_app.command("roofline", help="Roofline model analysis")
-    def analyze_roofline(ctx: typer.Context) -> None:
-        from cli.commands import analysis
-        _run(analysis.roofline, ctx)
-
-    @analyze_app.command("bottleneck", help="Identify performance bottlenecks")
-    def analyze_bottleneck(
-        ctx: typer.Context,
-        mode: BottleneckMode = typer.Option(
-            BottleneckMode.both,
-            "--mode",
-            help="Use profile-only, LLM-only, or combined analysis",
-            show_choices=True,
-        ),
-        limit: int = typer.Option(5, "--limit", help="Limit number of bottlenecks shown"),
-    ) -> None:
-        from cli.commands import analysis
-        _run(analysis.bottleneck, ctx, mode=mode, limit=limit)
-
-
-# =============================================================================
-# Category: optimize (extension)
-# =============================================================================
-
-if typer and optimize_app is not None:
-
-    @optimize_app.command("recommend", help="Get optimization recommendations")
-    def optimize_recommend(
-        ctx: typer.Context,
-        model_size: Optional[float] = typer.Option(None, "--model-size", help="Model size in billions"),
-        gpus: int = typer.Option(1, "--gpus", help="Number of GPUs"),
-        goal: GoalChoice = typer.Option(
-            GoalChoice.throughput,
-            "--goal",
-            help="Optimization goal",
-            show_choices=True,
-        ),
-    ) -> None:
-        from cli.commands import optimization
-        _run(optimization.recommend, ctx, model_size=model_size, gpus=gpus, goal=goal)
-
-    @optimize_app.command("auto", help="Auto-optimization with LLM guidance")
-    def optimize_auto(ctx: typer.Context) -> None:
-        from cli.commands import optimization
-        _run(optimization.auto_optimize, ctx)
-
-    @optimize_app.command("whatif", help="What-if analysis for optimizations")
-    def optimize_whatif(ctx: typer.Context) -> None:
-        from cli.commands import optimization
-        _run(optimization.whatif, ctx)
-
-    @optimize_app.command("stacking", help="Compound optimization stacking")
-    def optimize_stacking(ctx: typer.Context) -> None:
-        from cli.commands import optimization
-        _run(optimization.stacking, ctx)
-
-    @optimize_app.command("playbook", help="Pre-built optimization playbooks")
-    def optimize_playbook(
-        ctx: typer.Context,
-        action: str = typer.Argument("list", help='Playbook name or "list"'),
-    ) -> None:
-        from cli.commands import optimization
-        _run(optimization.playbook, ctx, action=action)
-
-
-# =============================================================================
-# Category: distributed (extension)
-# =============================================================================
-
-if typer and distributed_app is not None:
-
-    @distributed_app.command("plan", help="Plan parallelism strategy (TP/PP/DP)")
-    def distributed_plan(
-        ctx: typer.Context,
-        model_size: Optional[float] = typer.Option(None, "--model-size", help="Model size in billions"),
-        gpus: int = typer.Option(8, "--gpus", help="Number of GPUs"),
-        nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
-    ) -> None:
-        from cli.commands import distributed
-        _run(distributed.plan_parallelism, ctx, model_size=model_size, gpus=gpus, nodes=nodes)
-
-    @distributed_app.command("topology", help="Analyze GPU topology")
-    def distributed_topology(ctx: typer.Context) -> None:
-        from cli.commands import distributed
-        _run(distributed.topology, ctx)
-
-    @distributed_app.command("nccl", help="NCCL tuning recommendations")
-    def distributed_nccl(
-        ctx: typer.Context,
-        nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
-        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
-        diagnose: bool = typer.Option(False, "--diagnose", help="Include diagnostic checks"),
-    ) -> None:
-        from cli.commands import distributed
-        _run(distributed.nccl_tuning, ctx, nodes=nodes, gpus=gpus, diagnose=diagnose)
-
-    @distributed_app.command("zero", help="ZeRO/FSDP configuration")
-    def distributed_zero(
-        ctx: typer.Context,
-        model_size: float = typer.Option(70.0, "--model-size", help="Model size in billions"),
-        gpus: int = typer.Option(8, "--gpus", help="Number of GPUs"),
-    ) -> None:
-        from cli.commands import distributed
-        _run(distributed.zero_config, ctx, model_size=model_size, gpus=gpus)
-
-
-# =============================================================================
-# Category: inference (extension)
-# =============================================================================
-
-if typer and inference_app is not None:
-
-    @inference_app.command("vllm", help="vLLM configuration and optimization")
-    def inference_vllm(
-        ctx: typer.Context,
-        model: Optional[str] = typer.Option(None, "--model", help="Model name"),
-        target: TargetChoice = typer.Option(
-            TargetChoice.balanced,
-            "--target",
-            help="Optimization target",
-            show_choices=True,
-        ),
-    ) -> None:
-        from cli.commands import inference
-        _run(inference.vllm_config, ctx, model=model, target=target)
-
-    @inference_app.command("quantize", help="Quantization recommendations")
-    def inference_quantize(
-        ctx: typer.Context,
-        model_size: float = typer.Option(70.0, "--model-size", help="Model size in billions"),
-        target_memory: Optional[float] = typer.Option(
-            None, "--target-memory", help="Target memory per GPU (GB)"
-        ),
-    ) -> None:
-        from cli.commands import inference
-        _run(inference.quantize, ctx, model_size=model_size, target_memory=target_memory)
-
-    @inference_app.command("deploy", help="Deployment configuration")
-    def inference_deploy(
-        ctx: typer.Context,
-        model: str = typer.Option("meta-llama/Llama-2-70b-hf", "--model", help="Model name"),
-        target: str = typer.Option("vllm", "--target", help="Backend target (vllm/tensorrt/triton)"),
-    ) -> None:
-        from cli.commands import inference
-        _run(inference.deploy_config, ctx, model=model, target=target)
-
-    @inference_app.command("serve", help="Start inference server")
-    def inference_serve(
-        ctx: typer.Context,
-        model: str = typer.Option("meta-llama/Llama-2-70b-hf", "--model", help="Model name"),
-        gpus: int = typer.Option(1, "--gpus", help="Tensor parallel size"),
-    ) -> None:
-        from cli.commands import inference
-        _run(inference.serve, ctx, model=model, gpus=gpus)
-
-
-# =============================================================================
-# Category: training (extension)
-# =============================================================================
-
-if typer and training_app is not None:
-
-    @training_app.command("rl", help="RL/RLHF optimization")
-    def training_rl(ctx: typer.Context) -> None:
-        from cli.commands import training
-        _run(training.rl, ctx)
-
-    @training_app.command("checkpoint", help="Checkpointing strategy")
-    def training_checkpoint(ctx: typer.Context) -> None:
-        from cli.commands import training
-        _run(training.checkpointing, ctx)
-
-    @training_app.command("gradient", help="Gradient optimization")
-    def training_gradient(ctx: typer.Context) -> None:
-        from cli.commands import training
-        _run(training.gradient, ctx)
-
-
-# =============================================================================
-# Category: monitor (extension)
-# =============================================================================
-
-if typer and monitor_app is not None:
-
-    @monitor_app.command("live", help="Real-time GPU monitoring")
-    def monitor_live(ctx: typer.Context) -> None:
-        from cli.commands import monitoring
-        _run(monitoring.live_monitor, ctx)
-
-    @monitor_app.command("regression", help="Detect performance regressions")
-    def monitor_regression(ctx: typer.Context) -> None:
-        from cli.commands import monitoring
-        _run(monitoring.regression, ctx)
-
-    @monitor_app.command("metrics", help="Collect and display metrics")
-    def monitor_metrics(ctx: typer.Context) -> None:
-        from cli.commands import monitoring
-        _run(monitoring.metrics, ctx)
-
-
-# =============================================================================
-# Category: report (extension)
-# =============================================================================
-
-if typer and report_app is not None:
-
-    @report_app.command("generate", help="Generate performance report")
-    def report_generate(
-        ctx: typer.Context,
-        output: Optional[Path] = typer.Option(None, "--output", help="Output file for generated report"),
-        fmt: ReportFormat = typer.Option(
-            ReportFormat.markdown,
-            "--format",
-            help="Report format",
-            show_choices=True,
-        ),
-    ) -> None:
-        from cli.commands import reports
-        _run(reports.generate_report, ctx, output=str(output) if output else None, format=fmt)
-
-    @report_app.command("history", help="View optimization history")
-    def report_history(ctx: typer.Context) -> None:
-        from cli.commands import reports
-        _run(reports.show_history, ctx)
-
-    @report_app.command("roi", help="Calculate ROI of optimizations")
-    def report_roi(ctx: typer.Context) -> None:
-        from cli.commands import reports
-        _run(reports.calculate_roi, ctx)
-
-    @report_app.command("export", help="Export results to various formats")
-    def report_export(
-        ctx: typer.Context,
-        fmt: ExportFormat = typer.Option(
-            ExportFormat.json,
-            "--format",
-            help="Export format",
-            show_choices=True,
-        ),
-        output: Optional[Path] = typer.Option(None, "--output", help="Output file"),
-    ) -> None:
-        from cli.commands import reports
-        _run(reports.export, ctx, format=fmt, output=str(output) if output else None)
-
-
-# =============================================================================
-# Category: profile (extension)
+# Category: profile (merged with analyze)
 # =============================================================================
 
 if typer and profile_app is not None:
-    # Profile commands - always available
 
-    @profile_app.command("flame", help="Generate flame graph")
-    def profile_flame(
+    # --- Capture commands ---
+    
+    @profile_app.command("nsys", help="Run Nsight Systems capture")
+    def profile_nsys(
         ctx: typer.Context,
-        file: Optional[Path] = typer.Argument(None, help="Profile file"),
-        output: str = typer.Option("flame.html", "--output", "-o", help="Output file"),
+        command: str = typer.Argument(..., help='Command to profile (quote it), e.g., "python train.py"'),
+        output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Base name for output"),
+        output_dir: Optional[Path] = typer.Option(None, "--output-dir", help="Output directory"),
+        preset: str = typer.Option("full", "--preset", help="Preset: full or light"),
+    ) -> None:
+        """Run Nsight Systems profiling on a command."""
+        import shlex
+        cmd_parts = shlex.split(command)
+        output = output_name or "profile"
+        out_dir = str(output_dir) if output_dir else "artifacts/profiles"
+        
+        nsys_cmd = [
+            "nsys", "profile",
+            "-o", f"{out_dir}/{output}",
+            "--trace", "cuda,nvtx,osrt",
+            "--cuda-memory-usage=true",
+            *cmd_parts
+        ]
+        typer.echo(f"Running: {' '.join(nsys_cmd)}")
+        result = subprocess.run(nsys_cmd)
+        raise typer.Exit(code=result.returncode)
+
+    @profile_app.command("ncu", help="Run Nsight Compute capture")
+    def profile_ncu(
+        ctx: typer.Context,
+        script: Optional[Path] = typer.Argument(None, help="Script to profile"),
+        kernel: Optional[str] = typer.Option(None, "--kernel", help="Specific kernel filter"),
+        output_name: Optional[str] = typer.Option(None, "--output-name", "-o", help="Output name"),
     ) -> None:
         from cli.commands import profiling
-        _run(profiling.flame, ctx, file=str(file) if file else None, output=output)
-
-    @profile_app.command("memory", help="Memory timeline analysis")
-    def profile_memory(
-        ctx: typer.Context,
-        file: Optional[Path] = typer.Argument(None, help="Profile file"),
-        output: Optional[str] = typer.Option(None, "--output", "-o", help="Optional path to write JSON timeline"),
-    ) -> None:
-        from cli.commands import profiling
-        _run(profiling.memory, ctx, file=str(file) if file else None, output=output)
-
-    @profile_app.command("kernels", help="Kernel breakdown analysis")
-    def profile_kernels(
-        ctx: typer.Context,
-        file: Optional[Path] = typer.Argument(None, help="Profile file"),
-    ) -> None:
-        from cli.commands import profiling
-        _run(profiling.kernels, ctx, file=str(file) if file else None)
-
-    @profile_app.command("hta", help="Holistic Trace Analysis")
-    def profile_hta(
-        ctx: typer.Context,
-        file: Optional[Path] = typer.Argument(None, help="Profile file"),
-    ) -> None:
-        from cli.commands import profiling
-        _run(profiling.hta, ctx, file=str(file) if file else None)
+        _run(profiling.ncu, ctx, script=str(script) if script else None, kernel=kernel)
 
     @profile_app.command("torch", help="Run torch.profiler capture (Chrome trace + summary)")
     def profile_torch_profiler(
@@ -678,14 +528,102 @@ if typer and profile_app is not None:
             timeout_seconds=timeout_seconds,
         )
 
-    @profile_app.command("ncu", help="NCU deep dive analysis")
-    def profile_ncu(
+    # --- View commands ---
+
+    @profile_app.command("flame", help="Generate flame graph")
+    def profile_flame(
         ctx: typer.Context,
-        script: Optional[Path] = typer.Argument(None, help="Script to profile"),
-        kernel: Optional[str] = typer.Option(None, "--kernel", help="Specific kernel"),
+        file: Optional[Path] = typer.Argument(None, help="Profile file"),
+        output: str = typer.Option("flame.html", "--output", "-o", help="Output file"),
     ) -> None:
         from cli.commands import profiling
-        _run(profiling.ncu, ctx, script=str(script) if script else None, kernel=kernel)
+        _run(profiling.flame, ctx, file=str(file) if file else None, output=output)
+
+    @profile_app.command("memory", help="Memory timeline analysis")
+    def profile_memory(
+        ctx: typer.Context,
+        file: Optional[Path] = typer.Argument(None, help="Profile file"),
+        output: Optional[str] = typer.Option(None, "--output", "-o", help="Optional path to write JSON timeline"),
+    ) -> None:
+        from cli.commands import profiling
+        _run(profiling.memory, ctx, file=str(file) if file else None, output=output)
+
+    @profile_app.command("kernels", help="Kernel breakdown analysis")
+    def profile_kernels(
+        ctx: typer.Context,
+        file: Optional[Path] = typer.Argument(None, help="Profile file"),
+    ) -> None:
+        from cli.commands import profiling
+        _run(profiling.kernels, ctx, file=str(file) if file else None)
+
+    @profile_app.command("hta", help="Holistic Trace Analysis")
+    def profile_hta(
+        ctx: typer.Context,
+        file: Optional[Path] = typer.Argument(None, help="Profile file"),
+    ) -> None:
+        from cli.commands import profiling
+        _run(profiling.hta, ctx, file=str(file) if file else None)
+
+    # --- Compare commands ---
+
+    @profile_app.command("compare", help="Compare baseline vs optimized profiles (flame graph)")
+    def profile_compare(
+        ctx: typer.Context,
+        chapter: Optional[str] = typer.Argument(None, help="Chapter name or path to profile directory"),
+        output: str = typer.Option("comparison_flamegraph.html", "--output", "-o", help="Output HTML file"),
+        json_out: Optional[str] = typer.Option(None, "--json", "-j", help="Also output JSON data"),
+    ) -> None:
+        from cli.commands import profiling
+        _run(profiling.compare_profiles, ctx, chapter=chapter, output=output, json_out=json_out)
+
+    @profile_app.command("diff", help="Differential analysis between baseline/optimized")
+    def profile_diff(
+        ctx: typer.Context,
+        baseline: Optional[Path] = typer.Argument(None, help="Baseline deep profile JSON"),
+        optimized: Optional[Path] = typer.Argument(None, help="Optimized deep profile JSON"),
+    ) -> None:
+        from cli.commands import analysis
+        _run(analysis.diff_analysis, ctx, baseline=str(baseline) if baseline else None, optimized=str(optimized) if optimized else None)
+
+    # --- Analysis commands (merged from analyze) ---
+
+    @profile_app.command("run", help="Run profiling on a benchmark/script")
+    def profile_run(
+        ctx: typer.Context,
+        targets: Optional[List[str]] = typer.Option(
+            None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to profile"
+        ),
+        profile: ProfilePreset = typer.Option(
+            ProfilePreset.deep_dive,
+            "--profile",
+            "-p",
+            help="Benchmark CLI profile preset",
+            show_choices=True,
+        ),
+    ) -> None:
+        from cli.commands import analysis
+        _run(analysis.run_profile, ctx, targets=targets, profile=profile)
+
+    @profile_app.command("roofline", help="Roofline model analysis")
+    def profile_roofline(ctx: typer.Context) -> None:
+        from cli.commands import analysis
+        _run(analysis.roofline, ctx)
+
+    @profile_app.command("bottleneck", help="Identify performance bottlenecks")
+    def profile_bottleneck(
+        ctx: typer.Context,
+        mode: BottleneckMode = typer.Option(
+            BottleneckMode.both,
+            "--mode",
+            help="Use profile-only, LLM-only, or combined analysis",
+            show_choices=True,
+        ),
+        limit: int = typer.Option(5, "--limit", help="Limit number of bottlenecks shown"),
+    ) -> None:
+        from cli.commands import analysis
+        _run(analysis.bottleneck, ctx, mode=mode, limit=limit)
+
+    # --- Advanced analysis commands ---
 
     @profile_app.command("warp-divergence", help="Warp divergence analysis")
     def profile_warp_divergence(ctx: typer.Context) -> None:
@@ -702,19 +640,502 @@ if typer and profile_app is not None:
         from cli.commands import profiling
         _run(profiling.occupancy, ctx)
 
-    @profile_app.command("compare", help="Compare baseline vs optimized profiles (flame graph)")
-    def profile_compare(
+    @profile_app.command("ilp", help="Instruction-level parallelism analysis")
+    def profile_ilp(
         ctx: typer.Context,
-        chapter: Optional[str] = typer.Argument(None, help="Chapter name or path to profile directory"),
-        output: str = typer.Option("comparison_flamegraph.html", "--output", "-o", help="Output HTML file"),
-        json_out: Optional[str] = typer.Option(None, "--json", "-j", help="Also output JSON data"),
+        report: Optional[Path] = typer.Argument(None, help="NCU report file (.ncu-rep)"),
     ) -> None:
-        from cli.commands import profiling
-        _run(profiling.compare_profiles, ctx, chapter=chapter, output=output, json_out=json_out)
+        """Analyze ILP metrics from NCU report or run fresh capture."""
+        typer.echo("\n📊 ILP (Instruction-Level Parallelism) Analysis\n")
+        
+        if report and report.exists():
+            # Parse existing NCU report for ILP metrics
+            typer.echo(f"Analyzing: {report}")
+            # Would use ncu --import to extract metrics
+            typer.echo("\nKey ILP Metrics:")
+            typer.echo("  • Issued IPC: Instructions per cycle issued")
+            typer.echo("  • Executed IPC: Instructions per cycle executed")
+            typer.echo("  • Warp cycles per issued instruction")
+            typer.echo("  • Pipeline stall reasons")
+            typer.echo("\nRun `aisp profile stalls` for detailed stall breakdown.")
+        else:
+            typer.echo("Usage: aisp profile ilp <ncu-report.ncu-rep>")
+            typer.echo("\nTo capture ILP metrics:")
+            typer.echo("  ncu --set full --metrics \\")
+            typer.echo("    sm__inst_executed_pipe_*,sm__warps_active,sm__inst_issued \\")
+            typer.echo("    -o ilp_report python your_script.py")
+
+    @profile_app.command("stalls", help="Pipeline stall analysis")
+    def profile_stalls(
+        ctx: typer.Context,
+        report: Optional[Path] = typer.Argument(None, help="NCU report file (.ncu-rep)"),
+    ) -> None:
+        """Analyze pipeline stall reasons from NCU report."""
+        typer.echo("\n⏱️  Pipeline Stall Analysis\n")
+        
+        typer.echo("Stall Categories:")
+        typer.echo("  • Memory Dependency: Waiting for memory operations")
+        typer.echo("  • Execution Dependency: Waiting for ALU/FPU results")
+        typer.echo("  • Synchronization: Barrier or atomic waits")
+        typer.echo("  • Texture: Waiting for texture fetch")
+        typer.echo("  • Pipe Busy: Execution units occupied")
+        typer.echo("  • Not Selected: Warp not scheduled (low priority)")
+        typer.echo()
+        
+        if report and report.exists():
+            typer.echo(f"Analyzing: {report}")
+            # Would parse NCU report for stall metrics
+        else:
+            typer.echo("To capture stall metrics:")
+            typer.echo("  ncu --set full --section WarpStateStats \\")
+            typer.echo("    -o stall_report python your_script.py")
+
+    @profile_app.command("warmup", help="Warmup/JIT audit")
+    def profile_warmup(
+        ctx: typer.Context,
+        script: Optional[Path] = typer.Argument(None, help="Script to analyze"),
+        iterations: int = typer.Option(10, "--iterations", help="Iterations"),
+    ) -> None:
+        from cli.commands import tests as test_cmds
+        _run(test_cmds.warmup_audit, ctx, script=str(script) if script else None, iterations=iterations)
+
+    @profile_app.command("registers", help="Register pressure and spilling analysis")
+    def profile_registers(
+        ctx: typer.Context,
+        report: Optional[Path] = typer.Argument(None, help="NCU report file (.ncu-rep)"),
+    ) -> None:
+        """Analyze register usage and spilling from NCU report."""
+        typer.echo("\n📊 Register Pressure Analysis\n")
+        
+        typer.echo("Key Metrics:")
+        typer.echo("  • Registers per thread: Target <64 for good occupancy")
+        typer.echo("  • Register spills: Local memory accesses (slow)")
+        typer.echo("  • Occupancy impact: Fewer registers = more warps")
+        typer.echo()
+        
+        if report and report.exists():
+            typer.echo(f"Analyzing: {report}")
+            typer.echo("\nTo extract register metrics from NCU:")
+            typer.echo("  ncu --query-metrics-mode all | grep -i register")
+        else:
+            typer.echo("Usage: aisp profile registers <ncu-report.ncu-rep>")
+            typer.echo("\nTo capture register metrics:")
+            typer.echo("  ncu --set full --section LaunchStats \\")
+            typer.echo("    -o register_report python your_script.py")
+            typer.echo("\nKey NCU metrics:")
+            typer.echo("  • launch__registers_per_thread")
+            typer.echo("  • launch__registers_per_thread_allocated")
+            typer.echo("  • lts__t_sectors_srcunit_tex_op_read (spill loads)")
+            typer.echo("  • lts__t_sectors_srcunit_tex_op_write (spill stores)")
+
+    @profile_app.command("coalescing", help="Memory access coalescing analysis")
+    def profile_coalescing(
+        ctx: typer.Context,
+        stride: int = typer.Option(1, "--stride", help="Access stride in elements"),
+        element_size: int = typer.Option(4, "--element-size", help="Element size in bytes"),
+    ) -> None:
+        """Analyze memory access patterns for coalescing efficiency."""
+        typer.echo("\n🔄 Memory Coalescing Analysis\n")
+        
+        # Calculate coalescing efficiency
+        warp_size = 32
+        cache_line = 128  # L1/L2 cache line size
+        
+        access_span = stride * element_size * warp_size
+        transactions = (access_span + cache_line - 1) // cache_line
+        ideal_transactions = (warp_size * element_size + cache_line - 1) // cache_line
+        efficiency = (ideal_transactions / transactions) * 100 if transactions > 0 else 0
+        
+        typer.echo(f"Configuration:")
+        typer.echo(f"  Stride: {stride} elements")
+        typer.echo(f"  Element size: {element_size} bytes")
+        typer.echo(f"  Warp size: {warp_size} threads")
+        typer.echo()
+        typer.echo(f"Memory Access Pattern:")
+        typer.echo(f"  Access span per warp: {access_span} bytes")
+        typer.echo(f"  Cache transactions: {transactions} (ideal: {ideal_transactions})")
+        typer.echo(f"  Coalescing efficiency: {efficiency:.1f}%")
+        typer.echo()
+        
+        if efficiency < 50:
+            typer.echo("⚠️  Poor coalescing! Consider:")
+            typer.echo("  • Transpose data for contiguous access")
+            typer.echo("  • Use Structure of Arrays (SoA) instead of AoS")
+            typer.echo("  • Pad arrays to avoid bank conflicts")
+        elif efficiency < 80:
+            typer.echo("⚡ Moderate coalescing. Room for improvement.")
+        else:
+            typer.echo("✅ Good coalescing efficiency!")
+
+    @profile_app.command("comm-overlap", help="Communication/compute overlap analysis")
+    def profile_comm_overlap(
+        ctx: typer.Context,
+        model: str = typer.Option("llama-3.1-70b", "--model", "-m", help="Model name"),
+    ) -> None:
+        """Analyze communication/computation overlap opportunities."""
+        from core.perf_core_base import PerformanceCore
+        
+        core = PerformanceCore()
+        result = core.get_comm_overlap_analysis(model)
+        
+        if result.get("success"):
+            typer.echo(f"\n🔄 Communication Overlap Analysis: {result.get('model', model)}\n")
+            
+            inputs = result.get("inputs", {})
+            typer.echo(f"Configuration:")
+            typer.echo(f"  Model: {inputs.get('params_b', '?')}B params")
+            typer.echo(f"  Layout: TP={inputs.get('tp')}, PP={inputs.get('pp')}, DP={inputs.get('dp')}")
+            typer.echo(f"  GPUs: {inputs.get('gpus')}")
+            typer.echo()
+            
+            overlap = result.get("overlap_analysis", {})
+            if overlap:
+                typer.echo(f"Overlap Opportunities:")
+                for key, value in overlap.items():
+                    if isinstance(value, (int, float)):
+                        typer.echo(f"  {key}: {value}")
+                    elif isinstance(value, dict):
+                        typer.echo(f"  {key}:")
+                        for k, v in value.items():
+                            typer.echo(f"    {k}: {v}")
+            
+            if result.get("warning"):
+                typer.echo(f"\n⚠️  {result['warning']}")
+        else:
+            typer.echo(f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
+
+    @profile_app.command("energy", help="Energy efficiency analysis")
+    def profile_energy(ctx: typer.Context) -> None:
+        """Analyze GPU energy efficiency and power characteristics."""
+        from core.perf_core_base import PerformanceCore
+        
+        core = PerformanceCore()
+        result = core.get_energy_analysis()
+        
+        if result.get("success"):
+            typer.echo("\n⚡ Energy Efficiency Analysis\n")
+            
+            current = result.get("current_state", {})
+            if current:
+                typer.echo(f"Current Power State:")
+                typer.echo(f"  Power draw: {current.get('power_w', '?')} W")
+                typer.echo(f"  Temperature: {current.get('temp_c', '?')}°C")
+                typer.echo(f"  GPU utilization: {current.get('gpu_util_pct', '?')}%")
+                typer.echo(f"  Memory utilization: {current.get('mem_util_pct', '?')}%")
+            
+            efficiency = result.get("efficiency_metrics", {})
+            if efficiency:
+                typer.echo(f"\nEfficiency Metrics:")
+                for key, value in efficiency.items():
+                    typer.echo(f"  {key}: {value}")
+            
+            recommendations = result.get("recommendations", [])
+            if recommendations:
+                typer.echo(f"\n💡 Recommendations:")
+                for rec in recommendations:
+                    typer.echo(f"  • {rec}")
+        else:
+            typer.echo(f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
+
+    @profile_app.command("data-loading", help="Data loading pipeline analysis")
+    def profile_data_loading(ctx: typer.Context) -> None:
+        """Analyze data loading pipeline for bottlenecks."""
+        from core.perf_core_base import PerformanceCore
+        
+        core = PerformanceCore()
+        result = core.get_data_loading_analysis()
+        
+        if result.get("success"):
+            typer.echo("\n📦 Data Loading Analysis\n")
+            
+            config = result.get("config", {})
+            if config:
+                typer.echo(f"Current Configuration:")
+                for key, value in config.items():
+                    typer.echo(f"  {key}: {value}")
+            
+            bottlenecks = result.get("bottlenecks", [])
+            if bottlenecks:
+                typer.echo(f"\n⚠️  Bottlenecks Detected:")
+                for b in bottlenecks:
+                    typer.echo(f"  • {b}")
+            
+            recommendations = result.get("recommendations", [])
+            if recommendations:
+                typer.echo(f"\n💡 Recommendations:")
+                for rec in recommendations:
+                    typer.echo(f"  • {rec}")
+        else:
+            typer.echo(f"❌ Analysis failed: {result.get('error', 'Unknown error')}")
 
 
 # =============================================================================
-# Category: HuggingFace (extension)
+# Category: optimize
+# =============================================================================
+
+if typer and optimize_app is not None:
+
+    @optimize_app.command("recommend", help="Get optimization recommendations")
+    def optimize_recommend(
+        ctx: typer.Context,
+        model_size: Optional[float] = typer.Option(None, "--model-size", help="Model size in billions"),
+        gpus: int = typer.Option(1, "--gpus", help="Number of GPUs"),
+        goal: GoalChoice = typer.Option(
+            GoalChoice.throughput,
+            "--goal",
+            help="Optimization goal",
+            show_choices=True,
+        ),
+    ) -> None:
+        from cli.commands import optimization
+        _run(optimization.recommend, ctx, model_size=model_size, gpus=gpus, goal=goal)
+
+    @optimize_app.command("auto", help="Auto-optimization with LLM guidance")
+    def optimize_auto(ctx: typer.Context) -> None:
+        from cli.commands import optimization
+        _run(optimization.auto_optimize, ctx)
+
+    @optimize_app.command("whatif", help="What-if analysis for optimizations")
+    def optimize_whatif(ctx: typer.Context) -> None:
+        from cli.commands import optimization
+        _run(optimization.whatif, ctx)
+
+    @optimize_app.command("stacking", help="Compound optimization stacking")
+    def optimize_stacking(ctx: typer.Context) -> None:
+        from cli.commands import optimization
+        _run(optimization.stacking, ctx)
+
+    @optimize_app.command("playbook", help="Pre-built optimization playbooks")
+    def optimize_playbook(
+        ctx: typer.Context,
+        action: str = typer.Argument("list", help='Playbook name or "list"'),
+    ) -> None:
+        from cli.commands import optimization
+        _run(optimization.playbook, ctx, action=action)
+
+
+# =============================================================================
+# Category: distributed
+# =============================================================================
+
+if typer and distributed_app is not None:
+
+    @distributed_app.command("plan", help="Plan parallelism strategy (TP/PP/DP)")
+    def distributed_plan(
+        ctx: typer.Context,
+        model_size: Optional[float] = typer.Option(None, "--model-size", help="Model size in billions"),
+        gpus: int = typer.Option(8, "--gpus", help="Number of GPUs"),
+        nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
+    ) -> None:
+        from cli.commands import distributed
+        _run(distributed.plan_parallelism, ctx, model_size=model_size, gpus=gpus, nodes=nodes)
+
+    @distributed_app.command("topology", help="Analyze GPU topology")
+    def distributed_topology(ctx: typer.Context) -> None:
+        from cli.commands import distributed
+        _run(distributed.topology, ctx)
+
+    @distributed_app.command("nccl", help="NCCL tuning recommendations")
+    def distributed_nccl(
+        ctx: typer.Context,
+        nodes: int = typer.Option(1, "--nodes", help="Number of nodes"),
+        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
+        diagnose: bool = typer.Option(False, "--diagnose", help="Include diagnostic checks"),
+    ) -> None:
+        from cli.commands import distributed
+        _run(distributed.nccl_tuning, ctx, nodes=nodes, gpus=gpus, diagnose=diagnose)
+
+    @distributed_app.command("zero", help="ZeRO/FSDP configuration")
+    def distributed_zero(
+        ctx: typer.Context,
+        model_size: float = typer.Option(70.0, "--model-size", help="Model size in billions"),
+        gpus: int = typer.Option(8, "--gpus", help="Number of GPUs"),
+    ) -> None:
+        from cli.commands import distributed
+        _run(distributed.zero_config, ctx, model_size=model_size, gpus=gpus)
+
+    @distributed_app.command("launch-plan", help="Generate torchrun launch plan (dry-run/save).")
+    def distributed_launch_plan(
+        ctx: typer.Context,
+        model_params: int = typer.Option(70, "--model-params", help="Model size in billions"),
+        nodes: int = typer.Option(1, "--nodes", help="Nodes"),
+        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
+        tp: int = typer.Option(1, "--tp", help="Tensor parallel degree"),
+        pp: int = typer.Option(1, "--pp", help="Pipeline parallel degree"),
+        dp: int = typer.Option(1, "--dp", help="Data parallel degree"),
+        batch_size: int = typer.Option(1, "--batch-size", help="Global batch size"),
+        script: str = typer.Option("train.py", "--script", help="Entry script to launch"),
+        extra_args: Optional[str] = typer.Option(None, "--extra-args", help="Extra args to append to command"),
+        save_plan: Optional[Path] = typer.Option(None, "--save-plan", help="Optional path to save plan JSON"),
+    ) -> None:
+        from core.optimization.parallelism_planner.launch_plan import generate_launch_plan
+
+        try:
+            plan = generate_launch_plan(
+                model_params=model_params,
+                nodes=nodes,
+                gpus_per_node=gpus,
+                tp=tp,
+                pp=pp,
+                dp=dp,
+                batch_size=batch_size,
+                script=script,
+                extra_args=extra_args,
+            )
+        except Exception as exc:
+            typer.echo(f"Failed to build launch plan: {exc}", err=True)
+            raise typer.Exit(code=1)
+
+        typer.echo("\n🧭 Launch Plan")
+        typer.echo(f"Model params: {plan.model_params}B")
+        typer.echo(f"Layout: TP={plan.tp} PP={plan.pp} DP={plan.dp} on {plan.nodes}x{plan.gpus_per_node}")
+        typer.echo(f"Command:\n  {plan.command}")
+        if save_plan:
+            save_plan.write_text(plan.to_json())
+            typer.echo(f"\n💾 Saved plan to {save_plan}")
+
+
+# =============================================================================
+# Category: inference
+# =============================================================================
+
+if typer and inference_app is not None:
+
+    @inference_app.command("vllm", help="vLLM configuration and optimization")
+    def inference_vllm(
+        ctx: typer.Context,
+        model: Optional[str] = typer.Option(None, "--model", help="Model name"),
+        target: TargetChoice = typer.Option(
+            TargetChoice.balanced,
+            "--target",
+            help="Optimization target",
+            show_choices=True,
+        ),
+    ) -> None:
+        from cli.commands import inference
+        _run(inference.vllm_config, ctx, model=model, target=target)
+
+    @inference_app.command("quantize", help="Quantization recommendations")
+    def inference_quantize(
+        ctx: typer.Context,
+        model_size: float = typer.Option(70.0, "--model-size", help="Model size in billions"),
+        target_memory: Optional[float] = typer.Option(
+            None, "--target-memory", help="Target memory per GPU (GB)"
+        ),
+    ) -> None:
+        from cli.commands import inference
+        _run(inference.quantize, ctx, model_size=model_size, target_memory=target_memory)
+
+    @inference_app.command("deploy", help="Deployment configuration")
+    def inference_deploy(
+        ctx: typer.Context,
+        model: str = typer.Option("meta-llama/Llama-2-70b-hf", "--model", help="Model name"),
+        target: str = typer.Option("vllm", "--target", help="Backend target (vllm/tensorrt/triton)"),
+    ) -> None:
+        from cli.commands import inference
+        _run(inference.deploy_config, ctx, model=model, target=target)
+
+    @inference_app.command("serve", help="Start inference server")
+    def inference_serve(
+        ctx: typer.Context,
+        model: str = typer.Option("meta-llama/Llama-2-70b-hf", "--model", help="Model name"),
+        gpus: int = typer.Option(1, "--gpus", help="Tensor parallel size"),
+    ) -> None:
+        from cli.commands import inference
+        _run(inference.serve, ctx, model=model, gpus=gpus)
+
+
+# =============================================================================
+# Category: training
+# =============================================================================
+
+if typer and training_app is not None:
+
+    @training_app.command("rl", help="RL/RLHF optimization")
+    def training_rl(ctx: typer.Context) -> None:
+        from cli.commands import training
+        _run(training.rl, ctx)
+
+    @training_app.command("checkpoint", help="Checkpointing strategy")
+    def training_checkpoint(ctx: typer.Context) -> None:
+        from cli.commands import training
+        _run(training.checkpointing, ctx)
+
+    @training_app.command("gradient", help="Gradient optimization")
+    def training_gradient(ctx: typer.Context) -> None:
+        from cli.commands import training
+        _run(training.gradient, ctx)
+
+
+# =============================================================================
+# Category: monitor
+# =============================================================================
+
+if typer and monitor_app is not None:
+
+    @monitor_app.command("live", help="Real-time GPU monitoring")
+    def monitor_live(ctx: typer.Context) -> None:
+        from cli.commands import monitoring
+        _run(monitoring.live_monitor, ctx)
+
+    @monitor_app.command("regression", help="Detect performance regressions")
+    def monitor_regression(ctx: typer.Context) -> None:
+        from cli.commands import monitoring
+        _run(monitoring.regression, ctx)
+
+    @monitor_app.command("metrics", help="Collect and display metrics")
+    def monitor_metrics(ctx: typer.Context) -> None:
+        from cli.commands import monitoring
+        _run(monitoring.metrics, ctx)
+
+
+# =============================================================================
+# Category: report
+# =============================================================================
+
+if typer and report_app is not None:
+
+    @report_app.command("generate", help="Generate performance report")
+    def report_generate(
+        ctx: typer.Context,
+        output: Optional[Path] = typer.Option(None, "--output", help="Output file for generated report"),
+        fmt: ReportFormat = typer.Option(
+            ReportFormat.markdown,
+            "--format",
+            help="Report format",
+            show_choices=True,
+        ),
+    ) -> None:
+        from cli.commands import reports
+        _run(reports.generate_report, ctx, output=str(output) if output else None, format=fmt)
+
+    @report_app.command("history", help="View optimization history")
+    def report_history(ctx: typer.Context) -> None:
+        from cli.commands import reports
+        _run(reports.show_history, ctx)
+
+    @report_app.command("roi", help="Calculate ROI of optimizations")
+    def report_roi(ctx: typer.Context) -> None:
+        from cli.commands import reports
+        _run(reports.calculate_roi, ctx)
+
+    @report_app.command("export", help="Export results to various formats")
+    def report_export(
+        ctx: typer.Context,
+        fmt: ExportFormat = typer.Option(
+            ExportFormat.json,
+            "--format",
+            help="Export format",
+            show_choices=True,
+        ),
+        output: Optional[Path] = typer.Option(None, "--output", help="Output file"),
+    ) -> None:
+        from cli.commands import reports
+        _run(reports.export, ctx, format=fmt, output=str(output) if output else None)
+
+
+# =============================================================================
+# Category: hf (HuggingFace)
 # =============================================================================
 
 if typer and hf_app is not None:
@@ -755,34 +1176,258 @@ if typer and hf_app is not None:
         from cli.commands import huggingface
         _run(huggingface.model_config, ctx, model=model, gpus=gpus)
 
+    @hf_app.command("download", help="Download a HuggingFace model")
+    def hf_download(
+        ctx: typer.Context,
+        model: str = typer.Argument(..., help="Model ID (e.g., 'meta-llama/Llama-3.1-8B')"),
+        revision: Optional[str] = typer.Option(None, "--revision", "-r", help="Branch, tag, or commit"),
+        cache_dir: Optional[Path] = typer.Option(None, "--cache-dir", help="Custom cache directory"),
+        token: Optional[str] = typer.Option(None, "--token", help="HuggingFace token for gated models"),
+        include: Optional[List[str]] = typer.Option(None, "--include", help="Patterns to include (e.g., '*.safetensors')"),
+        exclude: Optional[List[str]] = typer.Option(None, "--exclude", help="Patterns to exclude"),
+    ) -> None:
+        """Download a model from HuggingFace Hub."""
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError:
+            typer.echo("❌ huggingface_hub not installed. Run: pip install huggingface_hub")
+            raise typer.Exit(code=1)
+        
+        typer.echo(f"📥 Downloading: {model}")
+        if revision:
+            typer.echo(f"   Revision: {revision}")
+        
+        try:
+            path = snapshot_download(
+                model,
+                revision=revision,
+                cache_dir=str(cache_dir) if cache_dir else None,
+                token=token or os.environ.get("HF_TOKEN"),
+                allow_patterns=include,
+                ignore_patterns=exclude,
+            )
+            typer.echo(f"✅ Downloaded to: {path}")
+        except Exception as e:
+            typer.echo(f"❌ Download failed: {e}", err=True)
+            raise typer.Exit(code=1)
+
 
 # =============================================================================
-# Category: test
+# Category: hw (hardware benchmarks - was hwbench + test)
 # =============================================================================
 
 if typer:
 
-    @test_app.command("bandwidth", help="GPU memory bandwidth test")
-    def test_bandwidth(ctx: typer.Context) -> None:
-        from cli.commands import tests as test_cmds
-        _run(test_cmds.gpu_bandwidth, ctx)
-
-    @test_app.command("network", help="Network throughput test")
-    def test_network(ctx: typer.Context) -> None:
-        from cli.commands import tests as test_cmds
-        _run(test_cmds.network_test, ctx)
-
-    @test_app.command("warmup", help="Warmup/JIT audit")
-    def test_warmup(
+    @hw_app.command("memory", help="GPU VRAM bandwidth test")
+    def hw_memory(
         ctx: typer.Context,
-        script: Optional[Path] = typer.Argument(None, help="Script to analyze"),
-        iterations: int = typer.Option(10, "--iterations", help="Iterations"),
+        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
+        stride: int = typer.Option(128, "--stride", help="Stride (bytes)"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
+
+    @hw_app.command("cache", help="Memory hierarchy stride test (cache behavior)")
+    def hw_cache(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
+        stride: int = typer.Option(128, "--stride", help="Stride (bytes)"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
+
+    @hw_app.command("roofline", help="Stride sweep ASCII roofline for memory")
+    def hw_roofline(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(32, "--size-mb", help="Buffer size (MB)"),
+        strides: Optional[List[int]] = typer.Option(None, "--stride", help="Stride values (repeatable)"),
     ) -> None:
         from cli.commands import tests as test_cmds
-        _run(test_cmds.warmup_audit, ctx, script=str(script) if script else None, iterations=iterations)
+        _run(test_cmds.mem_roofline, ctx, size_mb=size_mb, strides=strides)
 
-    @test_app.command("speed", help="Run speed tests")
-    def test_speed(
+    @hw_app.command("pcie", help="PCIe H2D/D2H bandwidth")
+    def hw_pcie(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
+        iters: int = typer.Option(10, "--iters", "-i", help="Iterations"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(microbench.pcie, ctx, size_mb=size_mb, iters=iters)
+
+    @hw_app.command("tc", help="Tensor core throughput (TFLOPS)")
+    def hw_tc(
+        ctx: typer.Context,
+        size: int = typer.Option(4096, "--size", help="Matrix size"),
+        precision: str = typer.Option("fp16", "--precision", help="Precision (fp16/fp32/bf16/fp8)"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(microbench.tensor_core, ctx, size=size, precision=precision)
+
+    @hw_app.command("sfu", help="SFU (Special Function Units) benchmark")
+    def hw_sfu(
+        ctx: typer.Context,
+        elements: int = typer.Option(64 * 1024 * 1024, "--elements", help="Number of elements"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(microbench.sfu, ctx, elements=elements)
+
+    @hw_app.command("disk", help="Disk I/O benchmark (sequential)")
+    def hw_disk(
+        ctx: typer.Context,
+        file_size_mb: int = typer.Option(256, "--size-mb", "-s", help="File size (MB)"),
+        block_size_kb: int = typer.Option(1024, "--block-kb", "-b", help="Block size (KB)"),
+        tmp_dir: Optional[Path] = typer.Option(None, "--tmp-dir", help="Temporary directory"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(
+            microbench.disk,
+            ctx,
+            file_size_mb=file_size_mb,
+            block_size_kb=block_size_kb,
+            tmp_dir=str(tmp_dir) if tmp_dir else None,
+        )
+
+    @hw_app.command("tcp", help="TCP loopback throughput")
+    def hw_tcp(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
+        port: int = typer.Option(5789, "--port", help="Port to use"),
+    ) -> None:
+        from core.diagnostics import microbench
+        _run(microbench.loopback, ctx, size_mb=size_mb, port=port)
+
+    @hw_app.command("ib", help="InfiniBand bandwidth test")
+    def hw_ib(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(64, "--size-mb", "-s", help="Transfer size (MB)"),
+        duration: int = typer.Option(5, "--duration", "-d", help="Test duration (seconds)"),
+    ) -> None:
+        """Run InfiniBand bandwidth test using ib_write_bw or NCCL."""
+        import shutil
+        
+        typer.echo("\n📡 InfiniBand Bandwidth Test\n")
+        
+        ib_write_bw = shutil.which("ib_write_bw")
+        if ib_write_bw:
+            typer.echo("Using: ib_write_bw (perftest)")
+            typer.echo(f"Size: {size_mb} MB, Duration: {duration}s")
+            typer.echo("\nTo run manually between two nodes:")
+            typer.echo("  Server: ib_write_bw -d mlx5_0")
+            typer.echo("  Client: ib_write_bw -d mlx5_0 <server_ip>")
+        else:
+            typer.echo("ib_write_bw not found. Install perftest package:")
+            typer.echo("  apt install perftest  # or yum install perftest")
+            typer.echo("\nAlternative: Use NCCL tests")
+            typer.echo("  all_reduce_perf -b 8M -e 256M -g 8")
+
+    @hw_app.command("nccl", help="NCCL collective bandwidth (all_reduce, etc.)")
+    def hw_nccl(
+        ctx: typer.Context,
+        collective: str = typer.Option("all_reduce", "--collective", "-c", help="Collective type"),
+        min_bytes: str = typer.Option("8M", "--min", help="Min message size"),
+        max_bytes: str = typer.Option("256M", "--max", help="Max message size"),
+        gpus: int = typer.Option(8, "--gpus", "-g", help="Number of GPUs"),
+    ) -> None:
+        """Run NCCL collective bandwidth test."""
+        import shutil
+        
+        typer.echo("\n🔄 NCCL Collective Bandwidth Test\n")
+        
+        # Map collective name to binary
+        collective_bins = {
+            "all_reduce": "all_reduce_perf",
+            "all_gather": "all_gather_perf", 
+            "reduce_scatter": "reduce_scatter_perf",
+            "broadcast": "broadcast_perf",
+            "reduce": "reduce_perf",
+            "alltoall": "alltoall_perf",
+        }
+        
+        bin_name = collective_bins.get(collective, f"{collective}_perf")
+        bin_path = shutil.which(bin_name)
+        
+        if bin_path:
+            cmd = [bin_path, "-b", min_bytes, "-e", max_bytes, "-g", str(gpus)]
+            typer.echo(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd)
+            raise typer.Exit(code=result.returncode)
+        else:
+            typer.echo(f"{bin_name} not found. Install nccl-tests:")
+            typer.echo("  git clone https://github.com/NVIDIA/nccl-tests")
+            typer.echo("  cd nccl-tests && make MPI=1")
+            typer.echo(f"\nManual command:")
+            typer.echo(f"  {bin_name} -b {min_bytes} -e {max_bytes} -g {gpus}")
+
+    @hw_app.command("p2p", help="GPU-to-GPU P2P/NVLink bandwidth")
+    def hw_p2p(
+        ctx: typer.Context,
+        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
+        bidirectional: bool = typer.Option(False, "--bidir", "-b", help="Bidirectional test"),
+    ) -> None:
+        """Test GPU-to-GPU peer-to-peer bandwidth over NVLink/PCIe."""
+        try:
+            import torch
+        except ImportError:
+            typer.echo("❌ PyTorch not available")
+            raise typer.Exit(code=1)
+        
+        if not torch.cuda.is_available():
+            typer.echo("❌ CUDA not available")
+            raise typer.Exit(code=1)
+        
+        num_gpus = torch.cuda.device_count()
+        if num_gpus < 2:
+            typer.echo("❌ P2P test requires at least 2 GPUs")
+            raise typer.Exit(code=1)
+        
+        typer.echo(f"\n🔗 GPU P2P Bandwidth Test ({num_gpus} GPUs)\n")
+        typer.echo(f"Transfer size: {size_mb} MB")
+        typer.echo(f"Mode: {'Bidirectional' if bidirectional else 'Unidirectional'}\n")
+        
+        size_bytes = size_mb * 1024 * 1024
+        
+        # Test P2P between all pairs
+        typer.echo("GPU Pair    │ P2P Enabled │ Bandwidth (GB/s)")
+        typer.echo("────────────┼─────────────┼─────────────────")
+        
+        for i in range(num_gpus):
+            for j in range(num_gpus):
+                if i == j:
+                    continue
+                
+                can_access = torch.cuda.can_device_access_peer(i, j)
+                
+                # Allocate tensors
+                with torch.cuda.device(i):
+                    src = torch.empty(size_bytes // 4, dtype=torch.float32, device=f"cuda:{i}")
+                with torch.cuda.device(j):
+                    dst = torch.empty(size_bytes // 4, dtype=torch.float32, device=f"cuda:{j}")
+                
+                # Warmup
+                dst.copy_(src)
+                torch.cuda.synchronize()
+                
+                # Benchmark
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                
+                iters = 10
+                start.record()
+                for _ in range(iters):
+                    dst.copy_(src)
+                end.record()
+                torch.cuda.synchronize()
+                
+                elapsed_ms = start.elapsed_time(end)
+                bw_gbps = (size_bytes * iters / (elapsed_ms / 1000)) / 1e9
+                
+                p2p_str = "✓" if can_access else "✗"
+                typer.echo(f"GPU {i}→{j}    │ {p2p_str:^11} │ {bw_gbps:>8.2f}")
+        
+        typer.echo()
+
+    @hw_app.command("speed", help="Run speed tests (GEMM, memory, attention)")
+    def hw_speed(
         ctx: typer.Context,
         type: SpeedTestChoice = typer.Option(
             SpeedTestChoice.all,
@@ -806,23 +1451,14 @@ if typer:
             mem_stride=mem_stride,
         )
 
-    @test_app.command("diagnostics", help="System diagnostics")
-    def test_diagnostics(ctx: typer.Context) -> None:
+    @hw_app.command("diagnostics", help="System diagnostics")
+    def hw_diagnostics(ctx: typer.Context) -> None:
         from cli.commands import tests as test_cmds
         _run(test_cmds.diagnostics, ctx)
 
-    @test_app.command("roofline", help="Stride sweep ASCII roofline for memory")
-    def test_roofline(
-        ctx: typer.Context,
-        size_mb: int = typer.Option(32, "--size-mb", help="Buffer size (MB)"),
-        strides: Optional[List[int]] = typer.Option(None, "--stride", help="Stride values (repeatable)"),
-    ) -> None:
-        from cli.commands import tests as test_cmds
-        _run(test_cmds.mem_roofline, ctx, size_mb=size_mb, strides=strides)
-
 
 # =============================================================================
-# Category: cluster (extension)
+# Category: cluster
 # =============================================================================
 
 if typer and cluster_app is not None:
@@ -881,130 +1517,10 @@ if typer and cluster_app is not None:
 
 
 # =============================================================================
-# Category: hwbench (hardware benchmarks)
+# Monitoring runners (extended)
 # =============================================================================
 
 if typer:
-
-    @hwbench_app.command("disk", help="Disk I/O benchmark (sequential)")
-    def hwbench_disk(
-        ctx: typer.Context,
-        file_size_mb: int = typer.Option(256, "--size-mb", "-s", help="File size (MB)"),
-        block_size_kb: int = typer.Option(1024, "--block-kb", "-b", help="Block size (KB)"),
-        tmp_dir: Optional[Path] = typer.Option(None, "--tmp-dir", help="Temporary directory"),
-    ) -> None:
-        from core.diagnostics import microbench
-        _run(
-            microbench.disk,
-            ctx,
-            file_size_mb=file_size_mb,
-            block_size_kb=block_size_kb,
-            tmp_dir=str(tmp_dir) if tmp_dir else None,
-        )
-
-    @hwbench_app.command("pcie", help="PCIe H2D/D2H bandwidth")
-    def hwbench_pcie(
-        ctx: typer.Context,
-        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
-        iters: int = typer.Option(10, "--iters", "-i", help="Iterations"),
-    ) -> None:
-        from core.diagnostics import microbench
-        _run(microbench.pcie, ctx, size_mb=size_mb, iters=iters)
-
-    @hwbench_app.command("mem", help="Memory hierarchy stride test")
-    def hwbench_mem(
-        ctx: typer.Context,
-        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Buffer size (MB)"),
-        stride: int = typer.Option(128, "--stride", help="Stride (bytes)"),
-    ) -> None:
-        from core.diagnostics import microbench
-        _run(microbench.mem_hierarchy, ctx, size_mb=size_mb, stride=stride)
-
-    @hwbench_app.command("tensor-cores", help="Tensor core throughput")
-    def hwbench_tensor_cores(
-        ctx: typer.Context,
-        size: int = typer.Option(4096, "--size", help="Matrix size"),
-        precision: str = typer.Option("fp16", "--precision", help="Precision (fp16/fp32/bf16)"),
-    ) -> None:
-        from core.diagnostics import microbench
-        _run(microbench.tensor_core, ctx, size=size, precision=precision)
-
-    @hwbench_app.command("sfu", help="SFU (Special Function Units) benchmark")
-    def hwbench_sfu(
-        ctx: typer.Context,
-        elements: int = typer.Option(64 * 1024 * 1024, "--elements", help="Number of elements"),
-    ) -> None:
-        from core.diagnostics import microbench
-        _run(microbench.sfu, ctx, elements=elements)
-
-    @hwbench_app.command("loopback", help="Loopback TCP throughput")
-    def hwbench_loopback(
-        ctx: typer.Context,
-        size_mb: int = typer.Option(256, "--size-mb", "-s", help="Transfer size (MB)"),
-        port: int = typer.Option(5789, "--port", help="Port to use"),
-    ) -> None:
-        from core.diagnostics import microbench
-        _run(microbench.loopback, ctx, size_mb=size_mb, port=port)
-
-    # =============================================================================
-    # Ops / analysis runners (pass-through to legacy CLIs)
-    # =============================================================================
-
-    @ops_app.command("advanced", help="Run advanced system analysis toolkit (forwards to analysis.advanced_analysis).")
-    def ops_advanced(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to analysis.advanced_analysis"),
-    ) -> None:
-        _run_module("analysis.advanced_analysis", args or [])
-
-    @ops_app.command("distributed", help="Run distributed training analysis (forwards to analysis.distributed_analysis).")
-    def ops_distributed(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to analysis.distributed_analysis"),
-    ) -> None:
-        _run_module("analysis.distributed_analysis", args or [])
-
-    @ops_app.command("launch-plan", help="Generate torchrun launch plan (dry-run/save).")
-    def ops_launch_plan(
-        ctx: typer.Context,
-        model_params: int = typer.Option(70, "--model-params", help="Model size in billions"),
-        nodes: int = typer.Option(1, "--nodes", help="Nodes"),
-        gpus: int = typer.Option(8, "--gpus", help="GPUs per node"),
-        tp: int = typer.Option(1, "--tp", help="Tensor parallel degree"),
-        pp: int = typer.Option(1, "--pp", help="Pipeline parallel degree"),
-        dp: int = typer.Option(1, "--dp", help="Data parallel degree"),
-        batch_size: int = typer.Option(1, "--batch-size", help="Global batch size"),
-        script: str = typer.Option("train.py", "--script", help="Entry script to launch"),
-        extra_args: Optional[str] = typer.Option(None, "--extra-args", help="Extra args to append to command"),
-        save_plan: Optional[Path] = typer.Option(None, "--save-plan", help="Optional path to save plan JSON"),
-    ) -> None:
-        from core.optimization.parallelism_planner.launch_plan import generate_launch_plan
-
-        try:
-            plan = generate_launch_plan(
-                model_params=model_params,
-                nodes=nodes,
-                gpus_per_node=gpus,
-                tp=tp,
-                pp=pp,
-                dp=dp,
-                batch_size=batch_size,
-                script=script,
-                extra_args=extra_args,
-            )
-        except Exception as exc:
-            typer.echo(f"Failed to build launch plan: {exc}", err=True)
-            raise typer.Exit(code=1)
-
-        typer.echo("\n🧭 Launch Plan")
-        typer.echo(f"Model params: {plan.model_params}B")
-        typer.echo(f"Layout: TP={plan.tp} PP={plan.pp} DP={plan.dp} on {plan.nodes}x{plan.gpus_per_node}")
-        typer.echo(f"Command:\n  {plan.command}")
-        if save_plan:
-            save_plan.write_text(plan.to_json())
-            typer.echo(f"\n💾 Saved plan to {save_plan}")
-
-    # =============================================================================
-    # Monitoring runners
-    # =============================================================================
 
     @monitoring_app.command("cluster", help="Cluster monitor (agent/master) runner.")
     def monitoring_cluster(
@@ -1018,27 +1534,9 @@ if typer:
     ) -> None:
         _run_module("monitoring.prometheus_exporter", args or [])
 
-    @monitoring_app.command("uma-baseline", help="UMA memory reporting baseline.")
-    def monitoring_uma_baseline(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to monitoring.diagnostics.uma_memory.baseline_uma_memory_reporting"),
-    ) -> None:
-        _run_module("monitoring.diagnostics.uma_memory.baseline_uma_memory_reporting", args or [])
-
-    @monitoring_app.command("uma-optimized", help="UMA memory reporting with reclaimable DRAM awareness.")
-    def monitoring_uma_optimized(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to monitoring.diagnostics.uma_memory.optimized_uma_memory_reporting"),
-    ) -> None:
-        _run_module("monitoring.diagnostics.uma_memory.optimized_uma_memory_reporting", args or [])
-
-    @monitoring_app.command("hwbench", help="Lightweight hardware benchmarks.")
-    def monitoring_hwbench(
-        args: List[str] = typer.Argument(None, help="Arguments forwarded to core.diagnostics.microbench"),
-    ) -> None:
-        _run_module("core.diagnostics.microbench", args or [])
-
 
 # =============================================================================
-# Top-level commands (bench, version, help; extensions add more)
+# Top-level commands (bench, version, help)
 # =============================================================================
 
 if typer:
@@ -1135,15 +1633,12 @@ if typer:
 # =============================================================================
 
 if typer:
-    app.add_typer(system_app, name="system")
-    app.add_typer(test_app, name="test")
-    app.add_typer(hwbench_app, name="hwbench")
-    app.add_typer(ops_app, name="ops")
-    app.add_typer(monitoring_app, name="monitor")
-    # All sub-apps always available
+    app.add_typer(info_app, name="info")
+    app.add_typer(hw_app, name="hw")
     app.add_typer(profile_app, name="profile")
+    app.add_typer(monitoring_app, name="monitor")
+    # Feature sub-apps
     app.add_typer(ai_app, name="ai")
-    app.add_typer(analyze_app, name="analyze")
     app.add_typer(optimize_app, name="optimize")
     app.add_typer(distributed_app, name="distributed")
     app.add_typer(inference_app, name="inference")

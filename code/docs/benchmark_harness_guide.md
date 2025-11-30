@@ -46,7 +46,7 @@ ch*/baseline_*.py  →  ch*/optimized_*.py
 **Example**: `baseline_moe.py` pairs with `optimized_moe.py` or `optimized_moe_sparse.py`
 
 **Discovery logic**:
-- Scans all chapter directories (`ch1` through `ch20`)
+- Scans all chapter directories (`ch01` through `ch20`)
 - Finds `baseline_*.py` files
 - Matches with `optimized_{name}*.py` files
 - Extracts example name (e.g., `baseline_moe_dense.py` → `moe`)
@@ -496,7 +496,7 @@ python cli/aisp.py bench run
 ## Per-Chapter Summary
 | Chapter | Status | Benchmarks | Successful | Avg Speedup |
 |---------|--------|------------|------------|-------------|
-| ch1     | PASS   | 21         | 21         | 2.5x        |
+| ch01     | PASS   | 21         | 21         | 2.5x        |
 | ch13    | PASS   | 23         | 23         | 4.1x        |
 | ch19    | PASS   | 15         | 15         | 6.8x        |
 ...

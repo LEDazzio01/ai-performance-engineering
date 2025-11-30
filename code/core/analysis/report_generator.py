@@ -37,7 +37,7 @@ class PerformanceReport:
         Add metrics for a chapter.
         
         Args:
-            chapter: Chapter identifier (e.g., "ch2")
+            chapter: Chapter identifier (e.g., "ch02")
             metrics: Dictionary of metric_name -> value
         """
         if chapter not in self.chapters_analyzed:

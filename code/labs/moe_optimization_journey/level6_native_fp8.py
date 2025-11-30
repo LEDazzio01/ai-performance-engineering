@@ -77,11 +77,11 @@ class NativeFP8MoE(BaseBenchmark):
         
         self.scale = torch.ones((), device=self.device)
         
-        # Routing
-        self.expert_indices = torch.randint(0, E, (batch_seq, K), device=self.device)
+        # Routing - use CPU tensors + to(device) to avoid CUDA RNG issues
+        self.expert_indices = torch.randint(0, E, (batch_seq, K)).to(self.device)
         self.expert_weights = F.softmax(
-            torch.randn(batch_seq, K, device=self.device), dim=-1
-        ).to(torch.bfloat16)
+            torch.randn(batch_seq, K), dim=-1
+        ).to(torch.bfloat16).to(self.device)
         
         # Pre-compute routing
         flat_idx = self.expert_indices.view(-1)

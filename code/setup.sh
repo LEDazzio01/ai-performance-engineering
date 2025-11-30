@@ -48,7 +48,7 @@
 #   - The script is idempotent and safe to re-run
 #
 # After running this script, you can:
-#   - Run examples: python3 ch1/performance_basics.py
+#   - Run examples: python3 ch01/performance_basics.py
 #   - Drive the benchmark suite: python cli/aisp.py bench run
 #   - Capture peak performance: python core/benchmark/benchmark_peak.py
 #   - Verify examples: python cli/aisp.py bench verify
@@ -2540,8 +2540,8 @@ echo "Testing example scripts..."
 
 # Test Chapter 1
 echo "Testing Chapter 1 (Performance Basics)..."
-if [ -f "$PROJECT_ROOT/ch1/performance_basics.py" ]; then
-    if python3 "$PROJECT_ROOT/ch1/performance_basics.py" > /dev/null 2>&1; then
+if [ -f "$PROJECT_ROOT/ch01/performance_basics.py" ]; then
+    if python3 "$PROJECT_ROOT/ch01/performance_basics.py" > /dev/null 2>&1; then
         echo "Chapter 1: Performance basics working"
     else
         echo "Chapter 1: Some issues detected (check output above)"
@@ -2552,8 +2552,8 @@ fi
 
 # Test Chapter 2
 echo "Testing Chapter 2 (Hardware Info)..."
-if [ -f "$PROJECT_ROOT/ch2/hardware_info.py" ]; then
-    if python3 "$PROJECT_ROOT/ch2/hardware_info.py" > /dev/null 2>&1; then
+if [ -f "$PROJECT_ROOT/ch02/hardware_info.py" ]; then
+    if python3 "$PROJECT_ROOT/ch02/hardware_info.py" > /dev/null 2>&1; then
         echo "Chapter 2: Hardware info working"
     else
         echo "Chapter 2: Some issues detected (check output above)"
@@ -2564,8 +2564,8 @@ fi
 
 # Test Chapter 3
 echo "Testing Chapter 3 (NUMA Affinity)..."
-if [ -f "$PROJECT_ROOT/ch3/bind_numa_affinity.py" ]; then
-    if python3 "$PROJECT_ROOT/ch3/bind_numa_affinity.py" > /dev/null 2>&1; then
+if [ -f "$PROJECT_ROOT/ch03/bind_numa_affinity.py" ]; then
+    if python3 "$PROJECT_ROOT/ch03/bind_numa_affinity.py" > /dev/null 2>&1; then
         echo "Chapter 3: NUMA affinity working"
     else
         echo "Chapter 3: Some issues detected (check output above)"
@@ -2927,8 +2927,8 @@ echo ""
 # Test 4: Hardware info script
 echo ""
 echo "Testing hardware detection..."
-if [ -f "$PROJECT_ROOT/ch2/hardware_info.py" ]; then
-    python3 "$PROJECT_ROOT/ch2/hardware_info.py" > /dev/null 2>&1
+if [ -f "$PROJECT_ROOT/ch02/hardware_info.py" ]; then
+    python3 "$PROJECT_ROOT/ch02/hardware_info.py" > /dev/null 2>&1
     if [ $? -eq 0 ]; then
         echo "Hardware detection working"
     else
@@ -2942,10 +2942,10 @@ fi
 # Test 5: NUMA binding script
 echo ""
 echo "Testing NUMA binding..."
-if [ -f "$PROJECT_ROOT/ch3/bind_numa_affinity.py" ]; then
+if [ -f "$PROJECT_ROOT/ch03/bind_numa_affinity.py" ]; then
     # Temporarily disable exit-on-error for this test
     set +e
-    python3 "$PROJECT_ROOT/ch3/bind_numa_affinity.py" > /dev/null 2>&1
+    python3 "$PROJECT_ROOT/ch03/bind_numa_affinity.py" > /dev/null 2>&1
     NUMA_EXIT_CODE=$?
     set -e
     

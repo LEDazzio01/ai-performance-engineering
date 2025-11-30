@@ -28,13 +28,13 @@ class TestGetChapterFromPath:
     
     def test_standard_chapter_path(self):
         """Should extract chapter from standard paths."""
-        assert get_chapter_from_path(Path("ch7/baseline_memory.py")) == 7
+        assert get_chapter_from_path(Path("ch07/baseline_memory.py")) == 7
         assert get_chapter_from_path(Path("ch10/optimized_pipeline.py")) == 10
-        assert get_chapter_from_path(Path("ch1/baseline_perf.py")) == 1
+        assert get_chapter_from_path(Path("ch01/baseline_perf.py")) == 1
     
     def test_nested_path(self):
         """Should extract chapter from nested paths."""
-        assert get_chapter_from_path(Path("/code/ch7/baseline.py")) == 7
+        assert get_chapter_from_path(Path("/code/ch07/baseline.py")) == 7
         assert get_chapter_from_path(Path("some/dir/ch15/file.py")) == 15
     
     def test_no_chapter(self):

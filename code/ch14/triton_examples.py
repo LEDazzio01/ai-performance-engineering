@@ -22,6 +22,58 @@ import torch
 import triton
 import triton.language as tl
 import triton.testing
+from triton.runtime import _allocation as triton_allocation
+
+
+# ============================================================================
+# TMA Allocator Bridge (Required for Triton TMA kernels)
+# ============================================================================
+
+class _TorchCudaBuffer:
+    """Simple wrapper for pointers returned by PyTorch's caching allocator."""
+    __slots__ = ("_ptr",)
+
+    def __init__(self, ptr: int):
+        self._ptr = ptr
+
+    def data_ptr(self) -> int:
+        return self._ptr
+
+    def __del__(self):
+        if self._ptr:
+            torch.cuda.caching_allocator_delete(self._ptr)
+            self._ptr = 0
+
+
+class _TorchCudaAllocator:
+    """Allocator that lets Triton reuse PyTorch's caching allocator for TMA scratch buffers."""
+
+    def __call__(self, size: int, alignment: int, stream: int | None):
+        if size == 0:
+            return _TorchCudaBuffer(0)
+        if stream is None:
+            current_stream = torch.cuda.current_stream()
+            stream = current_stream.cuda_stream
+            device_idx = current_stream.device.index
+        else:
+            device_idx = torch.cuda.current_device()
+        if device_idx is None:
+            device_idx = torch.cuda.current_device()
+        ptr = torch.cuda.caching_allocator_alloc(size, device_idx, stream=stream)
+        return _TorchCudaBuffer(ptr)
+
+
+def _ensure_triton_allocator():
+    """Set Triton's allocator once so TMA kernels can grab scratch buffers."""
+    if not torch.cuda.is_available():
+        return
+    current = triton_allocation._allocator.get()
+    if isinstance(current, triton_allocation.NullAllocator):
+        triton.set_allocator(_TorchCudaAllocator())
+
+
+_ensure_triton_allocator()
+
 
 # Check for FP8 support
 try:
@@ -39,10 +91,7 @@ except AttributeError:
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=8, num_stages=4),
         triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=4, num_stages=3),
         triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=3),
-        # Blackwell-optimized configs with larger BLOCK_K and deeper pipelines
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 256, 'BLOCK_K': 128}, num_warps=16, num_stages=5),
-        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 128}, num_warps=16, num_stages=4),
-        triton.Config({'BLOCK_M': 256, 'BLOCK_N': 128, 'BLOCK_K': 128}, num_warps=16, num_stages=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=3),
     ],
     key=['M', 'N', 'K'],
 )
@@ -55,17 +104,17 @@ def tiled_gemm_kernel(
     stride_cm, stride_cn,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
 ):
-    """Tiled GEMM with tensor descriptors and autotuning."""
+    """Tiled GEMM with TMA tensor descriptors.
+    
+    Uses tl.load_tensor_descriptor() for efficient TMA-backed loads.
+    """
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
-    m0 = pid_m * BLOCK_M
-    n0 = pid_n * BLOCK_N
+    m_off = pid_m * BLOCK_M
+    n_off = pid_n * BLOCK_N
 
-    offs_m = m0 + tl.arange(0, BLOCK_M)
-    offs_n = n0 + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-
+    # Create TMA tensor descriptors
     A_desc = tl.make_tensor_descriptor(
         A_ptr,
         shape=[M, K],
@@ -79,79 +128,19 @@ def tiled_gemm_kernel(
         block_shape=[BLOCK_K, BLOCK_N],
     )
 
+    # FP32 accumulator
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
-    K_tiles = (K + BLOCK_K - 1) // BLOCK_K
-    if K_tiles == 0:
-        c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-        c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
-        tl.store(c_ptrs, acc, mask=c_mask)
-        return
+    # Main K-loop with TMA loads
+    for k in range(0, K, BLOCK_K):
+        a_tile = tl.load_tensor_descriptor(A_desc, [m_off, k])
+        b_tile = tl.load_tensor_descriptor(B_desc, [k, n_off])
+        acc += tl.dot(a_tile, b_tile, out_dtype=tl.float32)
 
-    k0 = 0
-    if (m0 + BLOCK_M <= M) and (k0 + BLOCK_K <= K):
-        a_cur = A_desc.load([m0, k0])
-    else:
-        col_ids = k0 + offs_k
-        # Use broadcast_to for explicit 2D shape
-        row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-        col_offsets = tl.broadcast_to(col_ids[None, :], (BLOCK_M, BLOCK_K))
-        a_cur = tl.load(
-            A_desc,
-            offsets=(row_offsets, col_offsets),
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-    if (n0 + BLOCK_N <= N) and (k0 + BLOCK_K <= K):
-        b_cur = B_desc.load([k0, n0])
-    else:
-        row_ids = k0 + offs_k
-        # Use broadcast_to for explicit 2D shape
-        row_offsets = tl.broadcast_to(row_ids[:, None], (BLOCK_K, BLOCK_N))
-        col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-        b_cur = tl.load(
-            B_desc,
-            offsets=(row_offsets, col_offsets),
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-    for kt in tl.range(0, K_tiles, num_stages=2):
-        k0 = kt * BLOCK_K
-        acc += tl.dot(a_cur, b_cur)
-
-        next_k = k0 + BLOCK_K
-        if next_k < K:
-            if (m0 + BLOCK_M <= M) and (next_k + BLOCK_K <= K):
-                a_cur = A_desc.load([m0, next_k])
-            else:
-                col_ids = next_k + offs_k
-                # Use broadcast_to for explicit 2D shape
-                row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-                col_offsets = tl.broadcast_to(col_ids[None, :], (BLOCK_M, BLOCK_K))
-                a_cur = tl.load(
-                    A_desc,
-                    offsets=(row_offsets, col_offsets),
-                    boundary_check=(0, 1),
-                    padding_option="zero",
-                )
-
-            if (n0 + BLOCK_N <= N) and (next_k + BLOCK_K <= K):
-                b_cur = B_desc.load([next_k, n0])
-            else:
-                row_ids = next_k + offs_k
-                # Use broadcast_to for explicit 2D shape
-                row_offsets = tl.broadcast_to(row_ids[:, None], (BLOCK_K, BLOCK_N))
-                col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-                b_cur = tl.load(
-                    B_desc,
-                    offsets=(row_offsets, col_offsets),
-                    boundary_check=(0, 1),
-                    padding_option="zero",
-                )
-
-    c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
+    # Store with boundary mask
+    offs_m = m_off + tl.arange(0, BLOCK_M)
+    offs_n = n_off + tl.arange(0, BLOCK_N)
+    c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(c_ptrs, acc, mask=c_mask)
 
@@ -176,36 +165,10 @@ def tiled_matmul(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            {
-                'BLOCK_M': 128,
-                'BLOCK_N': 128,
-                'BLOCK_K': 64,
-                'NUM_STAGES': 2,
-            },
-            num_warps=8,
-            num_stages=2,
-        ),
-        triton.Config(
-            {
-                'BLOCK_M': 64,
-                'BLOCK_N': 128,
-                'BLOCK_K': 64,
-                'NUM_STAGES': 3,
-            },
-            num_warps=8,
-            num_stages=3,
-        ),
-        triton.Config(
-            {
-                'BLOCK_M': 128,
-                'BLOCK_N': 64,
-                'BLOCK_K': 64,
-                'NUM_STAGES': 3,
-            },
-            num_warps=8,
-            num_stages=3,
-        ),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=8, num_stages=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=8, num_stages=3),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=8, num_stages=3),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=3),
     ],
     key=['M', 'N', 'K'],
 )
@@ -217,9 +180,12 @@ def matmul_kernel_persistent(
     stride_bk, stride_bn,
     stride_cm, stride_cn,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-    NUM_STAGES: tl.constexpr,
 ):
-    """Persistent thread GEMM with Triton 3.5+ tensor descriptors + autotuning."""
+    """Persistent thread GEMM with TMA tensor descriptors.
+    
+    Each thread block processes multiple output tiles in a loop.
+    Uses tl.load_tensor_descriptor() for efficient TMA-backed loads.
+    """
     pid = tl.program_id(0)
     nprog = tl.num_programs(0)
 
@@ -227,8 +193,7 @@ def matmul_kernel_persistent(
     NT = tl.cdiv(N, BLOCK_N)
     TILE_COUNT = MT * NT
 
-    # Descriptor mapping rules (TMA): leading strides must be multiples of 16 bytes,
-    # and the last dimension must be contiguous.
+    # Create TMA tensor descriptors (outside tile loop for efficiency)
     A_desc = tl.make_tensor_descriptor(
         A_ptr,
         shape=[M, K],
@@ -247,82 +212,22 @@ def matmul_kernel_persistent(
         pid_m = tile_idx // NT
         pid_n = tile_idx % NT
 
-        m0 = pid_m * BLOCK_M
-        n0 = pid_n * BLOCK_N
+        m_off = pid_m * BLOCK_M
+        n_off = pid_n * BLOCK_N
 
-        offs_m = m0 + tl.arange(0, BLOCK_M)
-        offs_n = n0 + tl.arange(0, BLOCK_N)
-        offs_k = tl.arange(0, BLOCK_K)
-
+        # FP32 accumulator
         acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        K_tiles = (K + BLOCK_K - 1) // BLOCK_K
-        if K_tiles == 0:
-            c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-            c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
-            tl.store(c_ptrs, acc, mask=c_mask)
-            tile_idx += nprog
-            continue
 
-        k0 = 0
-        if (m0 + BLOCK_M <= M) and (k0 + BLOCK_K <= K):
-            a_cur = A_desc.load([m0, k0])
-        else:
-            row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-            col_offsets = tl.broadcast_to((k0 + offs_k)[None, :], (BLOCK_M, BLOCK_K))
-            a_cur = tl.load(
-                A_desc,
-                offsets=(row_offsets, col_offsets),
-                boundary_check=(0, 1),
-                padding_option="zero",
-            )
+        # Main K-loop with TMA loads
+        for k in range(0, K, BLOCK_K):
+            a_tile = tl.load_tensor_descriptor(A_desc, [m_off, k])
+            b_tile = tl.load_tensor_descriptor(B_desc, [k, n_off])
+            acc += tl.dot(a_tile, b_tile, out_dtype=tl.float32)
 
-        if (n0 + BLOCK_N <= N) and (k0 + BLOCK_K <= K):
-            b_cur = B_desc.load([k0, n0])
-        else:
-            row_offsets = tl.broadcast_to((k0 + offs_k)[:, None], (BLOCK_K, BLOCK_N))
-            col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-            b_cur = tl.load(
-                B_desc,
-                offsets=(row_offsets, col_offsets),
-                boundary_check=(0, 1),
-                padding_option="zero",
-            )
-
-        for kt in tl.range(0, K_tiles, num_stages=NUM_STAGES, warp_specialize=True):
-            next_k = (kt + 1) * BLOCK_K
-
-            if kt + 1 < K_tiles:
-                if (m0 + BLOCK_M <= M) and (next_k + BLOCK_K <= K):
-                    a_next = A_desc.load([m0, next_k])
-                else:
-                    row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-                    col_offsets = tl.broadcast_to((next_k + offs_k)[None, :], (BLOCK_M, BLOCK_K))
-                    a_next = tl.load(
-                        A_desc,
-                        offsets=(row_offsets, col_offsets),
-                        boundary_check=(0, 1),
-                        padding_option="zero",
-                    )
-
-                if (n0 + BLOCK_N <= N) and (next_k + BLOCK_K <= K):
-                    b_next = B_desc.load([next_k, n0])
-                else:
-                    row_offsets = tl.broadcast_to((next_k + offs_k)[:, None], (BLOCK_K, BLOCK_N))
-                    col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-                    b_next = tl.load(
-                        B_desc,
-                        offsets=(row_offsets, col_offsets),
-                        boundary_check=(0, 1),
-                        padding_option="zero",
-                    )
-
-            acc += tl.dot(a_cur, b_cur, out_dtype=tl.float32)
-
-            if kt + 1 < K_tiles:
-                a_cur = a_next
-                b_cur = b_next
-
-        c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
+        # Store with boundary mask
+        offs_m = m_off + tl.arange(0, BLOCK_M)
+        offs_n = n_off + tl.arange(0, BLOCK_N)
+        c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
         c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
         tl.store(c_ptrs, acc, mask=c_mask)
 

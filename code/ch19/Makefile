@@ -19,7 +19,7 @@ baseline_fp4_hardware_kernel$(SUFFIX): baseline_fp4_hardware_kernel.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
 
 optimized_fp4_hardware_kernel$(SUFFIX): optimized_fp4_hardware_kernel.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
+	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda -lcublasLt -lcublas
 
 fp8_hardware_kernel$(SUFFIX): fp8_hardware_kernel.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda

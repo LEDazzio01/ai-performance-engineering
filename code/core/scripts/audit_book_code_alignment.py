@@ -17,8 +17,8 @@ WHAT IT CHECKS:
 
 EXAMPLE OUTPUT:
     Chapter 9: 12 code snippets found
-      ✅ fusedL2Norm kernel → ch9/baseline_fused_l2norm.cu
-      ✅ CUTLASS GEMM → ch9/optimized_cutlass_gemm.py
+      ✅ fusedL2Norm kernel → ch09/baseline_fused_l2norm.cu
+      ✅ CUTLASS GEMM → ch09/optimized_cutlass_gemm.py
       ⚠️ No match: flashAttentionKernel
 """
 
@@ -48,9 +48,9 @@ CODE_PATTERNS = {
 
 # Key technique keywords to look for in book
 TECHNIQUE_KEYWORDS = {
-    "ch7": ["coalesced", "vectorized", "float4", "TMA", "prefetch", "cache"],
-    "ch8": ["double_buffer", "pipelining", "async", "overlap"],
-    "ch9": ["fusion", "fused", "tiling", "arithmetic_intensity", "SDPA", "flash"],
+    "ch07": ["coalesced", "vectorized", "float4", "TMA", "prefetch", "cache"],
+    "ch08": ["double_buffer", "pipelining", "async", "overlap"],
+    "ch09": ["fusion", "fused", "tiling", "arithmetic_intensity", "SDPA", "flash"],
     "ch10": ["warp_specialization", "cluster", "DSMEM", "producer", "consumer"],
     "ch11": ["stream", "concurrent", "overlap", "async"],
     "ch12": ["graph", "CUDAGraph", "capture", "replay"],

@@ -33,5 +33,5 @@ fi
 echo ""
 echo "[OK] GDS setup complete!"
 echo ""
-echo "You can now run: python3 ch5/gds_cufile_minimal.py"
+echo "You can now run: python3 ch05/gds_cufile_minimal.py"
 

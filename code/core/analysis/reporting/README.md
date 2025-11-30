@@ -69,7 +69,7 @@ from core.analysis.reporting import BenchmarkReport, BenchmarkData
 benchmarks = [
     BenchmarkData(
         name="matmul_tiling",
-        chapter="ch5",
+        chapter="ch05",
         baseline_time_ms=100.0,
         optimized_time_ms=25.0,
         speedup=4.0,
@@ -248,8 +248,8 @@ generate_report(
 from core.analysis.reporting import generate_report
 
 generate_report(
-    "artifacts/ch5/results/benchmark_test_results.json",
-    "ch5_report.pdf"
+    "artifacts/ch05/results/benchmark_test_results.json",
+    "ch05_report.pdf"
 )
 ```
 

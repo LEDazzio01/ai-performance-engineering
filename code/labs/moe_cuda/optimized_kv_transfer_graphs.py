@@ -77,7 +77,14 @@ class GraphedKVTransferBenchmark(BaseBenchmark):
         self.weight = torch.randn(self.hidden_size, self.hidden_size, device=self.device, dtype=self.dtype)
         self.workspace = torch.zeros_like(self.input_chunks)
         self.kv_dest = torch.zeros_like(self.input_chunks)
+        
+        # Warmup streams before graph capture to initialize CUDA state
+        with torch.cuda.stream(self.compute_stream):
+            _ = self.matmul(self.input_chunks[0], self.weight)
+        with torch.cuda.stream(self.copy_stream):
+            self.kv_dest[0].copy_(self.workspace[0])
         torch.cuda.synchronize(self.device)
+        
         self._maybe_capture_graph()
 
     def _pipeline_body(self) -> None:
@@ -125,12 +132,29 @@ class GraphedKVTransferBenchmark(BaseBenchmark):
         torch.cuda.synchronize(self.device)
 
     def teardown(self) -> None:
+        # Release graph resources first
+        if self.graph is not None:
+            try:
+                torch.cuda.synchronize()
+                del self.graph
+                self.graph = None
+            except Exception:
+                pass
+        
+        if self.graph_stream is not None:
+            try:
+                self.graph_stream.synchronize()
+                del self.graph_stream
+                self.graph_stream = None
+            except Exception:
+                pass
+        
+        # Release tensor references
         self.input_chunks = None
         self.weight = None
         self.workspace = None
         self.kv_dest = None
-        self.graph = None
-        self.graph_stream = None
+        
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -158,6 +182,17 @@ class GraphedKVTransferBenchmark(BaseBenchmark):
         if any(t is None for t in (self.input_chunks, self.weight, self.workspace, self.kv_dest)):
             return "Buffers not initialized"
         return None
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for verification.
+        
+        Only hidden_size is compared since baseline/optimized use different
+        batching strategies (sequential vs pipelined) by design.
+        """
+        return {
+            "hidden_size": self.hidden_size,
+            "dtype": "float16",
+        }
 
 
 def get_benchmark() -> BaseBenchmark:

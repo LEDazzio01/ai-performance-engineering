@@ -23,21 +23,21 @@ class MatmulSchedule:
 
 
 BASELINE_SCHEDULE = MatmulSchedule(
+    name="bm64_bn64_bk32",
+    block_m=64,
+    block_n=64,
+    block_k=32,
+    num_warps=4,
+    notes="Small tile that minimizes per-block resources (baseline for comparison).",
+)
+
+OPTIMIZED_SCHEDULE = MatmulSchedule(
     name="bm128_bn128_bk64",
     block_m=128,
     block_n=128,
     block_k=64,
     num_warps=4,
-    notes="Reference tile that spikes register count and often falls off predicted occupancy.",
-)
-
-OPTIMIZED_SCHEDULE = MatmulSchedule(
-    name="bm64_bn256_bk32",
-    block_m=64,
-    block_n=256,
-    block_k=32,
-    num_warps=4,
-    notes="Tile that generally trims registers/thread and achieves higher active warps.",
+    notes="Larger tile that improves compute density on Blackwell's high-bandwidth SM.",
 )
 
 EXTRA_SCHEDULE = MatmulSchedule(
@@ -45,8 +45,8 @@ EXTRA_SCHEDULE = MatmulSchedule(
     block_m=128,
     block_n=256,
     block_k=64,
-    num_warps=4,
-    notes="Wide-N tile meant to highlight when shared memory pressure caps theoretical occupancy.",
+    num_warps=8,
+    notes="Wide-N tile with more warps for higher throughput on large matrices.",
 )
 
 WARP_HEAVY_SCHEDULE = MatmulSchedule(
@@ -55,7 +55,7 @@ WARP_HEAVY_SCHEDULE = MatmulSchedule(
     block_n=128,
     block_k=32,
     num_warps=8,
-    notes="Doubles num_warps to show when higher warp count exacerbates register pressure but boosts latency hiding when resources allow.",
+    notes="More warps for better latency hiding; good for memory-bound scenarios.",
 )
 
 LATENCY_FRIENDLY_SCHEDULE = MatmulSchedule(
@@ -64,7 +64,7 @@ LATENCY_FRIENDLY_SCHEDULE = MatmulSchedule(
     block_n=64,
     block_k=32,
     num_warps=2,
-    notes="Small tile that minimizes per-block resources so theoretical occupancy approaches 100% (useful for verifying Proton vs Nsight agreement).",
+    notes="Small tile for high occupancy; useful for verifying Proton vs Nsight agreement.",
 )
 
 SCHEDULES = [
@@ -92,7 +92,6 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
         iterations: int = 2,
         warmup: int = 10,
         dtype: torch.dtype = torch.float16,
-        use_compile: bool = True,
     ) -> None:
         super().__init__()
         self.schedule = schedule
@@ -100,7 +99,6 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
         self._size_n = size
         self._size_k = size
         self._dtype = dtype
-        self._use_compile = use_compile
         self._runner: Optional[Callable[[], torch.Tensor]] = None
         self._output: Optional[torch.Tensor] = None
         self._reference: Optional[torch.Tensor] = None
@@ -153,22 +151,19 @@ class TritonMatmulProtonBenchmark(BaseBenchmark):
                 c=self._scratch,
             )
 
-        runner: Callable[[], torch.Tensor]
-        if self._use_compile and hasattr(torch, "compile"):
-            try:
-                runner = torch.compile(_run_once, fullgraph=True)  # type: ignore[arg-type]
-            except Exception:
-                runner = _run_once
-        else:
-            runner = _run_once
-
-        self._runner = runner
+        # DO NOT use torch.compile on Triton kernel calls
+        # torch.compile with fullgraph=True causes SymNodeVariable AttributeError 
+        # when tracing through Triton kernel launches with symbolic shapes.
+        # The Triton JIT compiler already handles kernel compilation/caching.
+        self._runner = _run_once
 
     def benchmark_fn(self) -> None:
         assert self._runner is not None
         try:
             with self._nvtx_range(self.schedule.name):
                 self._output = self._runner()
+                # Expose output for harness verification (harness looks for self.output)
+                self.output = self._output
             torch.cuda.synchronize()
         except AttributeError as exc:
             if "SymNodeVariable" in str(exc):

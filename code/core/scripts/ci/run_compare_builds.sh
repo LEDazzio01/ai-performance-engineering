@@ -5,13 +5,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHAPTERS=(
-  ch1
-  ch2
-  ch4
-  ch6
-  ch7
-  ch8
-  ch9
+  ch01
+  ch02
+  ch04
+  ch06
+  ch07
+  ch08
+  ch09
   ch10
   ch11
   ch12

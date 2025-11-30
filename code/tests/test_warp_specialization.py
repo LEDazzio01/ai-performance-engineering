@@ -144,8 +144,8 @@ def main():
     # Chapter 1
     print("\n--- Chapter 1 ---")
     try:
-        from ch1.baseline_warp_specialization import BaselineWarpSpecializationBenchmark
-        from ch1.optimized_warp_specialization import OptimizedWarpSpecializationBenchmark
+        from ch01.baseline_warp_specialization import BaselineWarpSpecializationBenchmark
+        from ch01.optimized_warp_specialization import OptimizedWarpSpecializationBenchmark
         
         print("Running baseline...")
         baseline_avg, baseline_median, baseline_times = run_benchmark(BaselineWarpSpecializationBenchmark, iterations=10, warmup=5)
@@ -157,14 +157,14 @@ def main():
         
         speedup = baseline_avg / optimized_avg if optimized_avg > 0 else 0
         print(f"  Speedup: {speedup:.2f}x")
-        results['ch1'] = (baseline_avg, optimized_avg, speedup)
+        results['ch01'] = (baseline_avg, optimized_avg, speedup)
     except Exception as e:
         print(f"  Error: {e}")
     
     # Chapter 9
     print("\n--- Chapter 9 ---")
     try:
-        from ch9.baseline_warp_specialization_producer_consumer import BaselineWarpSpecializationProducerConsumerBenchmark
+        from ch09.baseline_warp_specialization_producer_consumer import BaselineWarpSpecializationProducerConsumerBenchmark
         print("Running baseline...")
         baseline_avg, baseline_median, baseline_times = run_benchmark(BaselineWarpSpecializationProducerConsumerBenchmark)
         print(f"  Baseline: {baseline_avg:.3f} ms (median: {baseline_median:.3f} ms)")
@@ -180,17 +180,17 @@ def main():
             print(f"  Optimized ({label}): {opt_avg:.3f} ms (median: {opt_median:.3f} ms)")
             speedup = baseline_avg / opt_avg if opt_avg > 0 else 0
             print(f"  Speedup ({label}): {speedup:.2f}x")
-            results[f'ch9_{label}'] = (baseline_avg, opt_avg, speedup)
+            results[f'ch09_{label}'] = (baseline_avg, opt_avg, speedup)
             return True
 
         def load_triton():
-            from ch9.optimized_warp_specialization_producer_consumer_triton import (
+            from ch09.optimized_warp_specialization_producer_consumer_triton import (
                 OptimizedWarpSpecializationProducerConsumerBenchmark as _Bench
             )
             return _Bench
 
         def load_cuda():
-            from ch9.optimized_warp_specialization_producer_consumer_cuda import (
+            from ch09.optimized_warp_specialization_producer_consumer_cuda import (
                 OptimizedWarpSpecializationProducerConsumerCUDABenchmark as _Bench
             )
             return _Bench

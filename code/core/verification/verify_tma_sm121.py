@@ -373,7 +373,7 @@ def test_cuda_tma_compilation() -> str:
     # Check if we have existing TMA examples
     tma_examples = [
         "ch10/tma_2d_pipeline_blackwell.cu",
-        "ch7/async_prefetch_tma.cu",
+        "ch07/async_prefetch_tma.cu",
     ]
     
     found_examples = []
@@ -384,7 +384,7 @@ def test_cuda_tma_compilation() -> str:
     
     if not found_examples:
         print("WARNING: No CUDA TMA examples found to compile")
-        print("   Expected examples in ch10/ or ch7/")
+        print("   Expected examples in ch10/ or ch07/")
         return "fail"
     
     print(f"Found {len(found_examples)} CUDA TMA example(s)")

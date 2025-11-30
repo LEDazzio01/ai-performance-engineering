@@ -38,10 +38,10 @@ def precompile_extensions():
     compiled_count = 0
     failed_count = 0
     
-    # Pre-compile ch6 extensions
-    print("Compiling ch6 CUDA extensions...")
+    # Pre-compile ch06 extensions
+    print("Compiling ch06 CUDA extensions...")
     try:
-        from ch6.cuda_extensions import (
+        from ch06.cuda_extensions import (
             load_bank_conflicts_extension,
             load_coalescing_extension,
             load_ilp_extension,
@@ -66,8 +66,8 @@ def precompile_extensions():
                 failed_count += 1
                 success = False
     except ImportError as e:
-        print(f"  WARNING: Could not import ch6 extensions: {e}")
-        print("    ch6 benchmarks may compile extensions at runtime")
+        print(f"  WARNING: Could not import ch06 extensions: {e}")
+        print("    ch06 benchmarks may compile extensions at runtime")
     
     # Pre-compile ch12 extensions
     print("\nCompiling ch12 CUDA extensions...")

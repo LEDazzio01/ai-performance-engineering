@@ -12,6 +12,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 # Repository root (…/code)
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
+# Support both legacy ch01-9 and zero-padded ch01-09
+CHAPTER_ALIAS_MAP: Dict[str, str] = {f"ch{i}": f"ch{i:02d}" for i in range(1, 10)}
 
 
 def get_bench_roots(repo_root: Optional[Path] = None, bench_root: Optional[Path] = None) -> List[Path]:
@@ -157,6 +159,18 @@ def normalize_chapter_token(
     chapter = token.strip().lower()
     if not chapter:
         raise ValueError("Chapter token cannot be empty.")
+
+    def _normalize_ch_slug(slug: str) -> str:
+        # Accept bare numbers, legacy ch01-9, and zero-pad to ch01-ch09
+        if slug.isdigit():
+            return f"ch{int(slug):02d}"
+        if slug in CHAPTER_ALIAS_MAP:
+            return CHAPTER_ALIAS_MAP[slug]
+        if slug.startswith("ch") and slug[2:].isdigit():
+            num = int(slug[2:])
+            if 1 <= num <= 9:
+                return f"ch{num:02d}"
+        return slug
     
     roots = [bench_root] if bench_root else get_bench_roots(repo_root=repo_root or DEFAULT_REPO_ROOT)
     primary_root = roots[0]
@@ -168,12 +182,10 @@ def normalize_chapter_token(
             return candidate_path.resolve().relative_to(primary_root.resolve()).as_posix()
         except Exception:
             return str(candidate_path.resolve())
+    chapter = _normalize_ch_slug(chapter)
     candidate_relative = (primary_root / chapter)
     if candidate_relative.is_dir():
         return Path(chapter).as_posix()
-
-    if chapter.isdigit():
-        return f"ch{chapter}"
 
     chapter = chapter.replace("labs.", "labs/").replace("\\", "/")
 
@@ -205,7 +217,7 @@ def normalize_chapter_token(
 
     raise ValueError(
         f"Invalid chapter identifier '{token}'. Expected formats like "
-        "'ch3', 'labs/blackwell_matmul', or 'blackwell_matmul'."
+        "'ch03', 'labs/blackwell_matmul', or 'blackwell_matmul'."
     )
 
 

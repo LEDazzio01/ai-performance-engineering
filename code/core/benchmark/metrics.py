@@ -102,7 +102,7 @@ def compute_memory_transfer_metrics(
     transfer_type: str = "pcie",  # "pcie", "nvlink", "hbm"
     specs: Optional[HardwareSpecs] = None,
 ) -> Dict[str, float]:
-    """Compute metrics for memory transfer benchmarks (ch2).
+    """Compute metrics for memory transfer benchmarks (ch02).
     
     Args:
         bytes_transferred: Number of bytes moved
@@ -145,7 +145,7 @@ def compute_kernel_fundamentals_metrics(
     expected_bank_conflicts_per_warp: float = 0.0,
     expected_divergent_branches: float = 0.0,
 ) -> Dict[str, float]:
-    """Compute metrics for kernel fundamentals benchmarks (ch6).
+    """Compute metrics for kernel fundamentals benchmarks (ch06).
     
     Args:
         num_elements: Number of elements processed
@@ -176,7 +176,7 @@ def compute_memory_access_metrics(
     num_transactions: int,
     optimal_transactions: int,
 ) -> Dict[str, float]:
-    """Compute metrics for memory access pattern benchmarks (ch7).
+    """Compute metrics for memory access pattern benchmarks (ch07).
     
     Args:
         bytes_requested: Bytes actually needed by the kernel
@@ -214,7 +214,7 @@ def compute_optimization_metrics(
     shared_mem_bytes: int = 0,
     specs: Optional[HardwareSpecs] = None,
 ) -> Dict[str, float]:
-    """Compute metrics for optimization technique benchmarks (ch8).
+    """Compute metrics for optimization technique benchmarks (ch08).
     
     Args:
         baseline_ms: Baseline execution time
@@ -262,7 +262,7 @@ def compute_roofline_metrics(
     precision: str = "fp16",  # "fp32", "fp16", "fp8", "tensor"
     specs: Optional[HardwareSpecs] = None,
 ) -> Dict[str, float]:
-    """Compute roofline analysis metrics for compute-bound benchmarks (ch9).
+    """Compute roofline analysis metrics for compute-bound benchmarks (ch09).
     
     Args:
         total_flops: Total floating-point operations
@@ -544,7 +544,7 @@ def compute_environment_metrics(
     driver_version: str = "",
     pytorch_version: str = "",
 ) -> Dict[str, float]:
-    """Compute metrics for environment setup benchmarks (ch1).
+    """Compute metrics for environment setup benchmarks (ch01).
     
     Args:
         gpu_count: Number of GPUs detected
@@ -576,7 +576,7 @@ def compute_system_config_metrics(
     pcie_lanes: int = 0,
     nvlink_connections: int = 0,
 ) -> Dict[str, float]:
-    """Compute metrics for system configuration benchmarks (ch3).
+    """Compute metrics for system configuration benchmarks (ch03).
     
     Args:
         numa_nodes: Number of NUMA nodes
@@ -609,7 +609,7 @@ def compute_distributed_metrics(
     collective_type: str = "allreduce",  # "allreduce", "allgather", "reduce_scatter", "p2p"
     specs: Optional[HardwareSpecs] = None,
 ) -> Dict[str, float]:
-    """Compute metrics for distributed communication benchmarks (ch4).
+    """Compute metrics for distributed communication benchmarks (ch04).
     
     Args:
         world_size: Number of processes/GPUs
@@ -664,7 +664,7 @@ def compute_storage_io_metrics(
     num_files: int = 1,
     is_async: bool = False,
 ) -> Dict[str, float]:
-    """Compute metrics for storage I/O benchmarks (ch5).
+    """Compute metrics for storage I/O benchmarks (ch05).
     
     Args:
         bytes_read: Total bytes read from storage

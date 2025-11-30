@@ -88,7 +88,7 @@ export function ProfilerTab() {
   const [ncuResult, setNcuResult] = useState<any>(null);
   const [ncuLoading, setNcuLoading] = useState(false);
 
-  const [torchScript, setTorchScript] = useState('ch1/baseline.py');
+  const [torchScript, setTorchScript] = useState('ch01/baseline.py');
   const [torchArgs, setTorchArgs] = useState('');
   const [torchMode, setTorchMode] = useState('full');
   const [torchQueue, setTorchQueue] = useState(false);

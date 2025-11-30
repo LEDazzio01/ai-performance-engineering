@@ -97,6 +97,14 @@ class OptimizedSpeculativeDecodingBenchmark(BaseBenchmark):
             tokens_per_iteration=self._workload.tokens_per_iteration,
         )
     
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch_size,
+            "vocab_size": self.vocab_size,
+            "hidden_size": self.hidden_size,
+        }
+    
     def benchmark_fn(self) -> None:
         """Benchmark: Batch verification of K speculative tokens.
         

@@ -42,9 +42,9 @@
         "baseline_p75_ms": 8256.706237792969,
         "baseline_time_ms": 8256.706237792969,
         "best_optimized_p75_ms": 8242.315769195557,
-        "best_optimized_speedup": 1.0441611044547303,
+        "best_optimized_speedup": 1.7272316698488486,
         "best_optimized_time_ms": 8242.315769195557,
-        "best_speedup": 1.0970375667130123
+        "best_speedup": 1.7272316698488486
       },
       "type": "python"
     }

@@ -230,7 +230,7 @@ def main():
     
     if passed == total:
         print("\n  🎉 All GDS checks passed! GPUDirect Storage is ready to use.")
-        print(f"\n  Test it with: python3 ch5/gds_cufile_minimal.py")
+        print(f"\n  Test it with: python3 ch05/gds_cufile_minimal.py")
         return 0
     elif results["Kernel Module"]:
         print("\n  WARNING: Some checks failed but nvidia-fs is loaded.")

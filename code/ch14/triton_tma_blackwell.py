@@ -155,21 +155,10 @@ def tma_copy_2d(src: torch.Tensor, dst: torch.Tensor) -> None:
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            {'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'NUM_STAGES': 2},
-            num_warps=8,
-            num_stages=2,
-        ),
-        triton.Config(
-            {'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'NUM_STAGES': 2},
-            num_warps=8,
-            num_stages=2,
-        ),
-        triton.Config(
-            {'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'NUM_STAGES': 3},
-            num_warps=8,
-            num_stages=3,
-        ),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=8, num_stages=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=4, num_stages=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=3),
     ],
     key=['M', 'N', 'K'],
 )
@@ -183,19 +172,21 @@ def tma_gemm_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
-    NUM_STAGES: tl.constexpr,
 ):
-    """Matrix multiplication using Triton tensor descriptors (TMA-backed on Blackwell)."""
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    """Matrix multiplication using TMA tensor descriptors.
+    
+    Uses tl.load_tensor_descriptor() for efficient TMA-backed loads on Blackwell.
+    TMA hardware handles boundary padding automatically.
+    """
+    pid = tl.program_id(0)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    pid_m = pid // num_pid_n
+    pid_n = pid % num_pid_n
 
-    m0 = pid_m * BLOCK_M
-    n0 = pid_n * BLOCK_N
+    m_off = pid_m * BLOCK_M
+    n_off = pid_n * BLOCK_N
 
-    offs_m = m0 + tl.arange(0, BLOCK_M)
-    offs_n = n0 + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-
+    # Create TMA tensor descriptors
     A_desc = tl.make_tensor_descriptor(
         A_ptr,
         shape=[M, K],
@@ -209,75 +200,20 @@ def tma_gemm_kernel(
         block_shape=[BLOCK_K, BLOCK_N],
     )
 
+    # FP32 accumulator for precision
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
-    K_tiles = (K + BLOCK_K - 1) // BLOCK_K
-    if K_tiles == 0:
-        c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-        c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
-        tl.store(c_ptrs, acc, mask=c_mask)
-        return
+    # Main K-loop using TMA loads
+    for k in range(0, K, BLOCK_K):
+        # TMA hardware handles boundary conditions
+        a_tile = tl.load_tensor_descriptor(A_desc, [m_off, k])
+        b_tile = tl.load_tensor_descriptor(B_desc, [k, n_off])
+        acc += tl.dot(a_tile, b_tile, out_dtype=tl.float32)
 
-    k0 = 0
-    if (m0 + BLOCK_M <= M) and (k0 + BLOCK_K <= K):
-        a_cur = A_desc.load([m0, k0])
-    else:
-        row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-        col_offsets = tl.broadcast_to((k0 + offs_k)[None, :], (BLOCK_M, BLOCK_K))
-        a_cur = tl.load(
-            A_desc,
-            offsets=(row_offsets, col_offsets),
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-    if (n0 + BLOCK_N <= N) and (k0 + BLOCK_K <= K):
-        b_cur = B_desc.load([k0, n0])
-    else:
-        row_offsets = tl.broadcast_to((k0 + offs_k)[:, None], (BLOCK_K, BLOCK_N))
-        col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-        b_cur = tl.load(
-            B_desc,
-            offsets=(row_offsets, col_offsets),
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-    for kt in tl.range(0, K_tiles, num_stages=NUM_STAGES, warp_specialize=True):
-        next_k = (kt + 1) * BLOCK_K
-
-        if kt + 1 < K_tiles:
-            if (m0 + BLOCK_M <= M) and (next_k + BLOCK_K <= K):
-                a_next = A_desc.load([m0, next_k])
-            else:
-                row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-                col_offsets = tl.broadcast_to((next_k + offs_k)[None, :], (BLOCK_M, BLOCK_K))
-                a_next = tl.load(
-                    A_desc,
-                    offsets=(row_offsets, col_offsets),
-                    boundary_check=(0, 1),
-                    padding_option="zero",
-                )
-
-            if (n0 + BLOCK_N <= N) and (next_k + BLOCK_K <= K):
-                b_next = B_desc.load([next_k, n0])
-            else:
-                row_offsets = tl.broadcast_to((next_k + offs_k)[:, None], (BLOCK_K, BLOCK_N))
-                col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-                b_next = tl.load(
-                    B_desc,
-                    offsets=(row_offsets, col_offsets),
-                    boundary_check=(0, 1),
-                    padding_option="zero",
-                )
-
-        acc += tl.dot(a_cur, b_cur, out_dtype=tl.float32)
-
-        if kt + 1 < K_tiles:
-            a_cur = a_next
-            b_cur = b_next
-
-    c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
+    # Store result with boundary mask
+    offs_m = m_off + tl.arange(0, BLOCK_M)
+    offs_n = n_off + tl.arange(0, BLOCK_N)
+    c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(c_ptrs, acc, mask=c_mask)
 
@@ -290,8 +226,8 @@ def tma_gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     
     C = torch.empty((M, N), device=A.device, dtype=torch.float32)
 
-    # Use META-aware grid to correctly handle all autotune configs
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']), triton.cdiv(N, META['BLOCK_N']))
+    # 1D grid: num_tiles_m * num_tiles_n
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
     tma_gemm_kernel[grid](
         A, B, C,
         M, N, K,
@@ -309,21 +245,10 @@ def tma_gemm(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
 
 @triton.autotune(
     configs=[
-        triton.Config(
-            {'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64, 'NUM_STAGES': 2},
-            num_warps=8,
-            num_stages=2,
-        ),
-        triton.Config(
-            {'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 128, 'NUM_STAGES': 2},
-            num_warps=8,
-            num_stages=2,
-        ),
-        triton.Config(
-            {'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'NUM_STAGES': 3},
-            num_warps=8,
-            num_stages=3,
-        ),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=8, num_stages=4),
+        triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64}, num_warps=4, num_stages=4),
+        triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64, 'BLOCK_K': 64}, num_warps=4, num_stages=3),
     ],
     key=['M', 'N', 'K'],
 )
@@ -338,19 +263,20 @@ def tma_gemm_bias_silu_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
-    NUM_STAGES: tl.constexpr,
 ):
-    """Matrix multiplication + row-bias + SiLU using Triton tensor descriptors."""
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    """Matrix multiplication + bias + SiLU using TMA tensor descriptors.
+    
+    Uses tl.load_tensor_descriptor() for efficient TMA-backed loads.
+    """
+    pid = tl.program_id(0)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    pid_m = pid // num_pid_n
+    pid_n = pid % num_pid_n
 
-    m0 = pid_m * BLOCK_M
-    n0 = pid_n * BLOCK_N
+    m_off = pid_m * BLOCK_M
+    n_off = pid_n * BLOCK_N
 
-    offs_m = m0 + tl.arange(0, BLOCK_M)
-    offs_n = n0 + tl.arange(0, BLOCK_N)
-    offs_k = tl.arange(0, BLOCK_K)
-
+    # Create TMA tensor descriptors
     A_desc = tl.make_tensor_descriptor(
         A_ptr,
         shape=[M, K],
@@ -364,83 +290,29 @@ def tma_gemm_bias_silu_kernel(
         block_shape=[BLOCK_K, BLOCK_N],
     )
 
+    # FP32 accumulator
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
-    K_tiles = (K + BLOCK_K - 1) // BLOCK_K
-    if K_tiles == 0:
-        c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
-        c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
-        tl.store(c_ptrs, acc, mask=c_mask)
-        return
+    # Main K-loop with TMA loads
+    for k in range(0, K, BLOCK_K):
+        a_tile = tl.load_tensor_descriptor(A_desc, [m_off, k])
+        b_tile = tl.load_tensor_descriptor(B_desc, [k, n_off])
+        acc += tl.dot(a_tile, b_tile, out_dtype=tl.float32)
 
-    k0 = 0
-    if (m0 + BLOCK_M <= M) and (k0 + BLOCK_K <= K):
-        a_cur = A_desc.load([m0, k0])
-    else:
-        row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-        col_offsets = tl.broadcast_to((k0 + offs_k)[None, :], (BLOCK_M, BLOCK_K))
-        a_cur = tl.load(
-            A_desc,
-            offsets=(row_offsets, col_offsets),
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-    if (n0 + BLOCK_N <= N) and (k0 + BLOCK_K <= K):
-        b_cur = B_desc.load([k0, n0])
-    else:
-        row_offsets = tl.broadcast_to((k0 + offs_k)[:, None], (BLOCK_K, BLOCK_N))
-        col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-        b_cur = tl.load(
-            B_desc,
-            offsets=(row_offsets, col_offsets),
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-    for kt in tl.range(0, K_tiles, num_stages=NUM_STAGES, warp_specialize=True):
-        next_k = (kt + 1) * BLOCK_K
-
-        if kt + 1 < K_tiles:
-            if (m0 + BLOCK_M <= M) and (next_k + BLOCK_K <= K):
-                a_next = A_desc.load([m0, next_k])
-            else:
-                row_offsets = tl.broadcast_to(offs_m[:, None], (BLOCK_M, BLOCK_K))
-                col_offsets = tl.broadcast_to((next_k + offs_k)[None, :], (BLOCK_M, BLOCK_K))
-                a_next = tl.load(
-                    A_desc,
-                    offsets=(row_offsets, col_offsets),
-                    boundary_check=(0, 1),
-                    padding_option="zero",
-                )
-
-            if (n0 + BLOCK_N <= N) and (next_k + BLOCK_K <= K):
-                b_next = B_desc.load([next_k, n0])
-            else:
-                row_offsets = tl.broadcast_to((next_k + offs_k)[:, None], (BLOCK_K, BLOCK_N))
-                col_offsets = tl.broadcast_to(offs_n[None, :], (BLOCK_K, BLOCK_N))
-                b_next = tl.load(
-                    B_desc,
-                    offsets=(row_offsets, col_offsets),
-                    boundary_check=(0, 1),
-                    padding_option="zero",
-                )
-
-        acc += tl.dot(a_cur, b_cur, out_dtype=tl.float32)
-
-        if kt + 1 < K_tiles:
-            a_cur = a_next
-            b_cur = b_next
-
+    # Fused bias + SiLU epilogue
+    offs_n = n_off + tl.arange(0, BLOCK_N)
     bias_vals = tl.load(
         bias_ptr + offs_n * stride_bias,
         mask=offs_n < N,
         other=0.0,
     ).to(tl.float32)
     acc = acc + bias_vals[None, :]
+    # SiLU: x * sigmoid(x)
     acc = acc * (1.0 / (1.0 + tl.exp(-acc)))
 
-    c_ptrs = C_ptr + (offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn)
+    # Store result with boundary mask
+    offs_m = m_off + tl.arange(0, BLOCK_M)
+    c_ptrs = C_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     c_mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(c_ptrs, acc, mask=c_mask)
 
@@ -454,7 +326,8 @@ def tma_gemm_bias_silu(A: torch.Tensor, B: torch.Tensor, bias: torch.Tensor) -> 
 
     C = torch.empty((M, N), device=A.device, dtype=torch.float32)
 
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']), triton.cdiv(N, META['BLOCK_N']))
+    # 1D grid
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
     tma_gemm_bias_silu_kernel[grid](
         A, B, bias, C,
         M, N, K,

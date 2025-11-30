@@ -48,8 +48,8 @@ Direct mode:
 
 Examples:
   profile.sh --profile nsys --examples ch14_triton_examples
-  profile.sh code/ch7/memory_access_pytorch.py --tool ncu
-  profile.sh code/ch9/fusion_pytorch.py --tool pytorch --pytorch-mode memory -- --batch-size 4
+  profile.sh code/ch07/memory_access_pytorch.py --tool ncu
+  profile.sh code/ch09/fusion_pytorch.py --tool pytorch --pytorch-mode memory -- --batch-size 4
 USAGE
 }
 
@@ -316,7 +316,7 @@ export PYTORCH_ALLOC_CONF=${PYTORCH_ALLOC_CONF:-${PYTORCH_CUDA_ALLOC_CONF:-max_s
 export PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-1}
 unset PYTORCH_CUDA_ALLOC_CONF 2>/dev/null || true
 
-if [[ "$SCRIPT_PATH" =~ /code/ch1/ || "$SCRIPT_PATH" =~ /code/ch2/ || "$SCRIPT_PATH" =~ /code/ch1[3-9]/ || "$SCRIPT_PATH" =~ /code/ch20/ ]]; then
+if [[ "$SCRIPT_PATH" =~ /code/ch01/ || "$SCRIPT_PATH" =~ /code/ch02/ || "$SCRIPT_PATH" =~ /code/ch01[3-9]/ || "$SCRIPT_PATH" =~ /code/ch20/ ]]; then
     export TORCHINDUCTOR_AUTOTUNE=${TORCHINDUCTOR_AUTOTUNE:-0}
     export TORCH_COMPILE_DISABLE=${TORCH_COMPILE_DISABLE:-1}
 fi

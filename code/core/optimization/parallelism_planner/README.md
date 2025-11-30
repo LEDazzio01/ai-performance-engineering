@@ -453,4 +453,4 @@ This tool integrates with:
 - `labs/moe_parallelism/plan.py` - Compatible data structures
 - `core/harness/hardware_capabilities.py` - Hardware detection
 - `dashboard/api/server.py` - Web UI and API
-- `ch4/training_8xb200_pipeline.py` - Training examples
+- `ch04/training_8xb200_pipeline.py` - Training examples

@@ -56,23 +56,23 @@ class Workload:
 WORKLOADS: List[Workload] = [
     Workload(
         name="ch07_hbm3e_copy",
-        chapter="ch7",
+        chapter="ch07",
         command=["./hbm3e_optimized_copy"],
-        workdir=REPO_ROOT / "ch7",
+        workdir=REPO_ROOT / "ch07",
         description="HBM3e-optimised memcpy (memory-bound baseline).",
     ),
     Workload(
         name="ch08_occupancy_tuning",
-        chapter="ch8",
+        chapter="ch08",
         command=["./occupancy_tuning"],
-        workdir=REPO_ROOT / "ch8",
+        workdir=REPO_ROOT / "ch08",
         description="Occupancy tuning microbenchmark (launch configuration study).",
     ),
     Workload(
         name="ch09_cutlass_gemm",
-        chapter="ch9",
+        chapter="ch09",
         command=["./cutlass_gemm_example"],
-        workdir=REPO_ROOT / "ch9",
+        workdir=REPO_ROOT / "ch09",
         description="CUTLASS GEMM example (tensor core throughput).",
     ),
     Workload(

@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - defensive import
     prefer_sdpa_backends = None  # type: ignore
     enable_tf32 = None  # type: ignore
 
+from core.harness.hardware_capabilities import detect_capabilities  # noqa: E402
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
 
 try:  # Optional but strongly recommended for fast variants
@@ -63,10 +64,13 @@ def _te_version_at_least(major: int, minor: int = 0) -> bool:
 
 
 def _is_blackwell_family() -> bool:
+    cap = detect_capabilities()
+    if cap is not None:
+        # Treat Blackwell (SM100/SM103) and Grace-Blackwell (SM12x) as Blackwell-class for defaults.
+        return cap.architecture in {"blackwell", "blackwell_ultra", "grace_blackwell"}
     if not torch.cuda.is_available():
-        return False
+        raise RuntimeError("Cannot determine architecture: capability probe unavailable and CUDA not available.")
     cc_major, _ = torch.cuda.get_device_capability()
-    # Treat Blackwell (SM100/SM103) and Grace-Blackwell (SM12x) as Blackwell-class for defaults.
     return cc_major >= 10
 
 
@@ -129,6 +133,40 @@ class DecodeBenchmark(BaseBenchmark):
                     self.fp8_recipe = None
 
     def setup(self) -> None:
+        import gc
+        
+        # CRITICAL: Clean up CUDA state from previous benchmarks
+        # This prevents "Offset increment outside graph capture" errors
+        # and index out of bounds from corrupted CUDA state
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(42)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         # Ensure deterministic behavior for verification
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
@@ -164,10 +202,13 @@ class DecodeBenchmark(BaseBenchmark):
     def _init_model(self) -> None:
         hs = self.cfg.hidden_size
         vs = self.cfg.vocab_size
-        self.embedding = nn.Embedding(vs, hs, device=self.device, dtype=self.dtype)
+        # Create embedding on CPU first to avoid CUDA RNG graph capture issues
+        # then move to device. This ensures parameter init uses CPU RNG.
+        self.embedding = nn.Embedding(vs, hs, dtype=self.dtype).to(self.device)
 
         def _linear(in_features: int, out_features: int, *, bias: bool = True) -> nn.Module:
             if (self.cfg.use_fp8 or self.cfg.use_fp4) and TE_AVAILABLE:
+                # TE Linear must be created on device
                 return TELinear(
                     in_features,
                     out_features,
@@ -175,16 +216,18 @@ class DecodeBenchmark(BaseBenchmark):
                     params_dtype=self.dtype,
                     device=self.device,
                 )
-            return nn.Linear(in_features, out_features, bias=bias, device=self.device, dtype=self.dtype)
+            # Create on CPU first, then move to device to avoid CUDA RNG issues
+            return nn.Linear(in_features, out_features, bias=bias, dtype=self.dtype).to(self.device)
 
+        # Create modules on CPU first, then move to device
         self.prefill_mlp = nn.Sequential(
-            nn.LayerNorm(hs, device=self.device, dtype=self.dtype),
+            nn.LayerNorm(hs, dtype=self.dtype).to(self.device),
             _linear(hs, hs * 2),
             nn.GELU(),
             _linear(hs * 2, hs),
         )
         self.decode_mlp = nn.Sequential(
-            nn.LayerNorm(hs, device=self.device, dtype=self.dtype),
+            nn.LayerNorm(hs, dtype=self.dtype).to(self.device),
             _linear(hs, hs),
             nn.GELU(),
             _linear(hs, hs),
@@ -194,29 +237,34 @@ class DecodeBenchmark(BaseBenchmark):
             self._fp8_enabled = True
 
     def _cache_te_weight_workspaces(self) -> None:
-        """Pre-quantize TE weights once to warm TE caches and reduce workspace churn."""
+        """Pre-quantize TE weights by running a warmup forward pass.
+        
+        The correct way to initialize FP8 workspaces is via forward passes under
+        fp8_autocast, not by calling get_weight_workspace() manually.
+        """
         if (
             not TE_AVAILABLE
             or not (self._fp8_enabled or self._fp4_enabled)
             or os.getenv("DECODE_SKIP_TE_CACHE") == "1"
         ):
             return
-        modules = []
-        for mod in (self.prefill_mlp, self.decode_mlp):
-            for layer in mod:
-                if hasattr(layer, "get_weight_workspace"):
-                    modules.append(layer)
-        if hasattr(self, "lm_head") and hasattr(self.lm_head, "get_weight_workspace"):
-            modules.append(self.lm_head)
-
-        for mod in modules:
-            try:
-                with torch.no_grad(), te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
-                    _ = mod.get_weight_workspace(mod.weight)  # type: ignore[attr-defined]
-            except TypeError as exc:
-                raise RuntimeError(
-                    "SKIPPED: TransformerEngine weight workspace API is incompatible on this install."
-                ) from exc
+        
+        # Warmup FP8 caches by running forward passes - this is the proper API
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
+        bsz = self.cfg.batch_size
+        hs = self.cfg.hidden_size
+        dummy_hidden = torch.randn(bsz, hs, dtype=self.dtype).to(self.device)
+        dummy_seq = torch.randn(bsz, self.cfg.prompt_tokens, hs, dtype=self.dtype).to(self.device)
+        
+        with torch.no_grad(), te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe):
+            # Warmup prefill MLP
+            _ = self.prefill_mlp(dummy_seq)
+            # Warmup decode MLP  
+            _ = self.decode_mlp(dummy_hidden)
+            # Warmup lm_head
+            _ = self.lm_head(dummy_hidden)
+        
+        torch.cuda.synchronize()
 
     def _init_buffers(self) -> None:
         bsz, prompt = self.cfg.batch_size, self.cfg.prompt_tokens
@@ -233,20 +281,13 @@ class DecodeBenchmark(BaseBenchmark):
 
     # Compiled / graphed helpers
     def _maybe_compile(self) -> None:
-        try:
-            self.prefill_fn = torch.compile(self._prefill, mode="reduce-overhead", fullgraph=False)
-            self.decode_fn = torch.compile(self._decode_step, mode="reduce-overhead", fullgraph=True)
-        except Exception as exc:  # pragma: no cover - defensive
-            self._compile_error = str(exc)
-            self.prefill_fn = self._prefill
-            self.decode_fn = self._decode_step
-        else:
-            self._compile_error = None
-        # Ensure attributes exist even if compile failed
-        if not hasattr(self, "prefill_fn"):
-            self.prefill_fn = self._prefill
-        if not hasattr(self, "decode_fn"):
-            self.decode_fn = self._decode_step
+        # NO FALLBACK - torch.compile must work
+        # When using explicit CUDA graphs, don't use reduce-overhead mode (which uses internal graphs)
+        # as this causes "Cannot prepare for replay during capturing stage" errors
+        compile_mode = "default" if self.cfg.use_cuda_graphs else "reduce-overhead"
+        self.prefill_fn = torch.compile(self._prefill, mode=compile_mode, fullgraph=False)
+        self.decode_fn = torch.compile(self._decode_step, mode=compile_mode, fullgraph=True)
+        self._compile_error = None
 
     def _capture_decode_graph(self) -> None:
         # Allocate static outputs once
@@ -256,76 +297,68 @@ class DecodeBenchmark(BaseBenchmark):
         self.graph_next_token = torch.empty((bsz,), device=self.device, dtype=torch.long)
         # Ensure prompt buffer is initialized with valid tokens before capture
         self.gpu_prompt.copy_(self.host_prompt, non_blocking=False)
-        try:
-            # Warm up to populate kernels/caches prior to capture
-            with torch.cuda.stream(self.graph_stream):
-                for _ in range(2):
-                    if self.cfg.graph_full_iteration:
-                        prefill_state = self.prefill_fn(self.gpu_prompt)
-                        self.state_buffer.copy_(prefill_state)
-                        self.current_tokens.copy_(self.gpu_prompt[:, -1])
-                    logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
-                    self.state_buffer.copy_(next_state)
-                    self.graph_next_token.copy_(next_token)
-                    self.current_tokens.copy_(next_token)
-            torch.cuda.synchronize()
-            self.decode_graph = torch.cuda.CUDAGraph()
-            # Reset state before capture for determinism
-            self.state_buffer.zero_()
-            self.current_tokens.zero_()
-            torch.cuda.synchronize()
-            with torch.cuda.graph(self.decode_graph, stream=self.graph_stream):
+        
+        # NO FALLBACK - CUDA graph capture must succeed
+        # Warm up to populate kernels/caches prior to capture
+        with torch.cuda.stream(self.graph_stream):
+            for _ in range(2):
                 if self.cfg.graph_full_iteration:
                     prefill_state = self.prefill_fn(self.gpu_prompt)
                     self.state_buffer.copy_(prefill_state)
                     self.current_tokens.copy_(self.gpu_prompt[:, -1])
-                for _ in range(self.cfg.decode_tokens):
-                    logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
-                    self.state_buffer.copy_(next_state)
-                    self.graph_logits.copy_(logits)
-                    self.graph_next_token.copy_(next_token)
-                    if self.cfg.graph_full_iteration:
-                        self.current_tokens.copy_(next_token)
-            torch.cuda.synchronize()
-            self.graph_includes_prefill = bool(self.cfg.graph_full_iteration)
-        except Exception as exc:  # pragma: no cover - defensive
-            self.decode_graph = None
-            self.graph_stream = None
-            self.graph_includes_prefill = False
-            self._graph_error = str(exc)
+                logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                self.state_buffer.copy_(next_state)
+                self.graph_next_token.copy_(next_token)
+                self.current_tokens.copy_(next_token)
+        torch.cuda.synchronize()
+        self.decode_graph = torch.cuda.CUDAGraph()
+        # Reset state before capture for determinism
+        self.state_buffer.zero_()
+        self.current_tokens.zero_()
+        torch.cuda.synchronize()
+        with torch.cuda.graph(self.decode_graph, stream=self.graph_stream):
+            if self.cfg.graph_full_iteration:
+                prefill_state = self.prefill_fn(self.gpu_prompt)
+                self.state_buffer.copy_(prefill_state)
+                self.current_tokens.copy_(self.gpu_prompt[:, -1])
+            for _ in range(self.cfg.decode_tokens):
+                logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                self.state_buffer.copy_(next_state)
+                self.graph_logits.copy_(logits)
+                self.graph_next_token.copy_(next_token)
+                if self.cfg.graph_full_iteration:
+                    self.current_tokens.copy_(next_token)
+        torch.cuda.synchronize()
+        self.graph_includes_prefill = bool(self.cfg.graph_full_iteration)
+        self._graph_error = None
 
-    # Core math
+    # Core math - NOTE: fp8_autocast should be managed at benchmark_fn level
+    # to avoid per-call overhead and memory leaks.
+    # All operations use torch.no_grad() since this is inference (no backward pass).
     def _prefill(self, tokens: torch.Tensor) -> torch.Tensor:
-        if self._fp8_enabled and te is not None and self.fp8_recipe is not None:
-            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe), self.sdpa_ctx_factory():
-                embeds = self.embedding(tokens)
-                hidden = self.prefill_mlp(embeds)
-        elif self._fp4_enabled and te is not None and self.fp8_recipe is not None:
-            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe), self.sdpa_ctx_factory():
-                embeds = self.embedding(tokens)
-                hidden = self.prefill_mlp(embeds)
-        else:
-            with self.sdpa_ctx_factory():
-                embeds = self.embedding(tokens)
-                hidden = self.prefill_mlp(embeds)
+        """Prefill phase - fp8_autocast managed externally."""
+        with torch.no_grad(), self.sdpa_ctx_factory():
+            embeds = self.embedding(tokens)
+            hidden = self.prefill_mlp(embeds)
         return hidden[:, -1, :]
 
     def _decode_step(
         self, tokens: torch.Tensor, state: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        with self.sdpa_ctx_factory():
+        """Single decode step - fp8_autocast managed externally."""
+        with torch.no_grad(), self.sdpa_ctx_factory():
             token_hidden = self.embedding(tokens)
             combined = token_hidden + state
-        if (self._fp8_enabled or self._fp4_enabled) and te is not None and self.fp8_recipe is not None:
-            with te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe), self.sdpa_ctx_factory():
-                hidden = self.decode_mlp(combined)
-                logits = self.lm_head(hidden)
-        else:
-            with self.sdpa_ctx_factory():
-                hidden = self.decode_mlp(combined)
-                logits = self.lm_head(hidden)
+            hidden = self.decode_mlp(combined)
+            logits = self.lm_head(hidden)
         next_token = torch.argmax(logits, dim=-1)
         return logits, hidden, next_token
+    
+    def _get_fp8_context(self):
+        """Return fp8_autocast context if FP8 is enabled, else nullcontext."""
+        if (self._fp8_enabled or self._fp4_enabled) and te is not None and self.fp8_recipe is not None:
+            return te.fp8_autocast(enabled=True, fp8_recipe=self.fp8_recipe)
+        return nullcontext()
 
     # Execution helpers
     def _copy_prompts_to_device(self) -> None:
@@ -336,6 +369,10 @@ class DecodeBenchmark(BaseBenchmark):
             torch.cuda.current_stream().wait_stream(self.copy_stream)
         else:
             self.gpu_prompt.copy_(self.host_prompt, non_blocking=non_blocking)
+            # CRITICAL: If non_blocking copy with no stream, must synchronize
+            # Otherwise gpu_prompt may contain garbage when immediately accessed
+            if non_blocking:
+                torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
         # Timers via CUDA events
@@ -360,43 +397,45 @@ class DecodeBenchmark(BaseBenchmark):
         if nvtx:
             nvtx.range_push("prefill")
 
-        # Prefill (or reset when full graph already contains it)
-        if self.decode_graph is not None and self.graph_includes_prefill:
-            self.state_buffer.zero_()
-            self.current_tokens.zero_()
-        else:
-            prefill_state = self.prefill_fn(self.gpu_prompt)
-            self.state_buffer.copy_(prefill_state)
-            self.current_tokens.copy_(self.gpu_prompt[:, -1])
-        prefill_end.record(prefill_stream)
-
-        # Ensure decode stream waits for prefill when streams differ
-        if decode_stream is not prefill_stream:
-            decode_stream.wait_event(prefill_end)
-
-        if nvtx:
-            nvtx.range_pop()  # prefill
-            nvtx.range_push("decode")
-
-        # Decode
-        decode_start.record(timing_stream)
-        if self.decode_graph is not None:
-            # Replay once; graph already captures the decode loop
-            if self.graph_stream is not None:
-                with torch.cuda.stream(self.graph_stream):
-                    self.decode_graph.replay()
-                torch.cuda.current_stream().wait_stream(self.graph_stream)
+        # Single FP8 context for entire forward pass to avoid workspace churn
+        with self._get_fp8_context():
+            # Prefill (or reset when full graph already contains it)
+            if self.decode_graph is not None and self.graph_includes_prefill:
+                self.state_buffer.zero_()
+                self.current_tokens.zero_()
             else:
-                self.decode_graph.replay()
-        else:
-            with torch.cuda.stream(self.compute_stream or torch.cuda.current_stream()):
-                for _ in range(self.cfg.decode_tokens):
-                    logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
-                    self.state_buffer.copy_(next_state)
-                    self.current_tokens.copy_(next_token)
-            if self.compute_stream is not None:
-                torch.cuda.current_stream().wait_stream(self.compute_stream)
-        decode_end.record(timing_stream)
+                prefill_state = self.prefill_fn(self.gpu_prompt)
+                self.state_buffer.copy_(prefill_state)
+                self.current_tokens.copy_(self.gpu_prompt[:, -1])
+            prefill_end.record(prefill_stream)
+
+            # Ensure decode stream waits for prefill when streams differ
+            if decode_stream is not prefill_stream:
+                decode_stream.wait_event(prefill_end)
+
+            if nvtx:
+                nvtx.range_pop()  # prefill
+                nvtx.range_push("decode")
+
+            # Decode
+            decode_start.record(timing_stream)
+            if self.decode_graph is not None:
+                # Replay once; graph already captures the decode loop
+                if self.graph_stream is not None:
+                    with torch.cuda.stream(self.graph_stream):
+                        self.decode_graph.replay()
+                    torch.cuda.current_stream().wait_stream(self.graph_stream)
+                else:
+                    self.decode_graph.replay()
+            else:
+                with torch.cuda.stream(self.compute_stream or torch.cuda.current_stream()):
+                    for _ in range(self.cfg.decode_tokens):
+                        logits, next_state, next_token = self.decode_fn(self.current_tokens, self.state_buffer)
+                        self.state_buffer.copy_(next_state)
+                        self.current_tokens.copy_(next_token)
+                if self.compute_stream is not None:
+                    torch.cuda.current_stream().wait_stream(self.compute_stream)
+            decode_end.record(timing_stream)
 
         if nvtx:
             nvtx.range_pop()
@@ -464,5 +503,3 @@ class DecodeBenchmark(BaseBenchmark):
 
     def get_custom_metrics(self) -> Dict[str, float]:
         return self._custom_metrics
-
-

@@ -13,6 +13,13 @@ from labs.decode_optimization.decode_common import DecodeBenchmark, DecodeConfig
 
 
 def get_benchmark() -> DecodeBenchmark:
+    """Optimized decode with pinned memory and torch.compile.
+    
+    Key optimizations:
+    1. Pinned host memory for async non-blocking transfers
+    2. torch.compile for fused operations
+    3. Copy stream for overlapping H2D with compute
+    """
     cfg = DecodeConfig(
         batch_size=8,
         prompt_tokens=256,
@@ -20,6 +27,7 @@ def get_benchmark() -> DecodeBenchmark:
         hidden_size=1024,
         use_pinned_host=True,
         use_copy_stream=True,
+        use_torch_compile=True,  # Enable compilation for speedup
         label="optimized_decode_pinned",
         iterations=12,
         warmup=15,

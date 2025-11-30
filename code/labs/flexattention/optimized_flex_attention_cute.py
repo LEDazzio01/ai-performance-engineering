@@ -1,7 +1,19 @@
-"""Optimized FlexAttention CuTe DSL variant (compiled wrapper)."""
+"""Optimized FlexAttention using flash-attn CuTe DSL backend.
+
+The CuTe DSL (flash_attn.cute.interface._flash_attn_fwd) IS the optimized path.
+It's a highly-tuned CUDA kernel using NVIDIA's CuTe template library for tensor
+cores. This benchmark directly invokes the CuTe kernel - no torch.compile needed
+since the kernel is already maximally optimized at the CUDA level.
+
+NOTE: On exit, you may see a harmless "TypeError: 'NoneType' object is not callable"
+from CudaDialectJitModule.__del__. This is a known issue in nvidia_cutlass_dsl where
+cuda.cuModuleUnload becomes None during Python interpreter shutdown. The benchmark
+results are not affected.
+"""
 
 from __future__ import annotations
 
+import gc
 import sys
 from pathlib import Path
 
@@ -9,15 +21,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import os
 from typing import Optional
 
 import torch
-import torch.nn as nn
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import enable_tf32
-from labs.flexattention.flexattention_common import build_qkv_inputs, resolve_device
+from labs.flexattention.flexattention_common import build_qkv_inputs
 
 try:
     from flash_attn.cute.interface import _flash_attn_fwd
@@ -26,23 +36,17 @@ except Exception as exc:  # pragma: no cover - import guard
         "SKIPPED: flash-attn with CuTe DSL support is required (pip install flash-attn)"
     ) from exc
 
-DEFAULT_COMPILE_MODE = os.getenv("TORCH_COMPILE_MODE", "reduce-overhead")
-
-
-class _CompiledCuteAttention(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        return _flash_attn_fwd(
-            q,
-            k,
-            v,
-        )
-
 
 class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
-    """CuTe DSL path wrapped in torch.compile."""
+    """CuTe DSL FlexAttention - the CuTe kernel IS the optimization.
+    
+    The CuTe DSL backend in flash-attn uses NVIDIA's CuTe template library
+    to generate highly-optimized tensor core kernels. This is NOT wrapped
+    in torch.compile because:
+    1. The CuTe kernel is already maximally optimized at the CUDA level
+    2. torch.compile cannot introspect non-Python CUDA functions
+    3. Adding torch.compile would only add overhead, not optimization
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -53,12 +57,9 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
         self.head_dim = 64
         self.block_size = 128
         self.doc_span = 256
-        self.q = None
-        self.k = None
-        self.v = None
-        self.module: Optional[nn.Module] = None
-        self.compiled = None
-        # Best-effort: allow attempts on any arch; failures will surface at runtime
+        self.q: Optional[torch.Tensor] = None
+        self.k: Optional[torch.Tensor] = None
+        self.v: Optional[torch.Tensor] = None
         tokens = self.batch * self.seq_len
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch),
@@ -67,8 +68,6 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
 
     def setup(self) -> None:
         enable_tf32()
-        torch._inductor.config.triton.cudagraphs = True
-        torch._inductor.config.max_autotune = True
 
         self.q, self.k, self.v = build_qkv_inputs(
             batch=self.batch,
@@ -79,33 +78,30 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
             device=self.device,
         )
 
-        self.module = _CompiledCuteAttention().to(self.device)
-        self.compiled = torch.compile(self.module, mode=DEFAULT_COMPILE_MODE, fullgraph=True, dynamic=None)
-
+        # Warmup the CuTe kernel to ensure CUDA context and JIT are ready
         with torch.inference_mode():
-            self.compiled(self.q, self.k, self.v)
+            _ = _flash_attn_fwd(self.q, self.k, self.v)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        if any(t is None for t in (self.q, self.k, self.v)) or self.compiled is None:
-            raise RuntimeError("CuTe FlexAttention compiled module is not initialized")
+        if any(t is None for t in (self.q, self.k, self.v)):
+            raise RuntimeError("CuTe FlexAttention inputs not initialized")
 
-        with self._nvtx_range("flexattention_cute_compiled"):
+        with self._nvtx_range("flexattention_cute_dsl"):
             with torch.inference_mode():
-                _ = self.compiled(
-                    self.q,
-                    self.k,
-                    self.v,
-                )
+                # Direct CuTe kernel call - this IS the optimized path
+                _ = _flash_attn_fwd(self.q, self.k, self.v)
             self._synchronize()
 
     def teardown(self) -> None:
-        torch.cuda.empty_cache()
+        # Clear tensors first
         self.q = None
         self.k = None
         self.v = None
-        self.module = None
-        self.compiled = None
+        # Force garbage collection to clean up CUTLASS JIT objects
+        # This prevents destructor errors during interpreter shutdown
+        gc.collect()
+        torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=12, warmup=5)
@@ -114,13 +110,12 @@ class OptimizedFlexAttentionCuteBenchmark(BaseBenchmark):
         return self._workload
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return roofline analysis metrics."""
-        # Estimate problem size for roofline analysis
-        n = getattr(self, 'N', 0) or getattr(self, 'hidden_dim', 0) or 4096
-        batch = getattr(self, 'batch_size', 1) or getattr(self, 'batch', 1)
-        # Simple FLOP estimate for linear layers
-        flops = 2.0 * batch * n * n  # Rough estimate
-        bytes_moved = batch * n * 4.0  # Input/output bytes
+        """Return attention-specific roofline metrics."""
+        # FlexAttention FLOP estimate: 4 * B * H * S^2 * D (Q@K + softmax + attn@V)
+        B, H, S, D = self.batch, self.heads, self.seq_len, self.head_dim
+        flops = 4.0 * B * H * S * S * D
+        # Memory: Q, K, V, O all of size [B, H, S, D]
+        bytes_moved = 4.0 * B * H * S * D * 2  # bfloat16 = 2 bytes
         arithmetic_intensity = flops / max(bytes_moved, 1.0)
         return {
             "flex_attention_cute.estimated_flops": flops,

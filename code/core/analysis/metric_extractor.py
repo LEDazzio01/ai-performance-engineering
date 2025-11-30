@@ -49,7 +49,7 @@ PATTERNS = {
     "launch_overhead": r"[Ll]aunch.*?[Oo]verhead[:\s]+(\d+\.?\d*)\s*%",
 }
 
-BLACKWELL_REQUIRED_CHAPTERS = {"ch2", "ch7", "ch10"}
+BLACKWELL_REQUIRED_CHAPTERS = {"ch02", "ch07", "ch10"}
 NON_BLACKWELL_MARKERS = (
     "⚠ Not Blackwell",
     "⚠ Not a Blackwell",
@@ -129,7 +129,7 @@ def extract_from_test_output(txt_path: Path) -> Dict[str, float]:
     except Exception:
         return {}
     
-    # Extract chapter from filename (e.g., ch2_nvlink.txt -> ch2)
+    # Extract chapter from filename (e.g., ch02_nvlink.txt -> ch02)
     chapter = ""
     filename = txt_path.stem
     if filename.startswith("ch"):
@@ -552,7 +552,7 @@ def flatten_metrics(nested_results: Dict[str, Any]) -> Dict[str, float]:
                 flattened[key] = value
     
     # Alias common metrics that feed multiple chapters
-    if "ch7_bandwidth_tbs" in flattened and "ch2_hbm3e_bandwidth_tbs" not in flattened:
-        flattened["ch2_hbm3e_bandwidth_tbs"] = flattened["ch7_bandwidth_tbs"]
+    if "ch07_bandwidth_tbs" in flattened and "ch02_hbm3e_bandwidth_tbs" not in flattened:
+        flattened["ch02_hbm3e_bandwidth_tbs"] = flattened["ch07_bandwidth_tbs"]
 
     return flattened

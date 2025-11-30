@@ -37,22 +37,57 @@ class BaselineKVTransferBenchmark(BaseBenchmark):
         if not torch.cuda.is_available():
             raise RuntimeError("labs.moe_cuda KV transfer requires CUDA")
 
+        import gc
+        
+        # Clean up any leftover CUDA graph state from previous benchmarks
+        # to prevent "Offset increment outside graph capture" errors
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # CRITICAL: Reset CUDA random number generator state
+        # CUDA graphs capture the RNG offset, which causes "Offset increment 
+        # outside graph capture" errors when using torch.randn
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            # set_offset(0) properly resets the graph capture state
+            gen.set_offset(0)
+            gen.manual_seed(0)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+
         torch.manual_seed(0)
+        # Create tensors using CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.kv_cache = torch.randn(
             self.batch_size,
             self.seq_len,
             self.hidden_size,
-            device=self.device,
             dtype=torch.float16,
-        )
+        ).to(self.device)
         self.decode_inputs = [
             torch.randn(
                 self.batch_size,
                 1,
                 self.hidden_size,
-                device=self.device,
                 dtype=torch.float16,
-            )
+            ).to(self.device)
             for _ in range(self.seq_len)
         ]
         torch.cuda.synchronize(self.device)
@@ -94,6 +129,17 @@ class BaselineKVTransferBenchmark(BaseBenchmark):
         if self.kv_cache is None or self.decode_inputs is None:
             return "KV cache or decode inputs missing"
         return None
+
+    def get_input_signature(self) -> Dict[str, int]:
+        """Return workload signature for verification.
+        
+        Only hidden_size is compared since baseline/optimized use different
+        batching strategies (sequential vs pipelined) by design.
+        """
+        return {
+            "hidden_size": self.hidden_size,
+            "dtype": "float16",
+        }
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -23,20 +23,57 @@ from core.benchmark.triton_compat import ensure_triton_compat
 def _install_triton_allocator() -> None:
     if _triton_alloc is None:
         return
-        class _TorchBuffer:
-            def __init__(self, size: int):
-                self.tensor = torch.empty(size, dtype=torch.uint8, device="cuda")
+    
+    # Check if allocator is already set
+    try:
+        current = _triton_alloc._allocator.get()
+        if not isinstance(current, _triton_alloc.NullAllocator):
+            return  # Already configured
+    except Exception:
+        pass
+    
+    class _TorchCudaBuffer:
+        """Wrapper for PyTorch's caching allocator pointers."""
+        __slots__ = ("_ptr",)
 
-            def data_ptr(self) -> int:
-                return self.tensor.data_ptr()
+        def __init__(self, ptr: int):
+            self._ptr = ptr
 
-        def _allocator(size: int, alignment: int, stream) -> _TorchBuffer:
-            return _TorchBuffer(size)
+        def data_ptr(self) -> int:
+            return self._ptr
 
-        _triton_alloc.set_allocator(_allocator)  # type: ignore[attr-defined]
+        def __del__(self):
+            if self._ptr:
+                try:
+                    torch.cuda.caching_allocator_delete(self._ptr)
+                except Exception:
+                    pass
+                self._ptr = 0
 
-# Set allocator once at import time, but also re-install on demand.
-_install_triton_allocator()
+    class _TorchCudaAllocator:
+        """Allocator that reuses PyTorch's caching allocator for Triton."""
+
+        def __call__(self, size: int, alignment: int, stream):
+            if size == 0:
+                return _TorchCudaBuffer(0)
+            if stream is None:
+                current_stream = torch.cuda.current_stream()
+                stream = current_stream.cuda_stream
+                device_idx = current_stream.device.index
+            else:
+                device_idx = torch.cuda.current_device()
+            if device_idx is None:
+                device_idx = torch.cuda.current_device()
+            ptr = torch.cuda.caching_allocator_alloc(size, device_idx, stream=stream)
+            return _TorchCudaBuffer(ptr)
+
+    try:
+        import triton
+        triton.set_allocator(_TorchCudaAllocator())
+    except Exception:
+        pass  # Ignore if triton.set_allocator not available
+
+# Don't set allocator at import time - let setup() handle it after CUDA init
 
 
 @triton.autotune(
@@ -115,7 +152,9 @@ def fused_decode_mlp_kernel(
     H_tiles = (H + BLOCK_H1 - 1) // BLOCK_H1
     K_tiles = (H + BLOCK_K - 1) // BLOCK_K
 
-    for ht in tl.range(0, H_tiles, num_stages=NUM_STAGES, warp_specialize=True):
+    # Note: warp_specialize=True causes MLIR PassManager failures on some Blackwell configs
+    # Using software pipelining (num_stages) instead for stable performance
+    for ht in tl.range(0, H_tiles, num_stages=NUM_STAGES):
         h_start = ht * BLOCK_H1
 
         # Compute hidden1 chunk = X @ W1_chunk
@@ -187,9 +226,14 @@ def fused_decode_mlp(
         b1: [hidden] bias
         w2: [hidden, hidden] weight
         b2: [hidden] bias
+    
+    Uses Triton TMA-backed kernel for optimal performance on Blackwell GPUs.
     """
+    # Ensure CUDA is initialized and allocator is set before kernel launch
+    torch.cuda.current_stream()  # Force stream init
     _install_triton_allocator()
     ensure_triton_compat()
+    
     assert x.is_cuda and w1.is_cuda and w2.is_cuda
     assert x.dtype in (torch.float16, torch.bfloat16)
     assert w1.dtype == x.dtype and w2.dtype == x.dtype
@@ -197,7 +241,9 @@ def fused_decode_mlp(
     B, H = x.shape
     out = torch.empty_like(x)
 
-    grid = (triton.cdiv(B, 8), triton.cdiv(H, 128))
+    # Grid based on BLOCK_M=16 (from autotune config) and BLOCK_N=256
+    grid = (triton.cdiv(B, 16), triton.cdiv(H, 256))
+    
     fused_decode_mlp_kernel[grid](
         x,
         w1,

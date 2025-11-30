@@ -22,18 +22,51 @@ class TritonFusedDecodeBenchmark(DecodeBenchmark):
     def _init_model(self) -> None:
         hs = self.cfg.hidden_size
         vs = self.cfg.vocab_size
-        # Plain torch modules to keep weights accessible for Triton.
-        self.embedding = nn.Embedding(vs, hs, device=self.device, dtype=self.dtype)
-        self.prefill_ln = nn.LayerNorm(hs, device=self.device, dtype=self.dtype)
-        self.prefill_w1 = nn.Linear(hs, hs * 2, device=self.device, dtype=self.dtype)
-        self.prefill_w2 = nn.Linear(hs * 2, hs, device=self.device, dtype=self.dtype)
+        # Create modules on CPU first, then move to device to avoid CUDA RNG issues
+        # This ensures parameter initialization uses CPU RNG, not CUDA RNG
+        self.embedding = nn.Embedding(vs, hs, dtype=self.dtype).to(self.device)
+        self.prefill_ln = nn.LayerNorm(hs, dtype=self.dtype).to(self.device)
+        self.prefill_w1 = nn.Linear(hs, hs * 2, dtype=self.dtype).to(self.device)
+        self.prefill_w2 = nn.Linear(hs * 2, hs, dtype=self.dtype).to(self.device)
 
-        self.decode_ln = nn.LayerNorm(hs, device=self.device, dtype=self.dtype)
-        self.decode_w1 = nn.Linear(hs, hs, device=self.device, dtype=self.dtype)
-        self.decode_w2 = nn.Linear(hs, hs, device=self.device, dtype=self.dtype)
-        self.lm_head = nn.Linear(hs, vs, bias=False, device=self.device, dtype=self.dtype)
+        self.decode_ln = nn.LayerNorm(hs, dtype=self.dtype).to(self.device)
+        self.decode_w1 = nn.Linear(hs, hs, dtype=self.dtype).to(self.device)
+        self.decode_w2 = nn.Linear(hs, hs, dtype=self.dtype).to(self.device)
+        self.lm_head = nn.Linear(hs, vs, bias=False, dtype=self.dtype).to(self.device)
 
     def setup(self) -> None:
+        import gc
+        
+        # CRITICAL: Clean up CUDA state from previous benchmarks
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(42)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         super().setup()
         # Run prefill once and stash persistent state to amortize setup in benchmark_fn.
         self._prefill_once()

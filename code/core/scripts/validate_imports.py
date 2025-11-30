@@ -6,7 +6,7 @@ Useful for catching missing dependencies, syntax errors, or broken imports.
 
 Usage:
     python core/scripts/validate_imports.py              # Validate all
-    python core/scripts/validate_imports.py --chapter 7  # Validate ch7 only
+    python core/scripts/validate_imports.py --chapter 7  # Validate ch07 only
     python core/scripts/validate_imports.py --verbose    # Show successful imports too
 """
 from __future__ import annotations

@@ -27,7 +27,7 @@ class TestPythonBenchmarkDiscovery:
     def test_discover_benchmarks_finds_baseline_optimized_pairs(self, tmp_path):
         """Test that discover_benchmarks finds baseline/optimized pairs."""
         # Create a test chapter directory
-        chapter_dir = tmp_path / "ch1"
+        chapter_dir = tmp_path / "ch01"
         chapter_dir.mkdir()
         
         # Create baseline file
@@ -49,7 +49,7 @@ class TestPythonBenchmarkDiscovery:
     
     def test_discover_benchmarks_finds_multiple_optimizations(self, tmp_path):
         """Test that discover_benchmarks finds multiple optimized variants."""
-        chapter_dir = tmp_path / "ch1"
+        chapter_dir = tmp_path / "ch01"
         chapter_dir.mkdir()
         
         baseline_file = chapter_dir / "baseline_moe.py"
@@ -74,7 +74,7 @@ class TestPythonBenchmarkDiscovery:
     
     def test_discover_benchmarks_handles_no_baseline(self, tmp_path):
         """Test that discover_benchmarks handles missing baseline files."""
-        chapter_dir = tmp_path / "ch1"
+        chapter_dir = tmp_path / "ch01"
         chapter_dir.mkdir()
         
         # Only optimized file, no baseline
@@ -87,7 +87,7 @@ class TestPythonBenchmarkDiscovery:
     
     def test_discover_benchmarks_handles_no_optimized(self, tmp_path):
         """Test that discover_benchmarks handles missing optimized files."""
-        chapter_dir = tmp_path / "ch1"
+        chapter_dir = tmp_path / "ch01"
         chapter_dir.mkdir()
         
         # Only baseline file, no optimized
@@ -100,7 +100,7 @@ class TestPythonBenchmarkDiscovery:
     
     def test_discover_benchmarks_extracts_example_name_correctly(self, tmp_path):
         """Test that example name is extracted correctly from baseline filename."""
-        chapter_dir = tmp_path / "ch1"
+        chapter_dir = tmp_path / "ch01"
         chapter_dir.mkdir()
         
         baseline_file = chapter_dir / "baseline_speculative_decoding.py"
@@ -117,11 +117,11 @@ class TestPythonBenchmarkDiscovery:
     
     def test_discover_benchmarks_real_chapter(self):
         """Test discovery on a real chapter directory if it exists."""
-        ch1_dir = repo_root / "ch1"
-        if not ch1_dir.exists():
-            pytest.skip("ch1 directory not found")
+        ch01_dir = repo_root / "ch01"
+        if not ch01_dir.exists():
+            pytest.skip("ch01 directory not found")
         
-        pairs = discover_benchmarks(ch1_dir)
+        pairs = discover_benchmarks(ch01_dir)
         
         # Should find at least some pairs if chapter exists
         assert isinstance(pairs, list)
@@ -141,10 +141,10 @@ class TestCudaBenchmarkDiscovery:
     
     def test_discover_cuda_benchmarks_finds_cu_files(self, tmp_path):
         """Test that discover_cuda_benchmarks finds .cu files."""
-        ch1_dir = tmp_path / "ch1"
-        ch1_dir.mkdir()
+        ch01_dir = tmp_path / "ch01"
+        ch01_dir.mkdir()
         
-        cuda_file = ch1_dir / "test.cu"
+        cuda_file = ch01_dir / "test.cu"
         cuda_file.write_text("// CUDA code")
         
         cuda_benchmarks = discover_cuda_benchmarks(tmp_path)
@@ -154,10 +154,10 @@ class TestCudaBenchmarkDiscovery:
     
     def test_discover_cuda_benchmarks_finds_in_subdir(self, tmp_path):
         """Test that discover_cuda_benchmarks finds .cu files in cuda/ subdir."""
-        ch1_dir = tmp_path / "ch1"
-        ch1_dir.mkdir()
+        ch01_dir = tmp_path / "ch01"
+        ch01_dir.mkdir()
         
-        cuda_subdir = ch1_dir / "cuda"
+        cuda_subdir = ch01_dir / "cuda"
         cuda_subdir.mkdir()
         
         cuda_file = cuda_subdir / "test.cu"
@@ -170,8 +170,8 @@ class TestCudaBenchmarkDiscovery:
     
     def test_discover_cuda_benchmarks_handles_no_cuda_files(self, tmp_path):
         """Test that discover_cuda_benchmarks handles no CUDA files."""
-        ch1_dir = tmp_path / "ch1"
-        ch1_dir.mkdir()
+        ch01_dir = tmp_path / "ch01"
+        ch01_dir.mkdir()
         
         cuda_benchmarks = discover_cuda_benchmarks(tmp_path)
         
@@ -179,13 +179,13 @@ class TestCudaBenchmarkDiscovery:
     
     def test_discover_cuda_benchmarks_returns_sorted(self, tmp_path):
         """Test that discover_cuda_benchmarks returns sorted list."""
-        ch1_dir = tmp_path / "ch1"
-        ch1_dir.mkdir()
+        ch01_dir = tmp_path / "ch01"
+        ch01_dir.mkdir()
         
-        cuda_file1 = ch1_dir / "z_test.cu"
+        cuda_file1 = ch01_dir / "z_test.cu"
         cuda_file1.write_text("// CUDA code")
         
-        cuda_file2 = ch1_dir / "a_test.cu"
+        cuda_file2 = ch01_dir / "a_test.cu"
         cuda_file2.write_text("// CUDA code")
         
         cuda_benchmarks = discover_cuda_benchmarks(tmp_path)
@@ -200,11 +200,11 @@ class TestChapterDiscovery:
     
     def test_discover_all_chapters_finds_ch_directories(self, tmp_path):
         """Test that discover_all_chapters finds ch* directories."""
-        ch1 = tmp_path / "ch1"
-        ch1.mkdir()
+        ch01 = tmp_path / "ch01"
+        ch01.mkdir()
         
-        ch2 = tmp_path / "ch2"
-        ch2.mkdir()
+        ch02 = tmp_path / "ch02"
+        ch02.mkdir()
         
         other_dir = tmp_path / "other"
         other_dir.mkdir()
@@ -213,14 +213,14 @@ class TestChapterDiscovery:
         
         assert len(chapters) == 2
         chapter_names = [ch.name for ch in chapters]
-        assert "ch1" in chapter_names
-        assert "ch2" in chapter_names
+        assert "ch01" in chapter_names
+        assert "ch02" in chapter_names
         assert "other" not in chapter_names
     
     def test_discover_all_chapters_filters_by_number(self, tmp_path):
         """Test that discover_all_chapters only finds ch* with numbers."""
-        ch1 = tmp_path / "ch1"
-        ch1.mkdir()
+        ch01 = tmp_path / "ch01"
+        ch01.mkdir()
         
         ch_abc = tmp_path / "chabc"
         ch_abc.mkdir()
@@ -228,25 +228,25 @@ class TestChapterDiscovery:
         chapters = discover_all_chapters(tmp_path)
         
         assert len(chapters) == 1
-        assert chapters[0].name == "ch1"
+        assert chapters[0].name == "ch01"
     
     def test_discover_all_chapters_returns_sorted(self, tmp_path):
         """Test that discover_all_chapters returns sorted list."""
         ch10 = tmp_path / "ch10"
         ch10.mkdir()
         
-        ch2 = tmp_path / "ch2"
-        ch2.mkdir()
+        ch02 = tmp_path / "ch02"
+        ch02.mkdir()
         
-        ch1 = tmp_path / "ch1"
-        ch1.mkdir()
+        ch01 = tmp_path / "ch01"
+        ch01.mkdir()
         
         chapters = discover_all_chapters(tmp_path)
         
         assert len(chapters) == 3
         # Should be sorted
-        assert chapters[0].name == "ch1"
-        assert chapters[1].name == "ch2"
+        assert chapters[0].name == "ch01"
+        assert chapters[1].name == "ch02"
         assert chapters[2].name == "ch10"
 
 
@@ -255,20 +255,20 @@ class TestBenchmarkPairDiscovery:
     
     def test_discover_benchmark_pairs_all_chapters(self, tmp_path):
         """Test that discover_benchmark_pairs finds pairs across all chapters."""
-        ch1 = tmp_path / "ch1"
-        ch1.mkdir()
+        ch01 = tmp_path / "ch01"
+        ch01.mkdir()
         
-        baseline1 = ch1 / "baseline_test.py"
+        baseline1 = ch01 / "baseline_test.py"
         baseline1.write_text("# baseline")
-        optimized1 = ch1 / "optimized_test.py"
+        optimized1 = ch01 / "optimized_test.py"
         optimized1.write_text("# optimized")
         
-        ch2 = tmp_path / "ch2"
-        ch2.mkdir()
+        ch02 = tmp_path / "ch02"
+        ch02.mkdir()
         
-        baseline2 = ch2 / "baseline_test.py"
+        baseline2 = ch02 / "baseline_test.py"
         baseline2.write_text("# baseline")
-        optimized2 = ch2 / "optimized_test.py"
+        optimized2 = ch02 / "optimized_test.py"
         optimized2.write_text("# optimized")
         
         pairs = discover_benchmark_pairs(tmp_path, chapter="all")
@@ -277,35 +277,35 @@ class TestBenchmarkPairDiscovery:
     
     def test_discover_benchmark_pairs_specific_chapter(self, tmp_path):
         """Test that discover_benchmark_pairs finds pairs in specific chapter."""
-        ch1 = tmp_path / "ch1"
-        ch1.mkdir()
+        ch01 = tmp_path / "ch01"
+        ch01.mkdir()
         
-        baseline1 = ch1 / "baseline_test.py"
+        baseline1 = ch01 / "baseline_test.py"
         baseline1.write_text("# baseline")
-        optimized1 = ch1 / "optimized_test.py"
+        optimized1 = ch01 / "optimized_test.py"
         optimized1.write_text("# optimized")
         
-        ch2 = tmp_path / "ch2"
-        ch2.mkdir()
+        ch02 = tmp_path / "ch02"
+        ch02.mkdir()
         
-        baseline2 = ch2 / "baseline_test.py"
+        baseline2 = ch02 / "baseline_test.py"
         baseline2.write_text("# baseline")
-        optimized2 = ch2 / "optimized_test.py"
+        optimized2 = ch02 / "optimized_test.py"
         optimized2.write_text("# optimized")
         
-        pairs = discover_benchmark_pairs(tmp_path, chapter="ch1")
+        pairs = discover_benchmark_pairs(tmp_path, chapter="ch01")
         
         assert len(pairs) == 1
-        assert pairs[0][0].parent.name == "ch1"
+        assert pairs[0][0].parent.name == "ch01"
     
     def test_discover_benchmark_pairs_normalizes_chapter_name(self, tmp_path):
         """Test that discover_benchmark_pairs normalizes chapter name."""
-        ch1 = tmp_path / "ch1"
-        ch1.mkdir()
+        ch01 = tmp_path / "ch01"
+        ch01.mkdir()
         
-        baseline1 = ch1 / "baseline_test.py"
+        baseline1 = ch01 / "baseline_test.py"
         baseline1.write_text("# baseline")
-        optimized1 = ch1 / "optimized_test.py"
+        optimized1 = ch01 / "optimized_test.py"
         optimized1.write_text("# optimized")
         
         # Test with number only
@@ -313,7 +313,7 @@ class TestBenchmarkPairDiscovery:
         assert len(pairs1) == 1
         
         # Test with ch prefix
-        pairs2 = discover_benchmark_pairs(tmp_path, chapter="ch1")
+        pairs2 = discover_benchmark_pairs(tmp_path, chapter="ch01")
         assert len(pairs2) == 1
         
         # Test with just number string

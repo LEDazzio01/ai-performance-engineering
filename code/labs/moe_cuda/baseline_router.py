@@ -68,17 +68,50 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
         if not torch.cuda.is_available():
             raise RuntimeError("labs.moe_cuda requires CUDA for fair comparison")
 
+        import gc
+        
+        # Clean up CUDA graph state from previous benchmarks
+        # to prevent "Offset increment outside graph capture" errors
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state to prevent graph capture errors
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(0)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+
         torch.manual_seed(0)
         model = DenseRouterMoE(self.hidden_size, self.num_experts).to(self.device)
         model.eval()
         self.model = model
 
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.inputs = torch.randn(
             self.batch_size,
             self.hidden_size,
-            device=self.device,
             dtype=torch.float32,
-        )
+        ).to(self.device)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:

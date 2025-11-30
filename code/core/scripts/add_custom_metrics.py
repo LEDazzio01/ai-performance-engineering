@@ -24,23 +24,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # Map chapters to their domain and appropriate metrics helper
 CHAPTER_METRICS_MAP = {
     # Chapter 1: Performance basics - general speedup
-    "ch1": ("performance", "speedup"),
+    "ch01": ("performance", "speedup"),
     # Chapter 2: Memory transfers
-    "ch2": ("memory_transfer", "transfer"),
+    "ch02": ("memory_transfer", "transfer"),
     # Chapter 3: System configuration - general
-    "ch3": ("system", "speedup"),
+    "ch03": ("system", "speedup"),
     # Chapter 4: Multi-GPU communication
-    "ch4": ("communication", "transfer"),
+    "ch04": ("communication", "transfer"),
     # Chapter 5: Storage I/O
-    "ch5": ("storage", "transfer"),
+    "ch05": ("storage", "transfer"),
     # Chapter 6: Kernel fundamentals - bank conflicts, divergence
-    "ch6": ("kernel", "kernel"),
+    "ch06": ("kernel", "kernel"),
     # Chapter 7: Memory access patterns
-    "ch7": ("memory_access", "memory"),
+    "ch07": ("memory_access", "memory"),
     # Chapter 8: Optimization techniques
-    "ch8": ("optimization", "optimization"),
+    "ch08": ("optimization", "optimization"),
     # Chapter 9: Compute-bound / roofline
-    "ch9": ("compute", "roofline"),
+    "ch09": ("compute", "roofline"),
     # Chapter 10: Advanced pipelines
     "ch10": ("pipeline", "roofline"),
     # Chapter 11: CUDA streams
@@ -356,7 +356,7 @@ def find_benchmark_files() -> List[Path]:
 def main():
     parser = argparse.ArgumentParser(description="Add get_custom_metrics() to benchmark files")
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without modifying files")
-    parser.add_argument("--chapter", type=str, help="Only process specific chapter (e.g., ch6)")
+    parser.add_argument("--chapter", type=str, help="Only process specific chapter (e.g., ch06)")
     parser.add_argument("--lab", type=str, help="Only process specific lab (e.g., flexattention)")
     args = parser.parse_args()
     

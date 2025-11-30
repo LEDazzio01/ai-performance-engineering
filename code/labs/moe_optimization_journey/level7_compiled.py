@@ -47,7 +47,40 @@ class Level7Compiled(BaseBenchmark):
     SEQ_LEN = 4096  # 64K tokens
     
     def setup(self) -> None:
+        import gc
+        
         self.device = 'cuda'
+        
+        # Clean up CUDA graph state from previous benchmarks
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(42)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         torch.manual_seed(42)
         
         H = self.HIDDEN_SIZE
@@ -62,23 +95,24 @@ class Level7Compiled(BaseBenchmark):
         print(f"Config: H={H}, I={I}, E={E}, K={K}, tokens={batch_seq:,}")
         print()
         
-        self.x = torch.randn(batch_seq, H, device=self.device, dtype=torch.bfloat16)
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
+        self.x = torch.randn(batch_seq, H, dtype=torch.bfloat16).to(self.device)
         
         # FP8 weights
-        w_gate = torch.randn(E, H, I, device=self.device, dtype=torch.bfloat16)
-        w_up = torch.randn(E, H, I, device=self.device, dtype=torch.bfloat16)
-        w_down = torch.randn(E, I, H, device=self.device, dtype=torch.bfloat16)
+        w_gate = torch.randn(E, H, I, dtype=torch.bfloat16).to(self.device)
+        w_up = torch.randn(E, H, I, dtype=torch.bfloat16).to(self.device)
+        w_down = torch.randn(E, I, H, dtype=torch.bfloat16).to(self.device)
         
         self.w_gate_fp8 = w_gate.transpose(-1, -2).contiguous().to(torch.float8_e4m3fn)
         self.w_up_fp8 = w_up.transpose(-1, -2).contiguous().to(torch.float8_e4m3fn)
         self.w_down_fp8 = w_down.transpose(-1, -2).contiguous().to(torch.float8_e4m3fn)
         self.scale = torch.ones((), device=self.device)
         
-        # Routing
-        expert_indices = torch.randint(0, E, (batch_seq, K), device=self.device)
+        # Routing - use CPU tensors + to(device) to avoid CUDA RNG issues
+        expert_indices = torch.randint(0, E, (batch_seq, K)).to(self.device)
         expert_weights = F.softmax(
-            torch.randn(batch_seq, K, device=self.device), dim=-1
-        ).to(torch.bfloat16)
+            torch.randn(batch_seq, K), dim=-1
+        ).to(torch.bfloat16).to(self.device)
         
         # Pre-compute routing
         flat_idx = expert_indices.view(-1)

@@ -440,8 +440,8 @@ class SlidingWindowDemoBenchmark(BaseBenchmark):
         """Setup: Initialize SDPA-based attention module."""
         torch.manual_seed(42)
         
-        # Use float16 for best Flash Attention performance
-        self.dtype = torch.float16
+        # Use bfloat16 for wide hardware support and stable Flash Attention
+        self.dtype = torch.bfloat16
         
         self.model = OptimizedSDPAAttention(
             embed_dim=self.embed_dim,

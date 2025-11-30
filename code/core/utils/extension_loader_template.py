@@ -768,7 +768,7 @@ def get_all_extension_loaders() -> dict[str, callable]:
     
     # Known extension loader modules
     extension_modules = [
-        ("ch6.cuda_extensions", ["coalescing", "bank_conflicts", "ilp", "launch_bounds"]),
+        ("ch06.cuda_extensions", ["coalescing", "bank_conflicts", "ilp", "launch_bounds"]),
         ("ch12.cuda_extensions", ["kernel_fusion", "graph_bandwidth", "work_queue", "cuda_graphs"]),
         ("core.common.tcgen05", ["tcgen05"]),
     ]
@@ -816,7 +816,7 @@ def prebuild_all_extensions(verbose: bool = False) -> dict[str, tuple[bool, str]
     
     # List of extensions to prebuild with their import paths
     extensions = [
-        ("ch6.cuda_extensions", "Chapter 6 extensions"),
+        ("ch06.cuda_extensions", "Chapter 6 extensions"),
         ("ch12.cuda_extensions", "Chapter 12 extensions"),
         ("core.common.tcgen05", "tcgen05 (SM100+ only)"),
     ]

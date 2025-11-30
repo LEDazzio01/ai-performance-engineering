@@ -14,7 +14,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from ch2.uma_memory_utils import format_bytes, is_integrated_gpu, read_meminfo
+from ch02.uma_memory_utils import format_bytes, is_integrated_gpu, read_meminfo
 
 
 class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):

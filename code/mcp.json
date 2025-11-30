@@ -3,9 +3,10 @@
     "aisp": {
       "command": "python",
       "args": ["-m", "mcp.mcp_server", "--serve"],
-      "cwd": "/mnt/dev-fin-03/ai-performance-engineering/code",
+      "cwd": "${workspaceFolder}",
       "env": {
-        "PYTHONPATH": "/mnt/dev-fin-03/ai-performance-engineering/code"
+        "PYTHONPATH": "${workspaceFolder}",
+        "PYTHONUNBUFFERED": "1"
       }
     }
   }

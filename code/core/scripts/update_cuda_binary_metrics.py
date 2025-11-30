@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # Domain-specific metrics for CudaBinaryBenchmark wrappers
 DOMAIN_METRICS = {
     # Ch7: Memory access patterns
-    "ch7": {
+    "ch07": {
         "domain": "memory_access",
         "baseline_metrics": {
             "is_coalesced": "0.0",
@@ -28,7 +28,7 @@ DOMAIN_METRICS = {
         },
     },
     # Ch8: Optimization techniques
-    "ch8": {
+    "ch08": {
         "domain": "optimization",
         "baseline_metrics": {
             "has_optimization": "0.0",
@@ -38,7 +38,7 @@ DOMAIN_METRICS = {
         },
     },
     # Ch9: Compute-bound / CUTLASS
-    "ch9": {
+    "ch09": {
         "domain": "compute",
         "baseline_metrics": {
             "uses_tensor_cores": "0.0",

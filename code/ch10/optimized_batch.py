@@ -13,14 +13,19 @@ from ch10.workload_config import WORKLOAD
 
 
 class OptimizedBatchBenchmark(BaseBenchmark):
-    """Optimized: large batch size to maximize GPU utilization."""
+    """Optimized: large batch size to maximize GPU utilization.
+    
+    Processes all data in a single forward pass, achieving better
+    GPU utilization through larger matrix operations.
+    """
     
     def __init__(self):
         super().__init__()
         self.model: nn.Sequential | None = None
         self.input: torch.Tensor | None = None
+        self.output: torch.Tensor | None = None
         self.workload = WORKLOAD
-        self.total_batch_size = self.workload.optimized_batch_size
+        self.total_batch_size = self.workload.optimized_batch_size  # 512
         self.hidden_dim = self.workload.hidden_dim
         self.ffn_dim = self.workload.ffn_dim
         tokens = self.total_batch_size * self.hidden_dim
@@ -35,31 +40,32 @@ class OptimizedBatchBenchmark(BaseBenchmark):
             torch.backends.cudnn.benchmark = True
             torch.backends.cudnn.deterministic = False
             enable_tf32()
-        torch.manual_seed(42)
-        
+        # Harness provides seeding - model and input creation order must match baseline
         self.model = nn.Sequential(
             nn.Linear(self.hidden_dim, self.ffn_dim),
             nn.ReLU(),
             nn.Linear(self.ffn_dim, self.hidden_dim),
         ).to(self.device).eval()
         
+        # Generate input (same shape/order as baseline for verification)
         self.input = torch.randn(self.total_batch_size, self.hidden_dim, device=self.device)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Operations with optimized batch size."""
+        """Benchmark: Operations with optimized batch size (single kernel launch)."""
         if self.model is None or self.input is None:
             raise RuntimeError("Benchmark not configured")
         with self._nvtx_range("batch_optimized"):
             with torch.no_grad():
-                output = self.model(self.input)
-                _ = output.sum()
+                # Single large forward pass (one kernel launch, better GPU utilization)
+                self.output = self.model(self.input)
         self._synchronize()
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.model = None
         self.input = None
+        self.output = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -87,6 +93,21 @@ class OptimizedBatchBenchmark(BaseBenchmark):
         if self.input is None:
             return "Input not initialized"
         return None
+
+    def get_output_for_verification(self) -> Optional[torch.Tensor]:
+        """Return output tensor for verification against baseline version."""
+        return self.output
+    
+    def get_output_tolerance(self) -> tuple[float, float]:
+        """Return (rtol, atol) for output verification.
+        
+        Large-batch vs micro-batching can have numerical differences due to:
+        - Different CUDA kernel parallelism patterns
+        - Different floating-point reduction order
+        - TF32 precision accumulation across multiple operations
+        """
+        return (0.05, 0.05)  # 5% relative tolerance for batch size comparisons
+
 
 def get_benchmark() -> OptimizedBatchBenchmark:
     """Factory function for harness discovery."""

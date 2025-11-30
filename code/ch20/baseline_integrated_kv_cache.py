@@ -204,6 +204,15 @@ class BaselineIntegratedKVCacheBenchmark(BaseBenchmark):
             return "Model not initialized"
         return None
 
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch_size,
+            "num_heads": self.num_heads,
+            "head_dim": self.head_dim,
+            "hidden_dim": self.hidden_dim,
+        }
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""

@@ -316,6 +316,18 @@ class OptimizedSpeculativeDecodingMultiDraftBenchmark(BaseBenchmark):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._spec_decoder: Optional[OptimizedMultiDraftSpeculative] = None
         self._result: Optional[Dict[str, Any]] = None
+        # Match baseline for input verification
+        self.batch_size = 4
+        self.vocab_size = 32000
+        self.hidden_size = 4096
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch_size,
+            "vocab_size": self.vocab_size,
+            "hidden_size": self.hidden_size,
+        }
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=5, warmup=5)

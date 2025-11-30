@@ -34,67 +34,67 @@ _DEFAULT_TARGETS: TargetsDict = {
         "flex_attention_speedup": {"min": 1.5, "target": 2.0, "unit": "x"},
         "deepseek_l2_speedup": {"min": 1.1, "target": 1.3, "unit": "x"},
     },
-    "ch1": {
+    "ch01": {
         "description": "Performance Basics",
         "metrics": {}
     },
-    "ch2": {
+    "ch02": {
         "description": "Hardware Overview",
         "metrics": {
-            # NVLink-C2C bandwidth: ~900 GB/s between Grace and Blackwell (book/ch2.md:41-47)
+            # NVLink-C2C bandwidth: ~900 GB/s between Grace and Blackwell (book/ch02.md:41-47)
             "nvlink_bandwidth_gbs": {"min": 650, "target": 725, "unit": "GB/s"},
-            # HBM3e bandwidth: ~8 TB/s per GPU (book/ch2.md:194-199)
+            # HBM3e bandwidth: ~8 TB/s per GPU (book/ch02.md:194-199)
             # Note: NSYS reports in GB/s, so targets converted (5.5 TB/s = 5500 GB/s)
             "hbm3e_bandwidth_tbs": {"min": 5000, "target": 5500, "unit": "GB/s"},
-            # NVLink 5 aggregate: 1.8 TB/s per GPU for NVSwitch fabric (book/ch2.md:392-399)
+            # NVLink 5 aggregate: 1.8 TB/s per GPU for NVSwitch fabric (book/ch02.md:392-399)
             "nvswitch_bandwidth_tbs": {"min": 1500, "target": 1800, "unit": "GB/s", "counter_hint": _NCU_COUNTER_HINTS["nvswitch_bandwidth_tbs"]},
         }
     },
-    "ch3": {
+    "ch03": {
         "description": "System Setup",
         "metrics": {}
     },
-    "ch4": {
+    "ch04": {
         "description": "Distributed Networking",
         "metrics": {
-            # NCCL all-reduce: 100 GB/s on 800 Gb/s InfiniBand (book/ch4.md:760-779)
+            # NCCL all-reduce: 100 GB/s on 800 Gb/s InfiniBand (book/ch04.md:760-779)
             "allreduce_bandwidth_gbs": {"min": 700, "target": 800, "unit": "GB/s"},
-            # P2P bandwidth: NVLink 5 provides 900 GB/s per direction (book/ch4.md:392-399)
+            # P2P bandwidth: NVLink 5 provides 900 GB/s per direction (book/ch04.md:392-399)
             "p2p_bandwidth_gbs": {"min": 800, "target": 900, "unit": "GB/s"},
-            # Small message latency: single-digit microseconds (book/ch4.md:551-552)
+            # Small message latency: single-digit microseconds (book/ch04.md:551-552)
             "small_message_latency_us": {"min": 0, "target": 2, "unit": "μs", "lower_is_better": True},
-            # Scaling efficiency: near-linear scaling goal (book/ch4.md:494-504)
+            # Scaling efficiency: near-linear scaling goal (book/ch04.md:494-504)
             "scaling_efficiency_percent": {"min": 85, "target": 95, "unit": "%"},
-            # Topology-aware efficiency: hierarchical NCCL patterns (book/ch4.md:1088-1105)
+            # Topology-aware efficiency: hierarchical NCCL patterns (book/ch04.md:1088-1105)
             "topology_efficiency_percent": {"min": 90, "target": 95, "unit": "%"},
         }
     },
-    "ch5": {
+    "ch05": {
         "description": "Storage & I/O",
         "metrics": {}
     },
-    "ch6": {
+    "ch06": {
         "description": "CUDA Kernels",
         "metrics": {}
     },
-    "ch7": {
+    "ch07": {
         "description": "Memory Access Patterns",
         "metrics": {
-            # DRAM throughput: 25% → 90% improvement shown (book/ch7.md:633-643, Table 7-2)
+            # DRAM throughput: 25% → 90% improvement shown (book/ch07.md:633-643, Table 7-2)
             "dram_throughput_percent": {"min": 80, "target": 90, "unit": "%"},
-            # Global Memory Load Efficiency: 28% → 97% improvement (book/ch7.md:633-643, Table 7-2)
+            # Global Memory Load Efficiency: 28% → 97% improvement (book/ch07.md:633-643, Table 7-2)
             "global_memory_load_efficiency_percent": {"min": 85, "target": 97, "unit": "%", "counter_hint": _NCU_COUNTER_HINTS["global_memory_load_efficiency_percent"]},
-            # Achieved occupancy: 42% → 89% improvement (book/ch7.md:993-997, Table 7-4)
+            # Achieved occupancy: 42% → 89% improvement (book/ch07.md:993-997, Table 7-4)
             "achieved_occupancy_percent": {"min": 75, "target": 89, "unit": "%"},
-            # Shared memory throughput: 52% → 100% improvement (book/ch7.md:1395, Table 7-5)
+            # Shared memory throughput: 52% → 100% improvement (book/ch07.md:1395, Table 7-5)
             "shared_memory_throughput_percent": {"min": 90, "target": 100, "unit": "%"},
         }
     },
-    "ch8": {
+    "ch08": {
         "description": "Occupancy & ILP",
         "metrics": {}
     },
-    "ch9": {
+    "ch09": {
         "description": "Kernel Fusion",
         "metrics": {}
     },
@@ -289,11 +289,11 @@ def _build_targets() -> TargetsDict:
                 "unit": "GB/s",
                 "realistic_max": peak_gbs * 1.1,  # Allow 10% overhead
             }
-            # Also update ch2 target (now in GB/s to match NSYS)
-            ch2_entry = targets.get("ch2")
-            if isinstance(ch2_entry, dict):
-                ch2_metrics = _ensure_metrics_section(ch2_entry)
-                ch2_metrics["hbm3e_bandwidth_tbs"] = {
+            # Also update ch02 target (now in GB/s to match NSYS)
+            ch02_entry = targets.get("ch02")
+            if isinstance(ch02_entry, dict):
+                ch02_metrics = _ensure_metrics_section(ch02_entry)
+                ch02_metrics["hbm3e_bandwidth_tbs"] = {
                     "min": peak_gbs * 0.85,
                     "target": peak_gbs,
                     "unit": "GB/s",

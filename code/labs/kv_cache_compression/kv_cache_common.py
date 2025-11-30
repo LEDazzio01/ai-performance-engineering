@@ -10,6 +10,8 @@ import sys
 import torch
 import torch.nn as nn
 
+from core.harness.hardware_capabilities import detect_capabilities
+
 
 def resolve_device() -> torch.device:
     """Return a CUDA device or raise if unavailable."""
@@ -147,27 +149,48 @@ def cache_is_finite(cache: KVCache) -> bool:
 
 
 def resolve_tmem_cache_copy(device: torch.device, head_dim: int) -> Optional[Callable[[torch.Tensor], None]]:
-    """Return a TMEM copy callable when hardware and build support are available."""
+    """Return a TMEM copy callable when hardware supports it.
+
+    This function:
+    1. Checks head_dim == 128 (TMEM copy is optimized for this shape)
+    2. Verifies Blackwell-class hardware via detect_capabilities()
+    3. Loads and returns the TMEM cache extension
+
+    The TMEM extension uses:
+    - float32: SM100_TMEM_STORE/LOAD_32dp32b4x
+    - float16/bfloat16: SM100_TMEM_STORE/LOAD_16dp32b4x_16b
+
+    Returns None if hardware doesn't support TMEM. Raises on build failures.
+    """
     if head_dim != 128:
         return None
-    if torch.cuda.get_device_capability(device)[0] < 10:
+
+    cap = detect_capabilities(getattr(device, "index", 0))
+    if cap is None:
+        raise RuntimeError("Hardware capability probe unavailable; cannot resolve TMEM cache copy.")
+
+    # Check for Blackwell-class architecture (SM100+) using hardware_capabilities
+    blackwell_architectures = {"blackwell", "blackwell_ultra", "grace_blackwell"}
+    if cap.architecture not in blackwell_architectures:
+        # Not Blackwell - TMEM not available
         return None
+
+    # Load the TMEM extension
     try:
         from labs.kv_cache_compression.tmem_cache_extension import load_tmem_cache_module
-    except Exception as exc:  # pragma: no cover - import guarded
-        print(f"[TMEM] Skipping cache epilogue: import failed ({exc})", file=sys.stderr)
-        return None
+    except Exception as exc:
+        raise RuntimeError(f"Failed to import TMEM cache extension: {exc}") from exc
 
     try:
-        module = load_tmem_cache_module()
-    except Exception as exc:  # pragma: no cover - build failure is non-fatal
-        print(f"[TMEM] Skipping cache epilogue: extension build failed ({exc})", file=sys.stderr)
-        return None
+        mod = load_tmem_cache_module()
+    except Exception as exc:
+        raise RuntimeError(f"Failed to build TMEM cache extension: {exc}") from exc
 
-    def _copy_fn(tensor: torch.Tensor) -> None:
-        if tensor.numel() == 0:
-            return
-        flat = tensor.view(-1, head_dim)
-        module.tmem_cache_copy(flat, flat)
+    def _tmem_copy(tensor: torch.Tensor) -> None:
+        """In-place TMEM copy for KV cache tensors."""
+        if tensor.dim() != 2 or tensor.size(1) != 128:
+            raise ValueError(f"TMEM copy expects [N, 128] tensor, got {list(tensor.shape)}")
+        # Copy to itself via TMEM (GMEM -> SMEM -> TMEM -> GMEM)
+        mod.tmem_cache_copy(tensor, tensor)
 
-    return _copy_fn
+    return _tmem_copy

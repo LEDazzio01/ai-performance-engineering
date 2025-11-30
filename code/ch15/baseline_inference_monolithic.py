@@ -149,6 +149,13 @@ class BaselineInferenceMonolithicBenchmark(BaseBenchmark):
             return "No TPOT samples recorded"
         return None
 
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {
+            "batch_size": self.batch_size,
+            "num_tokens": self.num_tokens,
+        }
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""

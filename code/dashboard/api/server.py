@@ -402,7 +402,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             self.send_json_response({"html": self.export_html_report()})
         elif self.path == '/api/export/pdf':
             self.export_pdf_report()
-        elif self.path.startswith('/api/hwbench/disk'):
+        elif self.path.startswith('/api/hw/disk'):
             from core.diagnostics import microbench
             params = self._parse_query()
             file_size_mb = int(params.get('file_size_mb', [256])[0])
@@ -435,7 +435,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/hwbench/pcie'):
+        elif self.path.startswith('/api/hw/pcie'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [256])[0])
@@ -463,7 +463,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/hwbench/mem'):
+        elif self.path.startswith('/api/hw/cache'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [256])[0])
@@ -491,7 +491,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/hwbench/roofline'):
+        elif self.path.startswith('/api/hw/roofline'):
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [32])[0])
             strides = [int(s) for s in params.get('stride', [])] if params.get('stride') else None
@@ -513,7 +513,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 })
             else:
                 self.send_json_response(self.roofline_sweep(size_mb=size_mb, strides=strides, timeout_seconds=timeout_seconds))
-        elif self.path.startswith('/api/hwbench/tensor-cores'):
+        elif self.path.startswith('/api/hw/tc'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size = int(params.get('size', [4096])[0])
@@ -541,7 +541,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/hwbench/sfu'):
+        elif self.path.startswith('/api/hw/sfu'):
             from core.diagnostics import microbench
             params = self._parse_query()
             elements = int(params.get('elements', [64 * 1024 * 1024])[0])
@@ -567,7 +567,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                     timeout_seconds=timeout_seconds,
                 )
                 self.send_json_response(res)
-        elif self.path.startswith('/api/hwbench/loopback'):
+        elif self.path.startswith('/api/hw/tcp'):
             from core.diagnostics import microbench
             params = self._parse_query()
             size_mb = int(params.get('size_mb', [64])[0])
@@ -796,7 +796,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         elif self.path.startswith('/api/explain/'):
             from urllib.parse import unquote
             params = self.path.split('/api/explain/')[1]
-            # Parse: technique/chapter (e.g., unroll8/ch8)
+            # Parse: technique/chapter (e.g., unroll8/ch08)
             parts = params.split('/')
             technique = unquote(parts[0]) if parts else ''
             chapter = unquote(parts[1]) if len(parts) > 1 else None

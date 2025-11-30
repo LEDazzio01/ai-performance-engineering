@@ -13,6 +13,11 @@ from labs.decode_optimization.decode_common import DecodeBenchmark, DecodeConfig
 
 
 def get_benchmark() -> DecodeBenchmark:
+    """Dual-stream decode with overlapped copy and compute.
+    
+    Optimization: Uses separate CUDA streams for memory operations vs compute,
+    allowing overlap and hiding transfer latency with computation.
+    """
     cfg = DecodeConfig(
         batch_size=8,
         prompt_tokens=256,

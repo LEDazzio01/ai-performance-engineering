@@ -106,7 +106,7 @@ def _do_prewarm(verbose: bool = False, parallel: bool = True) -> Dict[str, Tuple
     # Extensions to prebuild
     # Format: (display_name, import_path, requires_sm100)
     extensions = [
-        ("ch6.cuda_extensions", "ch6.cuda_extensions", False),
+        ("ch06.cuda_extensions", "ch06.cuda_extensions", False),
         ("ch12.cuda_extensions", "ch12.cuda_extensions", False),
         ("core.common.tcgen05", "core.common.tcgen05", True),  # SM100+ only
     ]
@@ -287,23 +287,23 @@ def health_check(verbose: bool = True) -> bool:
     if verbose:
         print("Running CUDA extension health check...", flush=True)
     
-    # Check ch6 extensions
+    # Check ch06 extensions
     try:
-        from ch6 import cuda_extensions as ch6_ext
+        from ch06 import cuda_extensions as ch06_ext
         # Verify loader functions exist
         loaders = ['load_coalescing_extension', 'load_bank_conflicts_extension', 
                    'load_ilp_extension', 'load_launch_bounds_extension']
         for fn in loaders:
-            if hasattr(ch6_ext, fn):
+            if hasattr(ch06_ext, fn):
                 if verbose:
-                    print(f"  ✓ ch6.{fn}")
+                    print(f"  ✓ ch06.{fn}")
             else:
                 if verbose:
-                    print(f"  ✗ ch6.{fn}: Missing")
+                    print(f"  ✗ ch06.{fn}: Missing")
                 all_ok = False
     except Exception as e:
         if verbose:
-            print(f"  ✗ ch6.cuda_extensions: {e}")
+            print(f"  ✗ ch06.cuda_extensions: {e}")
         all_ok = False
     
     # Check ch12 extensions

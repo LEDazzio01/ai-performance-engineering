@@ -19,7 +19,7 @@ Usage:
     python core/scripts/update_custom_metrics.py --apply
     
     # Apply changes to a specific file
-    python core/scripts/update_custom_metrics.py --apply --file ch7/baseline_memory_access.py
+    python core/scripts/update_custom_metrics.py --apply --file ch07/baseline_memory_access.py
     
     # Show files that need conversion to proper benchmarks
     python core/scripts/update_custom_metrics.py --show-standalone
@@ -1059,7 +1059,7 @@ def main():
                 print("  python core/scripts/update_custom_metrics.py --show-standalone")
                 print()
             print("To see a suggestion for a specific file:")
-            print("  python core/scripts/update_custom_metrics.py --show-suggestion ch7/baseline_memory_access.py")
+            print("  python core/scripts/update_custom_metrics.py --show-suggestion ch07/baseline_memory_access.py")
         
         print()
         print("To validate metric quality:")

@@ -20,7 +20,7 @@ core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts
 
 # Snapshots + runtime capture for a representative command
 core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag smoke --nsys -- \
-  python ch1/baseline_matmul.py --batch-size 32
+  python ch01/baseline_matmul.py --batch-size 32
 ```
 
 What it does:

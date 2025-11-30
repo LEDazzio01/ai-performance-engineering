@@ -1,0 +1,30 @@
+{
+  "examples": {
+    "spec_config_sweep": {
+      "example": "spec_config_sweep",
+      "metadata": {
+        "best_optimization": "optimized_spec_config_sweep",
+        "best_optimization_file": "optimized_spec_config_sweep.py",
+        "best_optimization_speedup": 0.22957891428038665,
+        "best_optimization_time_ms": 1782.8179931640625,
+        "git_commit": "510b9d967afaff8b46106cd00de086565c503ad5",
+        "updated_at": "2025-11-30T20:37:40.528192"
+      },
+      "metrics": {
+        "baseline_p75_ms": 406.0700988769531,
+        "baseline_throughput.latency_ms": 409.29741923014325,
+        "baseline_throughput.requests_per_s": 2.4432111052176255,
+        "baseline_throughput.tokens_per_s": 1329.1068412383881,
+        "baseline_time_ms": 409.29741923014325,
+        "best_optimized_p75_ms": 1782.8179931640625,
+        "best_optimized_speedup": 0.22957891428038665,
+        "best_optimized_throughput.latency_ms": 1782.8179931640625,
+        "best_optimized_throughput.requests_per_s": 0.560909752893646,
+        "best_optimized_time_ms": 1782.8179931640625,
+        "best_speedup": 1.0
+      },
+      "type": "python"
+    }
+  },
+  "hardware_key": "b200"
+}

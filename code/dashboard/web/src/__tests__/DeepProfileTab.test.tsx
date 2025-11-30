@@ -16,7 +16,7 @@ describe('DeepProfileTab', () => {
       if (key === 'deep-profile/base') {
         return {
           data: {
-            profiles: [{ chapter: 'ch1', name: 'baseline.nsys' }],
+            profiles: [{ chapter: 'ch01', name: 'baseline.nsys' }],
             recommendations: { recommendations: [{ title: 'Tune kernels', description: 'Use occupancy' }] },
             ncuData: { metrics: { sm_efficiency: 0.8 } },
           },
@@ -52,7 +52,7 @@ describe('DeepProfileTab', () => {
 
     expect(screen.getByText(/Deep Profile Comparison/)).toBeInTheDocument();
     expect(screen.getByText(/Available Profiles/)).toBeInTheDocument();
-    expect(screen.getByText(/ch1/)).toBeInTheDocument();
+    expect(screen.getByText(/ch01/)).toBeInTheDocument();
     expect(screen.getByText(/NCU Deep Dive/)).toBeInTheDocument();
   });
 

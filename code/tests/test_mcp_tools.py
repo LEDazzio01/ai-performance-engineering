@@ -19,7 +19,7 @@ MICROBENCH_DIR = REPO_ROOT / "artifacts" / "mcp-microbench"
 REPORT_OUTPUT = REPO_ROOT / "artifacts" / "mcp-report.pdf"
 EXPORT_OUTPUT = REPO_ROOT / "artifacts" / "mcp-export.csv"
 BENCH_FILE = REPO_ROOT / "benchmark_test_results.json"
-PROFILE_FIXTURE_DIR = REPO_ROOT / "benchmark_profiles" / "ch4"
+PROFILE_FIXTURE_DIR = REPO_ROOT / "benchmark_profiles" / "ch04"
 NSYS_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nccl_baseline.nsys-rep"
 NCU_SAMPLE = PROFILE_FIXTURE_DIR / "baseline_nvlink_baseline.ncu-rep"
 
@@ -50,6 +50,10 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_system_parameters",
         "aisp_container_limits",
         "aisp_full_system_analysis",
+    ],
+    "info": [
+        "aisp_info_features",
+        "aisp_info_network",
     ],
     "benchmarking": [
         "aisp_available_benchmarks",
@@ -94,6 +98,9 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_profile_roofline",
         "aisp_profile_nsys",
         "aisp_profile_ncu",
+        "aisp_profile_torch",
+        "aisp_profile_hta",
+        "aisp_profile_compare",
         "aisp_nsys_summary",
         "aisp_nsys_ncu_available",
         "aisp_compare_nsys",
@@ -104,16 +111,19 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_export_pdf",
         "aisp_export_html",
     ],
-    "microbench": [
-        "aisp_test_speed",
-        "aisp_test_roofline",
-        "aisp_test_disk",
-        "aisp_test_pcie",
-        "aisp_test_mem_hierarchy",
-        "aisp_test_tensor_core",
-        "aisp_test_sfu",
-        "aisp_test_network_loopback",
-        "aisp_test_network",
+    "hw": [
+        "aisp_hw_speed",
+        "aisp_hw_roofline",
+        "aisp_hw_disk",
+        "aisp_hw_pcie",
+        "aisp_hw_cache",
+        "aisp_hw_tc",
+        "aisp_hw_sfu",
+        "aisp_hw_tcp",
+        "aisp_hw_network",
+        "aisp_hw_ib",
+        "aisp_hw_nccl",
+        "aisp_hw_p2p",
     ],
     "code_analysis": [
         "aisp_warp_divergence",
@@ -127,6 +137,7 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
     "huggingface": [
         "aisp_hf_search",
         "aisp_hf_trending",
+        "aisp_hf_download",
     ],
     "cluster_cost": [
         "aisp_cluster_slurm",
@@ -149,18 +160,23 @@ SLOW_TOOLS = {
     "aisp_verify_benchmarks",
     "aisp_profile_nsys",
     "aisp_profile_ncu",
+    "aisp_profile_torch",
+    "aisp_profile_hta",
     "aisp_profile_flame",
     "aisp_profile_memory",
     "aisp_profile_kernels",
     "aisp_profile_roofline",
     "aisp_compare_nsys",
     "aisp_compare_ncu",
-    "aisp_test_speed",
-    "aisp_test_roofline",
-    "aisp_test_disk",
-    "aisp_test_pcie",
-    "aisp_test_mem_hierarchy",
-    "aisp_test_tensor_core",
+    "aisp_hw_speed",
+    "aisp_hw_roofline",
+    "aisp_hw_disk",
+    "aisp_hw_pcie",
+    "aisp_hw_cache",
+    "aisp_hw_tc",
+    "aisp_hw_nccl",
+    "aisp_hw_ib",
+    "aisp_hw_p2p",
 }
 
 BENCHMARK_SLOW_TOOLS = {"aisp_run_benchmarks", "aisp_verify_benchmarks"}
@@ -220,15 +236,24 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_export_csv": {"detailed": False, "include_context": False},
     "aisp_export_pdf": {"include_context": False},
     "aisp_export_html": {"include_context": False},
-    "aisp_test_speed": {"gemm_size": 256, "mem_size_mb": 8, "mem_stride": 64, "include_context": False},
-    "aisp_test_roofline": {"size_mb": 8, "strides": [64, 128]},
-    "aisp_test_disk": {"file_size_mb": 8, "block_size_kb": 128, "tmp_dir": str(MICROBENCH_DIR)},
-    "aisp_test_pcie": {"size_mb": 8, "iters": 1},
-    "aisp_test_mem_hierarchy": {"size_mb": 8, "stride": 64},
-    "aisp_test_tensor_core": {"size": 512, "precision": "fp16"},
-    "aisp_test_sfu": {"elements": 1024},
-    "aisp_test_network_loopback": {"size_mb": 4, "port": 50007},
+    "aisp_hw_speed": {"gemm_size": 256, "mem_size_mb": 8, "mem_stride": 64, "include_context": False},
+    "aisp_hw_roofline": {"size_mb": 8, "strides": [64, 128]},
+    "aisp_hw_disk": {"file_size_mb": 8, "block_size_kb": 128, "tmp_dir": str(MICROBENCH_DIR)},
+    "aisp_hw_pcie": {"size_mb": 8, "iters": 1},
+    "aisp_hw_cache": {"size_mb": 8, "stride": 64},
+    "aisp_hw_tc": {"size": 512, "precision": "fp16"},
+    "aisp_hw_sfu": {"elements": 1024},
+    "aisp_hw_tcp": {"size_mb": 4, "port": 50007},
+    "aisp_hw_ib": {"size_mb": 64},
+    "aisp_hw_nccl": {"collective": "all_reduce", "gpus": 2},
+    "aisp_hw_p2p": {"size_mb": 64},
+    "aisp_info_features": {},
+    "aisp_info_network": {},
+    "aisp_profile_compare": {"chapter": "ch11"},
+    "aisp_profile_torch": {"script": "dummy_script.py", "precheck_only": True},
+    "aisp_profile_hta": {"command": ["python", "-c", "print('hta')"], "precheck_only": True},
     "aisp_hf_search": {"query": "llama", "limit": 3},
+    "aisp_hf_download": {"model": "facebook/opt-125m", "precheck_only": True},
     "aisp_cluster_slurm": {"model": "7b", "nodes": 1, "gpus": 2},
     "aisp_cost_estimate": {"model_size": 7, "training_tokens": 100, "provider": "aws"},
     "aisp_help": {"query": "benchmark"},
@@ -303,7 +328,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 77
+    assert len(expected) == 86
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):

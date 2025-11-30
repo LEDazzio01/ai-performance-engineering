@@ -883,12 +883,12 @@ def generate_baseline_optimized_comparison(results: List[RunResult], session_dir
             if example_name.startswith("baseline_") or "_baseline_" in example_name.lower():
                 base_name = example_name.replace("baseline_", "").replace("_baseline", "").replace("baseline_", "")
             elif "/baseline_" in example_path:
-                # Extract from path: ch4/baseline_dataparallel.py -> dataparallel
+                # Extract from path: ch04/baseline_dataparallel.py -> dataparallel
                 file_part = example_path.split("/baseline_")[-1].replace(".py", "")
                 base_name = file_part.split("_")[0] if "_" in file_part else file_part
             
             if base_name:
-                # Remove chapter prefix if present (ch4_dataparallel -> dataparallel)
+                # Remove chapter prefix if present (ch04_dataparallel -> dataparallel)
                 if base_name.startswith("ch") and "_" in base_name:
                     base_name = "_".join(base_name.split("_")[1:])
                 baseline_results[base_name] = result
@@ -899,7 +899,7 @@ def generate_baseline_optimized_comparison(results: List[RunResult], session_dir
             if example_name.startswith("optimized_") or "_optimized_" in example_name.lower():
                 base_name = example_name.replace("optimized_", "").replace("_optimized", "").replace("optimized_", "")
             elif "/optimized_" in example_path:
-                # Extract from path: ch4/optimized_dataparallel_ddp.py -> dataparallel
+                # Extract from path: ch04/optimized_dataparallel_ddp.py -> dataparallel
                 file_part = example_path.split("/optimized_")[-1].replace(".py", "")
                 # Take first part before underscore (or whole if no underscore)
                 base_name = file_part.split("_")[0] if "_" in file_part and not file_part.startswith("ch") else file_part

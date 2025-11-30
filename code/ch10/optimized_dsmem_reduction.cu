@@ -342,22 +342,18 @@ int main() {
     config.attrs = launchAttr;
     config.numAttrs = 1;
     
-    int N_arg = N;
-    int epc_arg = elements_per_cluster;
-    
-    // Launch with cluster structure
+    // Launch with cluster structure using CUDA 13.0+ API
+    // cudaLaunchKernelEx requires function pointer and unpacked arguments
     for (int i = 0; i < warmup; ++i) {
         CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
-        CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel, 
-            d_input, d_output, N_arg, epc_arg));
+        CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel, d_input, d_output, N, elements_per_cluster));
     }
     CUDA_CHECK(cudaDeviceSynchronize());
     
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
         CUDA_CHECK(cudaMemset(d_output, 0, num_clusters * sizeof(float)));
-        CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel,
-            d_input, d_output, N_arg, epc_arg));
+        CUDA_CHECK(cudaLaunchKernelEx(&config, dsmem_cluster_reduction_kernel, d_input, d_output, N, elements_per_cluster));
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));

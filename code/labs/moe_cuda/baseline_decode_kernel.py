@@ -36,13 +36,46 @@ class BaselineDecodeKernelBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
+        import gc
+        
+        # Clean up CUDA graph state from previous benchmarks
+        # to prevent "Offset increment outside graph capture" errors
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state to prevent graph capture errors
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(7)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         torch.manual_seed(7)
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.input = torch.randn(
             self.rows,
             self.cols,
-            device=self.device,
             dtype=torch.float32,
-        )
+        ).to(self.device)
         self.output = torch.zeros_like(self.input)
         torch.cuda.synchronize(self.device)
 

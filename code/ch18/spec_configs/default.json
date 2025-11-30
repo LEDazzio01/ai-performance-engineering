@@ -1,0 +1,29 @@
+{
+  "name": "default_spec_config",
+  "description": "Default speculative decoding configuration",
+  "draft_model": {
+    "type": "small_lm",
+    "vocab_size": 32000,
+    "hidden_size": 1024,
+    "num_layers": 2
+  },
+  "target_model": {
+    "type": "large_lm",
+    "vocab_size": 32000,
+    "hidden_size": 4096,
+    "num_layers": 24
+  },
+  "speculation": {
+    "num_draft_tokens": 4,
+    "max_speculation_length": 8,
+    "acceptance_threshold": 0.5
+  },
+  "generation": {
+    "batch_size": 4,
+    "max_new_tokens": 128,
+    "temperature": 1.0,
+    "top_k": 50
+  }
+}
+
+

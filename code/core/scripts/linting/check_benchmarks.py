@@ -3,7 +3,7 @@
 
 Usage:
     python core/scripts/linting/check_benchmarks.py                    # Check all benchmarks
-    python core/scripts/linting/check_benchmarks.py ch1/               # Check specific chapter
+    python core/scripts/linting/check_benchmarks.py ch01/               # Check specific chapter
     python core/scripts/linting/check_benchmarks.py --fix              # Auto-fix issues (if possible)
 """
 

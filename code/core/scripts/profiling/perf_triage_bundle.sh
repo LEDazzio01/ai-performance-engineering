@@ -13,7 +13,7 @@ Usage:
 Examples:
   perf_triage_bundle.sh --output-root ./artifacts
   perf_triage_bundle.sh --output-root ./artifacts --tag smoke -- \
-    python ch1/baseline_matmul.py --batch-size 32
+    python ch01/baseline_matmul.py --batch-size 32
   perf_triage_bundle.sh --output-root ./artifacts --nsys --duration 90 -- \
     python your_script.py --arg foo
 

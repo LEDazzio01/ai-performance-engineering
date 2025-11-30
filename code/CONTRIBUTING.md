@@ -369,18 +369,18 @@ python core/scripts/update_custom_metrics.py --validate
 ```bash
 # Compare baseline vs optimized
 python -m cli.aisp bench compare \
-    ch7.baseline_memory_access \
-    ch7.optimized_memory_access
+    ch07.baseline_memory_access \
+    ch07.optimized_memory_access
 ```
 
 ### Profiling
 
 ```bash
 # nsys profile
-nsys profile -o output python ch7/optimized_memory_access.py
+nsys profile -o output python ch07/optimized_memory_access.py
 
 # ncu profile with chapter-specific metrics
-ncu --set full --metrics $(python -c "from core.profiling.profiler_config import get_chapter_metrics; print(','.join(get_chapter_metrics(7)))") python ch7/optimized_memory_access.py
+ncu --set full --metrics $(python -c "from core.profiling.profiler_config import get_chapter_metrics; print(','.join(get_chapter_metrics(7)))") python ch07/optimized_memory_access.py
 ```
 
 ---

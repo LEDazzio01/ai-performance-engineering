@@ -81,6 +81,40 @@ class MoEJourneyBenchmark(BaseBenchmark):
         )
     
     def setup(self) -> None:
+        import gc
+        
+        # Clean up CUDA graph state from previous benchmarks
+        # to prevent "Offset increment outside graph capture" errors
+        if torch.cuda.is_available():
+            gc.collect()
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            
+            try:
+                if hasattr(torch.cuda, 'graph_pool_trim'):
+                    torch.cuda.graph_pool_trim()
+            except Exception:
+                pass
+            
+            # Reset CUDA RNG state to prevent graph capture errors
+            try:
+                device_idx = torch.cuda.current_device()
+                gen = torch.cuda.default_generators[device_idx]
+                gen.set_offset(0)
+                gen.manual_seed(0)
+            except Exception:
+                pass
+            
+            try:
+                torch._dynamo.reset()
+            except Exception:
+                pass
+            
+            try:
+                torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+            except Exception:
+                pass
+        
         level = self.LEVEL
         name, desc = LEVEL_DESCRIPTIONS.get(level, (f"Level {level}", ""))
         
@@ -126,12 +160,11 @@ class MoEJourneyBenchmark(BaseBenchmark):
         else:
             self.compiled_model = self.model
         
-        # Create input
+        # Create input using CPU random + to(device) to avoid CUDA RNG graph capture issues
         self.input_ids = torch.randint(
             0, self.VOCAB_SIZE,
             (self.BATCH_SIZE, self.SEQ_LEN),
-            device=self.device,
-        )
+        ).to(self.device)
         
         # Warmup
         print(f"\n  Warmup ({self.WARMUP + 2} iterations)...")

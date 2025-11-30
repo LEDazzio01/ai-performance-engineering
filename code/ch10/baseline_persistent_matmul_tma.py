@@ -80,7 +80,7 @@ except Exception:
 class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
     """Benchmark for baseline Triton matmul without TMA cluster multicast."""
 
-    def __init__(self, M: int = 1024, N: int = 1024, K: int = 1024, BLOCK: int = 128):
+    def __init__(self, M: int = 4096, N: int = 4096, K: int = 4096, BLOCK: int = 128):
         super().__init__()
         self.M = M
         self.N = N

@@ -396,11 +396,11 @@ def main():
 Examples:
   # Profile with Nsight Systems
   python nsight_automation.py --tool nsys --output my_trace \\
-    -- python ch1/optimized_performance.py
+    -- python ch01/optimized_performance.py
   
   # Profile with Nsight Compute (memory-bound)
   python nsight_automation.py --tool ncu --output my_profile \\
-    --workload-type memory_bound -- python ch7/optimized_hbm3ecopy.py
+    --workload-type memory_bound -- python ch07/optimized_hbm3ecopy.py
   
   # Batch profiling
   python nsight_automation.py --batch-config configs.json

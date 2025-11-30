@@ -176,7 +176,7 @@ export function HwbenchTab() {
             <div className="flex flex-wrap gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
-                onClick={() => disk.trigger({ url: `/api/hwbench/disk?file_size_mb=${diskSize}&block_size_kb=${diskBlock}${flagQuery}` })}
+                onClick={() => disk.trigger({ url: `/api/hw/disk?file_size_mb=${diskSize}&block_size_kb=${diskBlock}${flagQuery}` })}
               >
                 Run Disk I/O
               </button>
@@ -228,7 +228,7 @@ export function HwbenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-primary/20 px-3 py-2 text-sm text-accent-primary hover:bg-accent-primary/30 transition-colors"
-                onClick={() => pcie.trigger({ url: `/api/hwbench/pcie?size_mb=${pcieSize}&iters=${pcieIters}${flagQuery}` })}
+                onClick={() => pcie.trigger({ url: `/api/hw/pcie?size_mb=${pcieSize}&iters=${pcieIters}${flagQuery}` })}
               >
                 Run PCIe H2D/D2H
               </button>
@@ -254,7 +254,7 @@ export function HwbenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-success/20 px-3 py-2 text-sm text-accent-success hover:bg-accent-success/30 transition-colors"
-                onClick={() => mem.trigger({ url: `/api/hwbench/mem?size_mb=${memSize}&stride=${memStride}${flagQuery}` })}
+                onClick={() => mem.trigger({ url: `/api/hw/cache?size_mb=${memSize}&stride=${memStride}${flagQuery}` })}
               >
                 Run Memory Stride
               </button>
@@ -280,7 +280,7 @@ export function HwbenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-warning/20 px-3 py-2 text-sm text-accent-warning hover:bg-accent-warning/30 transition-colors"
-                onClick={() => tensor.trigger({ url: `/api/hwbench/tensor-cores?size=${tensorSize}&precision=${encodeURIComponent(tensorPrecision)}${flagQuery}` })}
+                onClick={() => tensor.trigger({ url: `/api/hw/tc?size=${tensorSize}&precision=${encodeURIComponent(tensorPrecision)}${flagQuery}` })}
               >
                 Run Tensor Core
               </button>
@@ -306,7 +306,7 @@ export function HwbenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-tertiary/20 px-3 py-2 text-sm text-accent-tertiary hover:bg-accent-tertiary/30 transition-colors"
-                onClick={() => sfu.trigger({ url: `/api/hwbench/sfu?elements=${sfuElems}${flagQuery}` })}
+                onClick={() => sfu.trigger({ url: `/api/hw/sfu?elements=${sfuElems}${flagQuery}` })}
               >
                 Run SFU
               </button>
@@ -329,7 +329,7 @@ export function HwbenchTab() {
             <div className="flex gap-2 items-center">
               <button
                 className="rounded-lg bg-accent-info/20 px-3 py-2 text-sm text-accent-info hover:bg-accent-info/30 transition-colors"
-                onClick={() => loop.trigger({ url: `/api/hwbench/loopback?size_mb=${loopSize}&port=${loopPort}${flagQuery}` })}
+                onClick={() => loop.trigger({ url: `/api/hw/tcp?size_mb=${loopSize}&port=${loopPort}${flagQuery}` })}
               >
                 Run Loopback
               </button>
