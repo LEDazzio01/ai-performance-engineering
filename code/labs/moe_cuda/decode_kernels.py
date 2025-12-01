@@ -11,9 +11,6 @@ from core.utils.extension_loader_template import load_cuda_extension
 SUITE_DIR = Path(__file__).parent
 KERNEL_DIR = SUITE_DIR / "kernels"
 
-# Track build failures to avoid repeated attempts
-_OPTIMIZED_BUILD_ERROR: Optional[str] = None
-
 
 @lru_cache(maxsize=None)
 def _load_baseline_module():
@@ -26,19 +23,18 @@ def _load_baseline_module():
 
 @lru_cache(maxsize=None)
 def _load_optimized_module():
-    global _OPTIMIZED_BUILD_ERROR
-    if _OPTIMIZED_BUILD_ERROR is not None:
-        raise RuntimeError(_OPTIMIZED_BUILD_ERROR)
-    try:
-        return load_cuda_extension(
-            extension_name="moe_cuda_decode_optimized",
-            cuda_source_file=str(KERNEL_DIR / "optimized_decode_kernel.cu"),
-            extra_cuda_cflags=["-O3", "-std=c++17", "-lineinfo", "--expt-relaxed-constexpr", "--expt-extended-lambda"],
-            extra_ldflags=["-lcuda"],
-        )
-    except Exception as exc:
-        _OPTIMIZED_BUILD_ERROR = f"Failed to build optimized decode kernel: {type(exc).__name__}"
-        raise
+    """Load the optimized TMA decode kernel module.
+    
+    Note: We don't cache build errors because they may be transient
+    (e.g., CUDA state issues that get resolved). The lru_cache will
+    cache successful loads.
+    """
+    return load_cuda_extension(
+        extension_name="moe_cuda_decode_optimized",
+        cuda_source_file=str(KERNEL_DIR / "optimized_decode_kernel.cu"),
+        extra_cuda_cflags=["-O3", "-std=c++17", "-lineinfo", "--expt-relaxed-constexpr", "--expt-extended-lambda"],
+        extra_ldflags=["-lcuda"],
+    )
 
 
 def run_baseline_kernel(input_tensor, output_tensor) -> None:
@@ -69,10 +65,14 @@ def is_optimized_available() -> bool:
     try:
         _load_optimized_module()
         return True
-    except RuntimeError:
+    except Exception:
         return False
 
 
 def get_optimized_error() -> Optional[str]:
     """Get the error message if optimized kernel is not available."""
-    return _OPTIMIZED_BUILD_ERROR
+    try:
+        _load_optimized_module()
+        return None
+    except Exception as e:
+        return str(e)

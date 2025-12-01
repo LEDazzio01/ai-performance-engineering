@@ -165,8 +165,31 @@ void run_warp_specialized(int tiles,
   dim3 grid(std::min(tiles, 256));
   size_t shared_bytes = 3 * PIPELINE_STAGES * TILE_ELEMS * sizeof(float);
 
+  // Warmup
   warp_specialized_kernel<TILE><<<grid, block, shared_bytes>>>(d_A, d_B, d_C, tiles);
   CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  // Timed run
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+  
+  constexpr int iterations = 10;
+  CUDA_CHECK(cudaEventRecord(start));
+  for (int i = 0; i < iterations; ++i) {
+    warp_specialized_kernel<TILE><<<grid, block, shared_bytes>>>(d_A, d_B, d_C, tiles);
+  }
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+  
+  float elapsed_ms = 0.0f;
+  CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+  float avg_ms = elapsed_ms / iterations;
+  std::printf("Kernel time: %.4f ms\n", avg_ms);
+  
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes, cudaMemcpyDeviceToHost));
 
   CUDA_CHECK(cudaFree(d_A));

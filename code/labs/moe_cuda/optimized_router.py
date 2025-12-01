@@ -106,6 +106,38 @@ class OptimizedRouterTopKBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
+        import gc
+        
+        # CRITICAL: Clean up CUDA state from previous benchmarks
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(0)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         enable_tf32()
         torch.manual_seed(0)
         model = AdaptiveTopKMoE(
@@ -119,12 +151,12 @@ class OptimizedRouterTopKBenchmark(BaseBenchmark):
         # Compile can help further but is optional
         self.model = model
 
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.inputs = torch.randn(
             self.batch_size,
             self.hidden_size,
-            device=self.device,
             dtype=torch.bfloat16,
-        )
+        ).to(self.device)
         
         # Warmup
         with torch.no_grad():

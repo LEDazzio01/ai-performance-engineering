@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from core.utils.extension_loader_template import load_cuda_extension_v2
 
@@ -13,18 +12,20 @@ except ImportError:  # pragma: no cover - optional when module unavailable
     arch_config = None  # type: ignore[assignment]
 
 _MODULE = None
-_BUILD_ERROR: Optional[str] = None
 _EXT_NAME = "blackwell_capstone_tcgen05_inline_ext"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_tcgen05_module():
-    """Compile (if needed) and return the inline tcgen05 extension."""
-    global _MODULE, _BUILD_ERROR
+    """Compile (if needed) and return the inline tcgen05 extension.
+    
+    Note: We don't cache build errors because they may be transient
+    (e.g., CUDA state issues that get resolved). The module cache
+    handles successful loads.
+    """
+    global _MODULE
     if _MODULE is not None:
         return _MODULE
-    if _BUILD_ERROR is not None:
-        raise RuntimeError(f"tcgen05 inline extension unavailable: {_BUILD_ERROR}")
 
     te_cutlass = _REPO_ROOT / "third_party" / "TransformerEngine" / "3rdparty" / "cutlass" / "include"
     upstream_cutlass = _REPO_ROOT / "third_party" / "cutlass" / "include"
@@ -53,12 +54,11 @@ def load_tcgen05_module():
             extra_ldflags=["-lcuda"],
         )
     except Exception as exc:  # pragma: no cover - depends on toolchain
-        _BUILD_ERROR = (
+        raise RuntimeError(
             "failed to build inline tcgen05 extension. "
             "Requires SM100 hardware and CUDA toolchain with tcgen05 support. "
             f"Original error: {exc}"
-        )
-        raise RuntimeError(_BUILD_ERROR) from exc
+        ) from exc
 
     return _MODULE
 

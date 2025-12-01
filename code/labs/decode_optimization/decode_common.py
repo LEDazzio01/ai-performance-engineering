@@ -137,7 +137,6 @@ class DecodeBenchmark(BaseBenchmark):
         
         # CRITICAL: Clean up CUDA state from previous benchmarks
         # This prevents "Offset increment outside graph capture" errors
-        # and index out of bounds from corrupted CUDA state
         gc.collect()
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
@@ -177,7 +176,7 @@ class DecodeBenchmark(BaseBenchmark):
         if enable_tf32 is not None:
             enable_tf32(set_global_precision=True)
         else:
-                torch.set_float32_matmul_precision("high")
+            torch.set_float32_matmul_precision("high")
         if self.cfg.use_copy_stream:
             self.copy_stream = torch.cuda.Stream()
         if self.cfg.use_compute_stream:

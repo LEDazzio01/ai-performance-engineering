@@ -92,6 +92,38 @@ class VectorizedRouterBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
+        import gc
+        
+        # CRITICAL: Clean up CUDA state from previous benchmarks
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(7)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         enable_tf32()
         torch.manual_seed(7)
         model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
@@ -100,12 +132,12 @@ class VectorizedRouterBenchmark(BaseBenchmark):
         model.eval()
         self.model = model
 
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.inputs = torch.randn(
             self.batch_size,
             self.hidden_size,
-            device=self.device,
             dtype=torch.bfloat16,
-        )
+        ).to(self.device)
 
         # Capture the forward pass into a CUDA graph to hide launch overhead.
         try:

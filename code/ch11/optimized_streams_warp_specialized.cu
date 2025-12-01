@@ -170,6 +170,28 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaStreamSynchronize(stream));
   }
 
+  // Add timed run for benchmark harness
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+  
+  CUDA_CHECK(cudaEventRecord(start));
+  for (int batch = 0; batch < opts.batches; ++batch) {
+    const int stream_idx = batch % opts.streams;
+    cudaStream_t stream = streams[stream_idx];
+    DeviceBuffers& buffers = device_buffers[stream_idx];
+    fused_bias_kernel<<<grid, block, 0, stream>>>(buffers.a, buffers.b, buffers.out, opts.batch_elems);
+    fused_bias_kernel<<<grid, block, 0, stream>>>(buffers.out, buffers.a, buffers.b, opts.batch_elems);
+  }
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+  
+  float elapsed_ms = 0.0f;
+  CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+  std::printf("Kernel time: %.4f ms\n", elapsed_ms);
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(stop));
+
   double max_error = 0.0;
   if (opts.verify) {
     for (size_t i = 0; i < total_elems; ++i) {

@@ -46,7 +46,30 @@ class NativeFP8MoE(BaseBenchmark):
     SEQ_LEN = 4096  # 64K tokens
     
     def setup(self) -> None:
+        import gc
+        
         self.device = 'cuda'
+        
+        # Clean up CUDA state to prevent RNG corruption from previous benchmarks
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(42)
+        except Exception:
+            pass
+        
         torch.manual_seed(42)
         
         H = self.HIDDEN_SIZE
@@ -61,13 +84,13 @@ class NativeFP8MoE(BaseBenchmark):
         print(f"Config: H={H}, I={I}, E={E}, K={K}, tokens={batch_seq:,}")
         print()
         
-        # Input and weights
-        self.x = torch.randn(batch_seq, H, device=self.device, dtype=torch.bfloat16)
+        # Input and weights - use CPU randn + to(device) to avoid CUDA RNG graph issues
+        self.x = torch.randn(batch_seq, H, dtype=torch.bfloat16).to(self.device)
         
         # BF16 reference weights
-        w1 = torch.randn(E, H, I, device=self.device, dtype=torch.bfloat16)
-        w3 = torch.randn(E, H, I, device=self.device, dtype=torch.bfloat16)
-        w2 = torch.randn(E, I, H, device=self.device, dtype=torch.bfloat16)
+        w1 = torch.randn(E, H, I, dtype=torch.bfloat16).to(self.device)
+        w3 = torch.randn(E, H, I, dtype=torch.bfloat16).to(self.device)
+        w2 = torch.randn(E, I, H, dtype=torch.bfloat16).to(self.device)
         
         # FP8 weights in column-major format for _scaled_mm
         # _scaled_mm(a, b.T) computes a @ b where b is stored column-major
@@ -77,7 +100,7 @@ class NativeFP8MoE(BaseBenchmark):
         
         self.scale = torch.ones((), device=self.device)
         
-        # Routing - use CPU tensors + to(device) to avoid CUDA RNG issues
+        # Routing - use CPU tensors + to(device)
         self.expert_indices = torch.randint(0, E, (batch_seq, K)).to(self.device)
         self.expert_weights = F.softmax(
             torch.randn(batch_seq, K), dim=-1

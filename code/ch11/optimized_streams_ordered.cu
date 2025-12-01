@@ -99,6 +99,29 @@ int main() {
     CUDA_CHECK(cudaStreamSynchronize(d2h_streams[i]));
   }
 
+  // Add timing for benchmark harness
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+  
+  // Timed iteration
+  CUDA_CHECK(cudaEventRecord(start));
+  for (int i = 0; i < kNumStreams; ++i) {
+    const int elems = std::min(chunk_elems, N - i * chunk_elems);
+    dim3 local_grid((elems + block.x - 1) / block.x);
+    compute_kernel<<<local_grid, block, 0, compute_streams[i]>>>(d_in[i], d_out[i], elems);
+    compute_kernel<<<local_grid, block, 0, compute_streams[i]>>>(d_out[i], d_in[i], elems);
+    compute_kernel<<<local_grid, block, 0, compute_streams[i]>>>(d_in[i], d_out[i], elems);
+  }
+  CUDA_CHECK(cudaEventRecord(stop));
+  CUDA_CHECK(cudaEventSynchronize(stop));
+  
+  float elapsed_ms = 0.0f;
+  CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+  std::printf("Kernel time: %.4f ms\n", elapsed_ms);
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(stop));
+  
   std::printf("stream0 result[0]=%.1f\n", h_src[0]);
 
   for (int i = 0; i < kNumStreams; ++i) {

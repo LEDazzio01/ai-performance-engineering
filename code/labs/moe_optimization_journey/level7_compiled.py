@@ -51,7 +51,7 @@ class Level7Compiled(BaseBenchmark):
         
         self.device = 'cuda'
         
-        # Clean up CUDA graph state from previous benchmarks
+        # Clean up CUDA state to prevent RNG corruption from previous benchmarks
         gc.collect()
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
@@ -71,16 +71,6 @@ class Level7Compiled(BaseBenchmark):
         except Exception:
             pass
         
-        try:
-            torch._dynamo.reset()
-        except Exception:
-            pass
-        
-        try:
-            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
-        except Exception:
-            pass
-        
         torch.manual_seed(42)
         
         H = self.HIDDEN_SIZE
@@ -95,7 +85,7 @@ class Level7Compiled(BaseBenchmark):
         print(f"Config: H={H}, I={I}, E={E}, K={K}, tokens={batch_seq:,}")
         print()
         
-        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
+        # Use CPU randn + to(device) to avoid CUDA RNG graph issues
         self.x = torch.randn(batch_seq, H, dtype=torch.bfloat16).to(self.device)
         
         # FP8 weights
@@ -108,7 +98,7 @@ class Level7Compiled(BaseBenchmark):
         self.w_down_fp8 = w_down.transpose(-1, -2).contiguous().to(torch.float8_e4m3fn)
         self.scale = torch.ones((), device=self.device)
         
-        # Routing - use CPU tensors + to(device) to avoid CUDA RNG issues
+        # Routing - use CPU tensors + to(device)
         expert_indices = torch.randint(0, E, (batch_seq, K)).to(self.device)
         expert_weights = F.softmax(
             torch.randn(batch_seq, K), dim=-1

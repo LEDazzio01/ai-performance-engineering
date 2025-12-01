@@ -8,7 +8,6 @@ from typing import Optional
 
 from core.utils.extension_loader_template import load_cuda_extension
 
-_BUILD_ERROR: Optional[Exception] = None
 _EXT_NAME = "kv_cache_tmem_ext"
 _ROOT = Path(__file__).resolve().parent
 
@@ -24,9 +23,10 @@ def load_tmem_cache_module():
     defines __CUDA_ARCH_FEAT_SM100_ALL. This enables CUTE_ARCH_TCGEN05_TMEM_ENABLED
     in CUTLASS, which is required for TMEM operations. Without the 'a' suffix,
     TMEM code is compiled out!
-    """
-    global _BUILD_ERROR
     
+    Note: We don't cache build errors because they may be transient.
+    The lru_cache handles successful loads.
+    """
     # SM100 (Blackwell) requires C++17 and SPECIFIC gencode flags with 'a' suffix.
     # The 'a' suffix (compute_100a) defines __CUDA_ARCH_FEAT_SM100_ALL which
     # enables CUTE_ARCH_TCGEN05_TMEM_ENABLED in CUTLASS for TMEM support.
@@ -41,21 +41,24 @@ def load_tmem_cache_module():
         "-gencode=arch=compute_103a,code=sm_103a",   # Blackwell Ultra SM103
     ]
     
-    try:
-        return load_cuda_extension(
-            extension_name=_EXT_NAME,
-            cuda_source_file=str(_ROOT / "tmem_cache_ext.cu"),
-            extra_cuda_cflags=cuda_flags,
-            extra_ldflags=["-lcuda"],
-        )
-    except Exception as exc:  # pragma: no cover - build failures are surfaced to callers
-        _BUILD_ERROR = exc
-        raise
+    return load_cuda_extension(
+        extension_name=_EXT_NAME,
+        cuda_source_file=str(_ROOT / "tmem_cache_ext.cu"),
+        extra_cuda_cflags=cuda_flags,
+        extra_ldflags=["-lcuda"],
+    )
 
 
 def build_error() -> Optional[Exception]:
-    """Return the cached build failure, if any."""
-    return _BUILD_ERROR
+    """Return the build error if load failed, None otherwise.
+    
+    Note: This attempts to load the module to check for errors.
+    """
+    try:
+        load_tmem_cache_module()
+        return None
+    except Exception as exc:
+        return exc
 
 
 __all__ = ["load_tmem_cache_module", "build_error"]

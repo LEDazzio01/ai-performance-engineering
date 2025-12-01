@@ -125,7 +125,7 @@ class FlashSDPLabBenchmark(BaseBenchmark):
     def setup(self) -> None:
         import gc
         
-        # Clean up CUDA graph state from previous benchmarks
+        # Clean up CUDA state to prevent RNG corruption from previous benchmarks
         gc.collect()
         torch.cuda.synchronize()
         torch.cuda.empty_cache()
@@ -145,24 +145,13 @@ class FlashSDPLabBenchmark(BaseBenchmark):
         except Exception:
             pass
         
-        try:
-            torch._dynamo.reset()
-        except Exception:
-            pass
-        
-        try:
-            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
-        except Exception:
-            pass
-        
         _ensure_backend_available(self.backend)
         torch.manual_seed(0)
         self.model = SDPAAttentionModule(hidden_dim=self.hidden, num_heads=8, backend=self.backend).to(
             self.device, dtype=torch.float16
         )
-        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
+        # Use CPU randn + to(device) to avoid CUDA RNG graph issues
         self.inputs = torch.randn(self.batch, self.seq_len, self.hidden, dtype=torch.float16).to(self.device)
-        torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         if self.model is None or self.inputs is None:

@@ -66,15 +66,47 @@ class GraphedKVTransferBenchmark(BaseBenchmark):
         )
 
     def setup(self) -> None:
+        import gc
+        
+        # CRITICAL: Clean up CUDA state from previous benchmarks
+        gc.collect()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        
+        try:
+            if hasattr(torch.cuda, 'graph_pool_trim'):
+                torch.cuda.graph_pool_trim()
+        except Exception:
+            pass
+        
+        # Reset CUDA RNG state
+        try:
+            device_idx = torch.cuda.current_device()
+            gen = torch.cuda.default_generators[device_idx]
+            gen.set_offset(0)
+            gen.manual_seed(123)
+        except Exception:
+            pass
+        
+        try:
+            torch._dynamo.reset()
+        except Exception:
+            pass
+        
+        try:
+            torch._inductor.cudagraph_trees.reset_cudagraph_trees()
+        except Exception:
+            pass
+        
         torch.manual_seed(123)
+        # Use CPU randn + to(device) to avoid CUDA RNG graph capture issues
         self.input_chunks = torch.randn(
             self.num_chunks,
             self.chunk_size,
             self.hidden_size,
-            device=self.device,
             dtype=self.dtype,
-        )
-        self.weight = torch.randn(self.hidden_size, self.hidden_size, device=self.device, dtype=self.dtype)
+        ).to(self.device)
+        self.weight = torch.randn(self.hidden_size, self.hidden_size, dtype=self.dtype).to(self.device)
         self.workspace = torch.zeros_like(self.input_chunks)
         self.kv_dest = torch.zeros_like(self.input_chunks)
         

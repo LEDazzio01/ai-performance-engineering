@@ -69,12 +69,12 @@
         "baseline_throughput.tokens_per_s": 1052070.934824594,
         "baseline_time_ms": 0.9733184009790421,
         "best_optimized_p75_ms": 1.6163519620895386,
-        "best_optimized_speedup": 1.0015846662124703,
+        "best_optimized_speedup": 2.6001039107210446,
         "best_optimized_throughput.latency_ms": 1.351939195394516,
         "best_optimized_throughput.requests_per_s": 739.6782365705325,
         "best_optimized_throughput.tokens_per_s": 757430.5142482253,
         "best_optimized_time_ms": 1.351939195394516,
-        "best_speedup": 1.0
+        "best_speedup": 2.6001039107210446
       },
       "type": "python"
     },
@@ -95,12 +95,12 @@
         "baseline_throughput.tokens_per_s": 46083.923295861394,
         "baseline_time_ms": 5.902275252342224,
         "best_optimized_p75_ms": 4.930208206176758,
-        "best_optimized_speedup": 1.1911756265635423,
+        "best_optimized_speedup": 6.1608285763246915,
         "best_optimized_throughput.latency_ms": 4.955000019073486,
         "best_optimized_throughput.requests_per_s": 201.81634634725705,
         "best_optimized_throughput.tokens_per_s": 3229.061541556113,
         "best_optimized_time_ms": 4.955000019073486,
-        "best_speedup": 1.1911756265635423
+        "best_speedup": 6.1608285763246915
       },
       "type": "python"
     },
