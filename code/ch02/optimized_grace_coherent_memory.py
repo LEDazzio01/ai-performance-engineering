@@ -13,9 +13,7 @@ import time
 from typing import Dict, Any, Optional
 import sys
 from pathlib import Path
-from core.benchmark.smoke import is_smoke_mode
 import os
-from core.benchmark.smoke import is_smoke_mode
 import ctypes
 
 # Add common to path
@@ -150,15 +148,17 @@ class OptimizedGraceCoherentMemory:
             logger.info(f"Using async pinned memory ({self.size_mb}MB)")
         
         else:  # explicit_aligned
-            # Explicit transfers with optimal alignment (128-byte for Blackwell)
-            # Ensure alignment by using contiguous tensors
-            self.cpu_data = torch.randn(num_elements, dtype=torch.float32).contiguous()
-            self.gpu_data = torch.zeros(num_elements, dtype=torch.float32, device=self.device).contiguous()
+            # Explicit transfers with pinned memory + async copies (non-Grace fallback)
+            # Use double-buffered approach to overlap copy with compute
+            self.cpu_data = torch.randn(num_elements, dtype=torch.float32).pin_memory()
+            self.cpu_data_out = torch.empty(num_elements, dtype=torch.float32).pin_memory()
+            self.gpu_data = torch.zeros(num_elements, dtype=torch.float32, device=self.device)
             
-            # Verify alignment (warn-only so CI/low-mem paths don't hard fail)
-            if self.cpu_data.data_ptr() % 128 != 0 or self.gpu_data.data_ptr() % 128 != 0:
-                logger.warning("128-byte alignment unavailable; continuing with contiguous buffers")
-            logger.info(f"Using explicit aligned transfers ({self.size_mb}MB)")
+            # Create dedicated copy stream for overlapping transfers
+            self.copy_stream = torch.cuda.Stream()
+            self.compute_stream = torch.cuda.current_stream()
+            
+            logger.info(f"Using double-buffered async transfers ({self.size_mb}MB)")
     
     def run(self) -> float:
         """Execute optimized coherent memory access pattern."""
@@ -187,16 +187,29 @@ class OptimizedGraceCoherentMemory:
                 self.stream.synchronize()
         
         else:  # explicit_aligned
-            # Explicit aligned: Maximize bandwidth with optimal alignment
-            for _ in range(self.iterations):
-                # Aligned H2D copy
-                self.gpu_data.copy_(self.cpu_data.to(self.device))
+            # Double-buffered: Overlap H2D with compute, then D2H with next H2D
+            # First iteration: start H2D
+            with torch.cuda.stream(self.copy_stream):
+                self.gpu_data.copy_(self.cpu_data, non_blocking=True)
+            
+            for i in range(self.iterations):
+                # Wait for H2D to complete before compute
+                self.compute_stream.wait_stream(self.copy_stream)
                 
-                # Computation
+                # Compute on current data
                 self.gpu_data.mul_(2.0).add_(1.0)
                 
-                # Aligned D2H copy
-                self.cpu_data = self.gpu_data.cpu()
+                # Start async D2H copy
+                with torch.cuda.stream(self.copy_stream):
+                    self.copy_stream.wait_stream(self.compute_stream)
+                    self.cpu_data_out.copy_(self.gpu_data, non_blocking=True)
+                    
+                    # If not last iteration, start next H2D (overlaps with D2H)
+                    if i < self.iterations - 1:
+                        self.gpu_data.copy_(self.cpu_data, non_blocking=True)
+            
+            # Final sync
+            self.copy_stream.synchronize()
         
         torch.cuda.synchronize()
         end = time.perf_counter()
@@ -216,8 +229,12 @@ class OptimizedGraceCoherentMemory:
         """Clean up resources."""
         del self.cpu_data
         del self.gpu_data
+        if hasattr(self, 'cpu_data_out'):
+            del self.cpu_data_out
         if hasattr(self, 'stream'):
             del self.stream
+        if hasattr(self, 'copy_stream'):
+            del self.copy_stream
         torch.cuda.empty_cache()
 
 
@@ -226,10 +243,9 @@ class OptimizedGraceCoherentMemoryBenchmark(BaseBenchmark):
 
     def __init__(self, size_mb: int = 256, iterations: int = 100):
         super().__init__()
-        fast = is_smoke_mode()
         self._impl = OptimizedGraceCoherentMemory(
             size_mb=size_mb,
-            iterations=20 if fast else iterations,
+            iterations=iterations,
         )
         bytes_per_iter = size_mb * 1024 * 1024 * 2  # H2D + D2H
         self._workload = WorkloadMetadata(

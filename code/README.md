@@ -53,7 +53,7 @@ make metrics        # Check get_custom_metrics() status
 - Default project root: the repo directory you're in (e.g., `ai-performance-engineering/code`).
 - Override everywhere with `--bench-root /path/to/project`.
   - CLI: `python -m cli.aisp bench run --bench-root /path/to/project --targets ch07`
-  - Full runner: `python -m core.harness.run_all_benchmarks --bench-root /path/to/project`
+  - Full runner: `python -m core.harness.run_benchmarks --bench-root /path/to/project`
   - Dashboard backend: `python -m dashboard.api.server serve --bench-root /path/to/project --data /path/to/benchmark_test_results.json`
 - Environment variables are ignored for project-root selection; use flags only.
 - In the dashboard UI, you can change the project root live (no restart) from the Settings tab’s “Project Root” card; the choice is stored in your browser.
@@ -74,11 +74,7 @@ python -m cli.aisp bench run --targets ch07 --profile minimal
 # Compare baseline vs optimized
 python -m cli.aisp bench compare ch07.baseline_memory_access ch07.optimized_memory_access
 
-# Quick verification (lightweight smoke test)
-python -m cli.aisp bench verify --targets ch07
-```
-
-### Using the Harness Directly
+# Using the Harness Directly
 ```python
 from core.harness.benchmark_harness import BenchmarkHarness
 from ch07.optimized_memory_access import get_benchmark
@@ -92,17 +88,152 @@ print(results)
 
 ## Profiling
 
+Two interfaces available:
+- **CLI** (`aisp` command) - for terminal users
+- **MCP tools** (`aisp_*`) - for AI assistants via MCP protocol
+
+### Quick Status Check
 ```bash
-# Timeline profile (nsys)
-nsys profile -o timeline python ch07/optimized_memory_access.py
-
-# Kernel analysis (ncu)
-ncu -o kernel_analysis python ch07/optimized_memory_access.py
-
-# Open in NVIDIA Nsight
-nsys-ui timeline.nsys-rep
-ncu-ui kernel_analysis.ncu-rep
+aisp info status              # System status overview
+aisp info gpu                 # GPU information
+aisp hw speed                 # Quick GPU sanity test
 ```
+
+### Nsight Systems (Timeline)
+```bash
+aisp profile nsys python train.py --batch 32
+aisp profile nsys --preset light python script.py
+aisp profile compare ch11     # Compare baseline vs optimized
+```
+
+### Nsight Compute (Kernel Deep-Dive)
+```bash
+aisp profile ncu python gemm_kernel.py
+aisp profile ncu --workload-type tensor_core python attention.py
+```
+
+### PyTorch Profiler
+```bash
+aisp profile torch train.py --batch 32
+aisp profile torch --mode memory train.py
+```
+
+### Bottleneck Analysis
+```bash
+aisp profile bottleneck       # Identify bottlenecks
+aisp profile roofline         # Roofline model analysis
+aisp ai ask "Why is my kernel slow?"
+```
+
+### Open Results in NVIDIA Nsight
+```bash
+nsys-ui artifacts/mcp-profiles/mcp_nsys.nsys-rep
+ncu-ui artifacts/mcp-profiles/mcp_ncu.ncu-rep
+```
+
+---
+
+## GPU Performance Reference
+
+### GPU Hardware Specs
+
+| GPU | FP16 Tensor | FP8 Tensor | Memory | Bandwidth | SMs |
+|-----|-------------|------------|--------|-----------|-----|
+| **B200** (Blackwell) | 2250 TFLOPS | 4500 TFLOPS | 192 GB HBM3e | 8 TB/s | 148 |
+| **H100** SXM (Hopper) | 1979 TFLOPS | 3958 TFLOPS | 80 GB HBM3 | 3.35 TB/s | 132 |
+| **A100** SXM (Ampere) | 312 TFLOPS | — | 80 GB HBM2e | 2 TB/s | 108 |
+
+### Key NCU Metrics
+
+**Utilization (Higher = Better)**
+| Metric | Good | Warning | Critical | Meaning |
+|--------|------|---------|----------|---------|
+| `sm__throughput.avg.pct_of_peak_sustained_elapsed` | >60% | 30-60% | <30% | Compute utilization |
+| `gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed` | >70% | 40-70% | <40% | Memory bandwidth |
+| `sm__warps_active.avg.pct_of_peak_sustained_active` | >50% | 25-50% | <25% | Occupancy |
+| `sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed` | >50% | 20-50% | <20% | Tensor Core util |
+
+**Stalls (Lower = Better)**
+| Metric | Good | Warning | Critical | Meaning |
+|--------|------|---------|----------|---------|
+| `smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct` | <10% | 10-30% | >30% | Waiting for L2/DRAM |
+| `smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct` | <15% | 15-30% | >30% | Waiting for L1/shared |
+| `smsp__warp_issue_stalled_barrier_per_warp_active.pct` | <10% | 10-25% | >25% | Sync overhead |
+
+**Red Flags**
+| Metric | Threshold | Issue |
+|--------|-----------|-------|
+| `l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum` | >0 | Register spills! |
+| `l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum` | >1000 | Bank conflicts |
+
+### Bottleneck Decision Tree
+
+```
+1. Check utilization:
+   ├─ SM >60%, DRAM <40%  → COMPUTE BOUND (good!)
+   ├─ DRAM >60%, SM <40%  → MEMORY BOUND (optimize memory)
+   └─ Both <40%           → Check occupancy & stalls
+
+2. If both utilizations low:
+   ├─ Occupancy <25%      → OCCUPANCY LIMITED
+   │   └─ Check: registers, shared mem, block size
+   ├─ Top stall >30%      → STALL DOMINATED
+   │   └─ Fix based on stall type
+   └─ Local mem >0        → REGISTER SPILLS (critical!)
+
+3. Stall fixes:
+   ├─ long_scoreboard     → prefetch, async copy, better locality
+   ├─ barrier/membar      → reduce syncs, warp-level primitives
+   ├─ short_scoreboard    → increase ILP, unroll, reorder
+   └─ math_pipe_throttle  → Already compute-bound (good)
+```
+
+### Roofline Analysis
+
+```python
+# Calculate arithmetic intensity
+ai = flops / bytes_transferred  # FLOP/byte
+
+# Ridge point (where compute meets memory)
+ridge_point = peak_tflops / peak_bandwidth_tbps
+
+# If AI < ridge_point: memory bound
+# If AI > ridge_point: compute bound
+
+# H100 FP16: ridge = 1979 / 3.35 = 591 FLOP/byte
+# GEMM M=N=K=4096: AI ≈ 682 FLOP/byte → compute bound ✓
+```
+
+### Optimization Patterns
+
+| Bottleneck | Fix |
+|------------|-----|
+| **Memory Bound** | Tiling, vectorized loads (float4), shared memory, async copy (cp.async) |
+| **Low Occupancy** | Reduce registers/shared mem, try block sizes 128/256/512, `__launch_bounds__` |
+| **Register Spills** | Reduce array sizes, limit unrolling, split kernels |
+| **Bank Conflicts** | Pad shared memory `smem[N][M+1]`, swizzle patterns |
+| **Warp Divergence** | Sort data by operation, use predication over branches |
+
+### Kernel Optimization Hints
+
+| Kernel Type | Key Optimization | Why |
+|-------------|------------------|-----|
+| GEMM | Tensor Cores + Tiling | O(N³) compute, O(N²) data |
+| Attention | FlashAttention | Fuses softmax, reduces memory |
+| Elementwise | Fusion | Memory bound, reduce launches |
+| Reduction | Warp shuffle | Tree reduction in registers |
+| Softmax | Online algorithm | Single pass, O(N) memory |
+| LayerNorm | Fused kernel | Avoid multiple reads |
+
+### Anti-Patterns to Avoid
+
+1. **Uncoalesced access** — Threads accessing scattered memory
+2. **Excessive syncs** — `__syncthreads()` in tight loops
+3. **Serial reductions** — Use parallel tree reduction
+4. **Register spills** — Watch `l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum`
+5. **Small kernels** — Fuse or batch to amortize launch overhead
+6. **FP32 on Tensor Cores** — Use FP16/BF16/FP8 for 10x+ speedup
+7. **Unaligned matrices** — Pad to multiples of 16/32 for Tensor Cores
 
 ---
 
@@ -110,67 +241,85 @@ ncu-ui kernel_analysis.ncu-rep
 
 Start the server with `python -m mcp.mcp_server --serve` (or via `mcp.json`). Responses emit a `text` content entry containing the JSON envelope. Tool descriptions returned by `tools/list` (or `python -m mcp.mcp_server --list`) embed Inputs/Outputs/Expectations so clients can surface parameter guidance and side-effect hints.
 
-**76 MCP tools available** organized by category. See [docs/mcp_tools.md](docs/mcp_tools.md) for complete reference with parameters and examples.
+**73 MCP tools available** organized by category. All tools are prefixed with `aisp_`. See [docs/mcp_tools.md](docs/mcp_tools.md) for complete reference with parameters and examples.
 
-### Benchmarking (17 tools)
+### Quick Start (MCP)
+```
+aisp_triage()                    # GPU + software health + context (START HERE)
+aisp_status()                    # Fast health check only
+aisp_recommend(model_size=70, gpus=8, goal='throughput')
+aisp_ask(question='Why is my attention kernel slow?')
+```
+
+### Benchmarking
 | Tool | Description |
 |------|-------------|
-| `run_benchmarks` | Run benchmarks with optional profiling |
-| `verify_benchmarks` | Quick verification smoke tests |
-| `available_benchmarks` | List available benchmark targets |
-| `benchmark_targets` | List benchmark targets by chapter |
-| `list_chapters` | Scan and list all chapters |
-| `benchmark_report` | Generate benchmark report |
-| `benchmark_export` | Export benchmarks to file |
-| `benchmark_compare_runs` | Compare benchmark runs |
-| `test_speed` | Run speed tests |
-| `test_disk` | Disk I/O benchmark |
-| `test_pcie` | PCIe H2D/D2H bandwidth test |
-| `test_mem_hierarchy` | Memory hierarchy stride test |
-| `test_tensor_core` | Tensor Core throughput test |
-| `test_sfu` | Special function unit benchmark |
-| `test_network` | Network throughput tests |
-| `test_network_loopback` | Loopback TCP throughput test |
-| `test_roofline` | Roofline model benchmark |
+| `aisp_run_benchmarks` | Run benchmarks with optional profiling |
+| `aisp_benchmark_targets` | List benchmark targets by chapter |
+| `aisp_list_chapters` | Scan and list all chapters |
+| `aisp_benchmark_report` | Generate benchmark report |
+| `aisp_benchmark_export` | Export benchmarks to file |
+| `aisp_benchmark_compare_runs` | Compare benchmark runs |
+| `aisp_benchmark_triage` | Analyze results and get recommendations |
+| `aisp_hw_speed` | Run quick GPU speed tests |
+| `aisp_hw_disk` | Disk I/O benchmark |
+| `aisp_hw_pcie` | PCIe H2D/D2H bandwidth test |
+| `aisp_hw_cache` | Memory hierarchy stride test |
+| `aisp_hw_tc` | Tensor Core throughput test |
+| `aisp_hw_network` | Network throughput tests |
+| `aisp_hw_roofline` | Roofline model benchmark |
+| `aisp_hw_p2p` | GPU-to-GPU P2P bandwidth test |
+| `aisp_hw_nccl` | NCCL collective bandwidth test |
+| `aisp_hw_ib` | InfiniBand bandwidth test |
 
-### GPU (5 tools)
-`gpu_info`, `gpu_bandwidth`, `gpu_topology`, `gpu_topology_matrix`, `gpu_power`
+### GPU
+`aisp_gpu_info`, `aisp_gpu_bandwidth`, `aisp_gpu_topology`, `aisp_gpu_topology_matrix`, `aisp_gpu_power`
 
-### System (13 tools)
-`system_software`, `system_dependencies`, `system_context`, `system_capabilities`, `system_parameters`, `container_limits`, `cpu_memory_analysis`, `full_system_analysis`, `status`, `triage`, `context_summary`, `context_full`, `ai_status`
+### System
+`aisp_system_software`, `aisp_system_dependencies`, `aisp_system_context`, `aisp_system_capabilities`, `aisp_system_full`, `aisp_status`, `aisp_triage`, `aisp_context_summary`, `aisp_context_full`, `aisp_ai_status`
 
-### Profiling (10 tools)
-`profile_nsys`, `profile_ncu`, `nsys_summary`, `compare_nsys`, `compare_ncu`, `nsys_ncu_available`, `profile_flame`, `profile_memory`, `profile_kernels`, `profile_roofline`
+### Profiling
+| Tool | Description |
+|------|-------------|
+| `aisp_profile_nsys` | Run Nsight Systems profiling |
+| `aisp_profile_ncu` | Run Nsight Compute profiling |
+| `aisp_profile_torch` | Run PyTorch profiler |
+| `aisp_profile_hta` | Holistic Trace Analysis |
+| `aisp_profile_compare` | Visual flame graph comparison |
+| `aisp_nsys_summary` | Quick nsys stats |
+| `aisp_compare_nsys` | Compare nsys profiles |
+| `aisp_compare_ncu` | Compare ncu profiles |
+| `aisp_profile_flame` | Flame graph data |
+| `aisp_profile_memory` | VRAM timeline, leak detection |
+| `aisp_profile_kernels` | CUDA kernel breakdown |
+| `aisp_profile_roofline` | Compute vs memory bound analysis |
 
-### Analysis (5 tools)
-`analyze_bottlenecks`, `analyze_pareto`, `analyze_scaling`, `analyze_stacking`, `analyze_whatif`
+### Analysis
+`aisp_analyze_bottlenecks`, `aisp_analyze_pareto`, `aisp_analyze_scaling`, `aisp_analyze_stacking`, `aisp_analyze_whatif`, `aisp_analyze_memory_patterns`, `aisp_analyze_dataloader`, `aisp_analyze_comm_overlap`, `aisp_analyze_energy`
 
-### Optimization (3 tools)
-`recommend`, `optimize_roi`, `optimize_techniques`
+### Optimization
+`aisp_recommend`, `aisp_optimize_roi`, `aisp_optimize_techniques`
 
-### Distributed (2 tools)
-`distributed_plan`, `distributed_nccl`
+### Distributed
+`aisp_distributed_plan`, `aisp_distributed_nccl`, `aisp_launch_plan`, `aisp_cluster_slurm`, `aisp_predict_scaling`
 
-### Inference (2 tools)
-`inference_vllm`, `inference_quantization`
+### Inference
+`aisp_inference_vllm`, `aisp_inference_quantization`
 
-### AI/LLM (2 tools)
-`ask`, `explain`
+### AI/LLM
+`aisp_ask`, `aisp_explain`, `aisp_suggest_tools`
 
-### HuggingFace (2 tools)
-`hf_search`, `hf_trending`
+### HuggingFace
+`aisp_hf` (search, trending, download)
 
-### Cluster & Cost (2 tools)
-`cluster_slurm`, `cost_estimate`
+### Cost
+`aisp_cost_estimate`
 
-### Code Analysis (7 tools)
-`warp_divergence`, `bank_conflicts`, `memory_access`, `comm_overlap`, `data_loading`, `energy_analysis`, `predict_scaling`
+### Export
+`aisp_export_csv`, `aisp_export_pdf`, `aisp_export_html`
 
-### Export (3 tools)
-`export_csv`, `export_pdf`, `export_html`
-
-### Utility (3 tools)
-`help`, `suggest_tools`, `launch_plan`
+### Job Management
+`aisp_job_status` (poll async jobs)
 
 **Configuration:**
 - `isError` mirrors the payload `status` field returned in the JSON envelope
@@ -404,7 +553,7 @@ Some benchmarks are marked "informational"—they demonstrate techniques but may
 These are valuable for learning HOW to implement patterns, even if not faster on single-GPU setups.
 
 ```python
-# In run_all_benchmarks.py
+# In run_benchmarks.py
 INFORMATIONAL_BENCHMARKS = {
     "ch03": {"numa_unaware"},        # NUMA topology dependent
     "ch04": {"dataparallel_basic"},  # Requires multi-GPU
@@ -433,5 +582,5 @@ INFORMATIONAL_BENCHMARKS = {
 ## Notes
 
 - `setup.sh` installs system prerequisites (drivers, CUDA, Nsight)
-- `python core/harness/run_all_benchmarks.py --targets ch*` for regression suites
+- `python core/harness/run_benchmarks.py --targets ch*` for regression suites
 - `artifacts/` holds run outputs; clean via `python cleanup.py`

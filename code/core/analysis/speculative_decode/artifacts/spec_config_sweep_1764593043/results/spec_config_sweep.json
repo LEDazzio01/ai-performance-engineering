@@ -1,0 +1,17 @@
+{
+  "run_id": "spec_config_sweep_1764593043",
+  "config_paths": [
+    "/mnt/dev-fin-03/ai-performance-engineering/code/core/ch18/spec_configs/default.json"
+  ],
+  "iterations": 2,
+  "warmup": 1,
+  "results": {
+    "default.json": {
+      "accept_rate": 0.0,
+      "chunk_size": 0.0,
+      "throughput_tok_s": 0.0,
+      "ttft_mean_ms": 0.0,
+      "tpot_mean_ms": 0.0
+    }
+  }
+}

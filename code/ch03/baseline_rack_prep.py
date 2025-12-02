@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 import os
-from core.benchmark.smoke import is_smoke_mode
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -32,9 +31,8 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
 
     def __init__(self):
         super().__init__()
-        low_mem = is_smoke_mode()
-        self.seq_len = 1024 if low_mem else 4096
-        self.hidden_size = 1024 if low_mem else 4096
+        self.seq_len = 4096
+        self.hidden_size = 4096
         self.host_batch: Optional[torch.Tensor] = None
         self.device_batch: Optional[torch.Tensor] = None
         self.norm: Optional[nn.Module] = None
@@ -72,9 +70,7 @@ class BaselineRackPrepBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        low_mem = is_smoke_mode()
-        # Minimum warmup=5 even in smoke mode to exclude JIT overhead
-        return BenchmarkConfig(iterations=6 if low_mem else 12, warmup=5 if low_mem else 10)
+        return BenchmarkConfig(iterations=12, warmup=10)
 
     def validate_result(self) -> Optional[str]:
         if self.host_batch is None or self.norm is None:

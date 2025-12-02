@@ -242,17 +242,17 @@ class TestVerificationOptOut:
 
 
 # =============================================================================
-# Tests: _verify_input_equivalence()
+# Tests: _verify_inputs_match()
 # =============================================================================
 
-class TestVerifyInputEquivalence:
-    """Tests for the _verify_input_equivalence function."""
+class TestVerifyInputsMatch:
+    """Tests for the _verify_inputs_match function."""
     
     @pytest.fixture
     def verify_fn(self):
         """Import the verification function."""
-        from core.harness.run_all_benchmarks import _verify_input_equivalence
-        return _verify_input_equivalence
+        from core.harness.run_benchmarks import _verify_inputs_match
+        return _verify_inputs_match
     
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_equivalent_workloads_pass(self, verify_fn):
@@ -342,7 +342,7 @@ class TestVerificationIntegration:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_end_to_end_equivalent_benchmarks(self):
         """Test full verification flow with equivalent benchmarks."""
-        from core.harness.run_all_benchmarks import _verify_input_equivalence
+        from core.harness.run_benchmarks import _verify_inputs_match
         
         # Create two equivalent benchmarks
         baseline = MockBenchmarkWithSignature(batch_size=32, seq_len=128, hidden_size=768)
@@ -353,7 +353,7 @@ class TestVerificationIntegration:
         optimized.setup()
         
         # Verify input equivalence
-        input_result = _verify_input_equivalence(
+        input_result = _verify_inputs_match(
             baseline, optimized, "baseline.py", "optimized.py"
         )
         assert input_result["equivalent"] is True
@@ -373,14 +373,14 @@ class TestVerificationIntegration:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_end_to_end_different_workloads_detected(self):
         """Test that different workloads are detected before benchmark runs."""
-        from core.harness.run_all_benchmarks import _verify_input_equivalence
+        from core.harness.run_benchmarks import _verify_inputs_match
         
         # Create benchmarks with different workloads
         baseline = MockBenchmarkWithSignature(batch_size=32, seq_len=128, hidden_size=768)
         optimized = MockBenchmarkDifferentWorkload(batch_size=64, seq_len=128, hidden_size=768)
         
         # Input verification should FAIL before we even run benchmarks
-        input_result = _verify_input_equivalence(
+        input_result = _verify_inputs_match(
             baseline, optimized, "baseline.py", "optimized.py"
         )
         
@@ -449,7 +449,7 @@ class TestEdgeCases:
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
     def test_numeric_tolerance_for_floats(self):
         """Test that float attributes use appropriate tolerance."""
-        from core.harness.run_all_benchmarks import _verify_input_equivalence
+        from core.harness.run_benchmarks import _verify_inputs_match
         
         class BenchmarkWithFloat(BaseBenchmark):
             def __init__(self, learning_rate):
@@ -462,7 +462,7 @@ class TestEdgeCases:
         baseline = BenchmarkWithFloat(learning_rate=0.001)
         optimized = BenchmarkWithFloat(learning_rate=0.001 + 1e-10)
         
-        result = _verify_input_equivalence(
+        result = _verify_inputs_match(
             baseline, optimized, "baseline.py", "optimized.py"
         )
         

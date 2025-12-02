@@ -103,7 +103,7 @@ export function HwbenchTab() {
 
   const [nsysCommand, setNsysCommand] = useState('python -c "print(123)"');
   const [nsysPreset, setNsysPreset] = useState<'light' | 'full'>('full');
-  const [nsysQueue, setNsysQueue] = useState(false);
+  const [runAsync, setRunAsync] = useState(false);
   const [nsysFullTimeline, setNsysFullTimeline] = useState(false);
   const [nsysResult, setNsysResult] = useState<Result>(null);
   const [nsysLoading, setNsysLoading] = useState(false);
@@ -111,7 +111,6 @@ export function HwbenchTab() {
 
   const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
   const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
-  const [ncuQueue, setNcuQueue] = useState(false);
   const [ncuResult, setNcuResult] = useState<Result>(null);
   const [ncuLoading, setNcuLoading] = useState(false);
   const [ncuForceLineinfo, setNcuForceLineinfo] = useState(true);
@@ -419,8 +418,8 @@ export function HwbenchTab() {
                     Full timeline
                   </label>
                  <label className="flex items-center gap-2">
-                   <input type="checkbox" className="accent-accent-secondary" checked={nsysQueue} onChange={(e) => setNsysQueue(e.target.checked)} />
-                   Queue only
+                   <input type="checkbox" className="accent-accent-secondary" checked={runAsync} onChange={(e) => setRunAsync(e.target.checked)} />
+                   Async
                  </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" className="accent-accent-primary" checked={nsysForceLineinfo} onChange={(e) => setNsysForceLineinfo(e.target.checked)} />
@@ -450,7 +449,7 @@ export function HwbenchTab() {
                         command: nsysCommand,
                       preset: nsysPreset,
                       full_timeline: nsysFullTimeline,
-                      queue_only: nsysQueue,
+                      async: runAsync,
                       force_lineinfo: nsysForceLineinfo,
                       timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
                     });
@@ -497,8 +496,8 @@ export function HwbenchTab() {
                     </select>
                   </label>
                  <label className="flex items-center gap-2">
-                   <input type="checkbox" className="accent-accent-secondary" checked={ncuQueue} onChange={(e) => setNcuQueue(e.target.checked)} />
-                   Queue only
+                   <input type="checkbox" className="accent-accent-secondary" checked={runAsync} onChange={(e) => setRunAsync(e.target.checked)} />
+                   Async
                  </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" className="accent-accent-primary" checked={ncuForceLineinfo} onChange={(e) => setNcuForceLineinfo(e.target.checked)} />
@@ -527,7 +526,7 @@ export function HwbenchTab() {
                       const json = await startNsightComputeCapture({
                         command: ncuCommand,
                       workload_type: ncuWorkload,
-                      queue_only: ncuQueue,
+                      async: runAsync,
                       force_lineinfo: ncuForceLineinfo,
                       timeout_seconds: timeoutSeconds === '' ? undefined : Number(timeoutSeconds),
                     });

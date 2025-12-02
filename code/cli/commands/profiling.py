@@ -104,6 +104,34 @@ def compare_profiles(args) -> None:
     if result.get("insight"):
         console.print(f"\n[yellow]Insight:[/yellow] {result['insight']}")
     
+    # NEW: Get metric-level analysis (improvements, regressions, bottleneck shifts)
+    metric_comparison = core.compare_profiles(chapter)
+    if metric_comparison and not metric_comparison.get("error"):
+        metric_analysis = metric_comparison.get("metric_analysis")
+        if metric_analysis:
+            console.print("\n[bold cyan]📊 Metric Analysis[/bold cyan]")
+            
+            if metric_analysis.get("bottleneck_shift"):
+                console.print(f"[yellow]Bottleneck Shift:[/yellow] {metric_analysis['bottleneck_shift']}")
+            
+            if metric_analysis.get("key_improvements"):
+                console.print("\n[green]Key Improvements:[/green]")
+                for imp in metric_analysis["key_improvements"][:5]:
+                    console.print(f"  ✅ {imp}")
+            
+            if metric_analysis.get("regressions"):
+                console.print("\n[red]Regressions (investigate):[/red]")
+                for reg in metric_analysis["regressions"][:3]:
+                    console.print(f"  ⚠️  {reg['metric']}: {reg['baseline']:.1f} → {reg['optimized']:.1f} ({reg['change_pct']:+.1f}%)")
+            
+            if metric_analysis.get("remaining_issues"):
+                console.print("\n[yellow]Remaining Optimization Opportunities:[/yellow]")
+                for issue in metric_analysis["remaining_issues"][:3]:
+                    console.print(f"  → {issue}")
+            
+            # Add to result for JSON output
+            result["metric_analysis"] = metric_analysis
+    
     # Generate HTML flame graph
     html_content = _generate_comparison_html(result, chapter)
     output_path = Path(output)

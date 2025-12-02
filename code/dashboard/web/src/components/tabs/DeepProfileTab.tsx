@@ -41,14 +41,13 @@ export function DeepProfileTab() {
   const [preset, setPreset] = useState<'light' | 'full'>('full');
   const [selectedChapter, setSelectedChapter] = useState<string | null>(null);
   const [nsysCommand, setNsysCommand] = useState('python -c "print(123)"');
-  const [nsysQueue, setNsysQueue] = useState(false);
+  const [runAsync, setRunAsync] = useState(false);
   const [nsysTimeout, setNsysTimeout] = useState<number | ''>('');
   const [nsysResult, setNsysResult] = useState<any>(null);
   const [nsysLoading, setNsysLoading] = useState(false);
 
   const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
   const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
-  const [ncuQueue, setNcuQueue] = useState(false);
   const [ncuTimeout, setNcuTimeout] = useState<number | ''>('');
   const [forceLineinfo, setForceLineinfo] = useState(true);
   const [ncuResult, setNcuResult] = useState<any>(null);
@@ -222,8 +221,8 @@ export function DeepProfileTab() {
               />
               <div className="flex flex-wrap gap-3 text-xs text-white/70 items-center">
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" className="accent-accent-secondary" checked={nsysQueue} onChange={(e) => setNsysQueue(e.target.checked)} />
-                  Queue only
+                  <input type="checkbox" className="accent-accent-secondary" checked={runAsync} onChange={(e) => setRunAsync(e.target.checked)} />
+                  Async
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={forceLineinfo} onChange={(e) => setForceLineinfo(e.target.checked)} />
@@ -253,7 +252,7 @@ export function DeepProfileTab() {
                       command: nsysCommand,
                       preset: preset,
                       full_timeline: fullTimelineToggle || preset === 'full',
-                      queue_only: nsysQueue,
+                      async: runAsync,
                       force_lineinfo: forceLineinfo,
                       timeout_seconds: nsysTimeout === '' ? undefined : Number(nsysTimeout),
                     });
@@ -297,8 +296,8 @@ export function DeepProfileTab() {
                   </select>
                 </label>
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" className="accent-accent-secondary" checked={ncuQueue} onChange={(e) => setNcuQueue(e.target.checked)} />
-                  Queue only
+                  <input type="checkbox" className="accent-accent-secondary" checked={runAsync} onChange={(e) => setRunAsync(e.target.checked)} />
+                  Async
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={forceLineinfo} onChange={(e) => setForceLineinfo(e.target.checked)} />
@@ -327,7 +326,7 @@ export function DeepProfileTab() {
                     const res = await startNsightComputeCapture({
                       command: ncuCommand,
                       workload_type: ncuWorkload,
-                      queue_only: ncuQueue,
+                      async: runAsync,
                       force_lineinfo: forceLineinfo,
                       timeout_seconds: ncuTimeout === '' ? undefined : Number(ncuTimeout),
                     });

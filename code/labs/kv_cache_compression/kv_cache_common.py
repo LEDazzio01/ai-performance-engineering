@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional, Tuple, Type
+from typing import List, Optional, Tuple, Type
 
 import sys
 
 import torch
 import torch.nn as nn
-
-from core.harness.hardware_capabilities import detect_capabilities
 
 
 def resolve_device() -> torch.device:
@@ -75,8 +73,6 @@ class KVCacheAttention(nn.Module):
         num_heads: int,
         linear_cls: Type[nn.Module],
         layernorm_cls: Type[nn.Module],
-        enable_tmem_epilogue: bool = False,
-        tmem_copy_fn: Optional[Callable[[torch.Tensor], None]] = None,
         params_dtype: torch.dtype = torch.bfloat16,
         device: Optional[torch.device] = None,
     ) -> None:
@@ -102,8 +98,6 @@ class KVCacheAttention(nn.Module):
             # Fall back for standard nn.Linear which doesn't accept params_dtype
             self.qkv = linear_cls(hidden_dim, hidden_dim * 3, bias=True)
             self.proj = linear_cls(hidden_dim, hidden_dim, bias=True)
-        self.enable_tmem_epilogue = enable_tmem_epilogue
-        self._tmem_copy_fn = tmem_copy_fn
 
     def forward(self, tokens: torch.Tensor, cache: KVCache, start_offset: int) -> torch.Tensor:
         """Compute attention for tokens and append K/V into cache."""
@@ -118,13 +112,6 @@ class KVCacheAttention(nn.Module):
         # Write into cache
         cache.cache_k[:, start_offset : start_offset + seq_len].copy_(k)
         cache.cache_v[:, start_offset : start_offset + seq_len].copy_(v)
-
-        if self.enable_tmem_epilogue and self._tmem_copy_fn is not None:
-            if cache.cache_k.stride(-1) == self.head_dim and cache.cache_v.stride(-1) == self.head_dim:
-                flat_k = cache.cache_k.view(-1, self.head_dim)
-                flat_v = cache.cache_v.view(-1, self.head_dim)
-                self._tmem_copy_fn(flat_k)
-                self._tmem_copy_fn(flat_v)
 
         # Attention over current cache (prefill + decode-so-far)
         k_ctx = cache.cache_k[:, : start_offset + seq_len]
@@ -146,51 +133,3 @@ def reset_cache(cache: KVCache) -> None:
 def cache_is_finite(cache: KVCache) -> bool:
     """Check for non-finite entries in cache tensors."""
     return torch.isfinite(cache.cache_k).all() and torch.isfinite(cache.cache_v).all()
-
-
-def resolve_tmem_cache_copy(device: torch.device, head_dim: int) -> Optional[Callable[[torch.Tensor], None]]:
-    """Return a TMEM copy callable when hardware supports it.
-
-    This function:
-    1. Checks head_dim == 128 (TMEM copy is optimized for this shape)
-    2. Verifies Blackwell-class hardware via detect_capabilities()
-    3. Loads and returns the TMEM cache extension
-
-    The TMEM extension uses:
-    - float32: SM100_TMEM_STORE/LOAD_32dp32b4x
-    - float16/bfloat16: SM100_TMEM_STORE/LOAD_16dp32b4x_16b
-
-    Returns None if hardware doesn't support TMEM. Raises on build failures.
-    """
-    if head_dim != 128:
-        return None
-
-    cap = detect_capabilities(getattr(device, "index", 0))
-    if cap is None:
-        raise RuntimeError("Hardware capability probe unavailable; cannot resolve TMEM cache copy.")
-
-    # Check for Blackwell-class architecture (SM100+) using hardware_capabilities
-    blackwell_architectures = {"blackwell", "blackwell_ultra", "grace_blackwell"}
-    if cap.architecture not in blackwell_architectures:
-        # Not Blackwell - TMEM not available
-        return None
-
-    # Load the TMEM extension
-    try:
-        from labs.kv_cache_compression.tmem_cache_extension import load_tmem_cache_module
-    except Exception as exc:
-        raise RuntimeError(f"Failed to import TMEM cache extension: {exc}") from exc
-
-    try:
-        mod = load_tmem_cache_module()
-    except Exception as exc:
-        raise RuntimeError(f"Failed to build TMEM cache extension: {exc}") from exc
-
-    def _tmem_copy(tensor: torch.Tensor) -> None:
-        """In-place TMEM copy for KV cache tensors."""
-        if tensor.dim() != 2 or tensor.size(1) != 128:
-            raise ValueError(f"TMEM copy expects [N, 128] tensor, got {list(tensor.shape)}")
-        # Copy to itself via TMEM (GMEM -> SMEM -> TMEM -> GMEM)
-        mod.tmem_cache_copy(tensor, tensor)
-
-    return _tmem_copy

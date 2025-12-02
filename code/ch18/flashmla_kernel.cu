@@ -5,8 +5,6 @@
 #include <cuda_fp16.h>
 #include <cstdio>
 
-constexpr int WARP = 32;
-
 __global__ void flashmla_decode(const half* __restrict__ q,
                                 const half* __restrict__ k_cache,
                                 const half* __restrict__ v_cache,

@@ -47,7 +47,6 @@ constexpr int TILE_K = 32;
 // Cluster configuration: 2x2 = 4 CTAs per cluster
 constexpr int CLUSTER_M = 2;
 constexpr int CLUSTER_N = 2;
-constexpr int CLUSTER_SIZE = CLUSTER_M * CLUSTER_N;
 
 //============================================================================
 // TMA Multicast Kernel
@@ -89,8 +88,6 @@ void tma_multicast_gemm_kernel(
     float acc[4][4] = {0.0f};  // Each thread computes 4x4 output elements
     
     const int tid = threadIdx.x;
-    const int warp_id = tid / 32;
-    const int lane_id = tid % 32;
     
     // K-loop: process tiles along K dimension
     for (int k_tile = 0; k_tile < (K + TILE_K - 1) / TILE_K; ++k_tile) {

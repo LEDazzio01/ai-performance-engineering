@@ -5,6 +5,23 @@ GPU Performance Lab Dashboard Server
 A sleek web dashboard for viewing benchmark results, LLM analysis,
 optimization insights, deep profiling comparisons, and live optimization streaming.
 
+ARCHITECTURE:
+    This server uses the unified PerformanceEngine for all business logic.
+    The handler only manages HTTP requests/responses and routing.
+
+    Browser <-> DashboardHandler (HTTP) <-> PerformanceEngine (10 domains)
+                                                     ↓
+                    [gpu, system, profile, analyze, optimize, distributed, 
+                     inference, benchmark, ai, export]
+
+API ENDPOINT NAMING:
+    /api/{domain}/{operation}
+    
+    Examples:
+        /api/gpu/info        -> engine.gpu.info()
+        /api/analyze/pareto  -> engine.analyze.pareto()
+        /api/ai/ask          -> engine.ai.ask(question)
+
 Features:
 - Benchmark results visualization
 - LLM-generated insights
@@ -46,12 +63,15 @@ socketserver.ThreadingTCPServer.daemon_threads = True
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
+# Import the unified engine - THE source of truth for all business logic
+from core.engine import get_engine, PerformanceEngine
+
 from core.analysis.performance_analyzer import (
     PerformanceAnalyzer,
     load_benchmark_data as load_benchmark_results,
 )
 
-# Shared non-HTTP core
+# Legacy core imports for backwards compatibility (will be migrated to engine)
 try:
     from core.perf_core_base import PerformanceCoreBase
 except Exception:
@@ -131,8 +151,26 @@ except ImportError:
 INFERENCE_OPTIMIZER_AVAILABLE = True
 
 
-class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler):
-    """Custom handler that serves the dashboard and API endpoints."""
+class PerformanceCore(http.server.SimpleHTTPRequestHandler):
+    """
+    Dashboard HTTP handler that serves the web UI and API endpoints.
+    
+    ARCHITECTURE:
+        This class uses the unified PerformanceEngine for ALL business logic.
+        HTTP handling is cleanly separated from domain operations.
+        
+        Browser <-> PerformanceCore (HTTP) <-> PerformanceEngine (10 domains)
+                                                      ↓
+                    [gpu, system, profile, analyze, optimize, distributed,
+                     inference, benchmark, ai, export]
+    
+    All domain operations go through self.engine:
+        self.engine.gpu.info()
+        self.engine.analyze.bottlenecks()
+        self.engine.optimize.recommend(model_size=70)
+    
+    Legacy PerformanceCoreBase methods are delegated to the engine.
+    """
     
     LLM_SETUP_ERROR = {
         "available": False,
@@ -145,25 +183,113 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
     }
     _llm_engine: Optional[Any] = None
     _llm_advisor: Optional[Any] = None
+    _perf_engine: Optional[PerformanceEngine] = None
+    _core_delegate: Optional[Any] = None  # Lazy delegate to PerfCore for legacy methods
     
     def __init__(self, *args, data_file: Optional[Path] = None, bench_root: Optional[Path] = None, **kwargs):
-        # Initialize shared core state without invoking HTTP handler
-        try:
-            PerformanceCoreBase.__init__(self, data_file=data_file, bench_root=bench_root)  # type: ignore[arg-type]
-        except Exception:
-            self.data_file = data_file
-            self.bench_roots = get_bench_roots(repo_root=CODE_ROOT, bench_root=bench_root)
-            self.bench_root = self.bench_roots[0]
-            self._analyzer = PerformanceAnalyzer(lambda: load_benchmark_results(self.data_file, self.bench_roots))
-        # Now initialize HTTP handler
+        # Store config for lazy initialization
+        self.data_file = data_file
+        self.bench_roots = get_bench_roots(repo_root=CODE_ROOT, bench_root=bench_root)
+        self.bench_root = self.bench_roots[0]
+        self._analyzer: Optional[PerformanceAnalyzer] = None
+        
+        # Initialize HTTP handler
         http.server.SimpleHTTPRequestHandler.__init__(self, *args, **kwargs)
+    
+    @property
+    def engine(self) -> PerformanceEngine:
+        """Get the unified PerformanceEngine singleton for clean domain access."""
+        if self._perf_engine is None:
+            self._perf_engine = get_engine()
+        return self._perf_engine
+    
+    @property
+    def _core(self):
+        """Lazy delegate to PerfCore for legacy method compatibility."""
+        if self._core_delegate is None:
+            from core.perf_core import get_core
+            self._core_delegate = get_core()
+        return self._core_delegate
 
     @property
     def analyzer(self) -> PerformanceAnalyzer:
-        if not hasattr(self, "_analyzer") or self._analyzer is None:
-            data_path = getattr(self, "data_file", None)
-            self._analyzer = PerformanceAnalyzer(lambda: load_benchmark_results(data_path))
+        if self._analyzer is None:
+            self._analyzer = PerformanceAnalyzer(
+                lambda: load_benchmark_results(self.data_file, self.bench_roots)
+            )
         return self._analyzer
+    
+    # =========================================================================
+    # LEGACY METHOD DELEGATION - These forward to the engine or core delegate
+    # =========================================================================
+    
+    def load_benchmark_data(self) -> dict:
+        """Load benchmark data (delegates to core)."""
+        return self._core.load_benchmark_data()
+    
+    def get_gpu_info(self) -> dict:
+        """Get GPU info (delegates to engine.gpu.info)."""
+        return self.engine.gpu.info()
+    
+    def get_software_info(self) -> dict:
+        """Get software info (delegates to engine.system.software)."""
+        return self.engine.system.software()
+    
+    def get_dependency_health(self) -> dict:
+        """Get dependency health (delegates to engine.system.dependencies)."""
+        return self.engine.system.dependencies()
+    
+    def get_full_system_context(self) -> dict:
+        """Get full system context (delegates to engine.system.context)."""
+        return self.engine.system.context()
+    
+    def get_hardware_capabilities(self) -> dict:
+        """Get hardware capabilities (delegates to engine.system.capabilities)."""
+        return self.engine.system.capabilities()
+    
+    def get_flame_graph_data(self) -> dict:
+        """Get flame graph data (delegates to engine.profile.flame_graph)."""
+        return self.engine.profile.flame_graph()
+    
+    def get_memory_timeline(self) -> dict:
+        """Get memory timeline (delegates to engine.profile.memory_timeline)."""
+        return self.engine.profile.memory_timeline()
+    
+    def get_kernel_breakdown(self) -> dict:
+        """Get kernel breakdown (delegates to engine.profile.kernels)."""
+        return self.engine.profile.kernels()
+    
+    def get_hta_analysis(self) -> dict:
+        """Get HTA analysis (delegates to engine.profile.hta)."""
+        return self.engine.profile.hta()
+    
+    def get_torch_profiler(self) -> dict:
+        """Get torch profiler data (delegates to engine.profile.torch)."""
+        return self.engine.profile.torch()
+    
+    def get_roofline_data(self) -> dict:
+        """Get roofline data (delegates to engine.profile.roofline)."""
+        return self.engine.profile.roofline()
+    
+    def detect_bottlenecks(self) -> dict:
+        """Detect bottlenecks (delegates to engine.analyze.bottlenecks)."""
+        return self.engine.analyze.bottlenecks()
+    
+    def export_benchmarks_csv(self) -> str:
+        """Export benchmarks to CSV (delegates to engine.export.csv)."""
+        return self.engine.export.csv()
+    
+    def export_detailed_csv(self) -> str:
+        """Export detailed CSV (delegates to engine.export.csv with detailed=True)."""
+        return self.engine.export.csv(detailed=True)
+    
+    # Delegate remaining legacy methods to _core
+    def __getattr__(self, name: str):
+        """Delegate unknown attributes to the core for legacy compatibility."""
+        if name.startswith('_'):
+            raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+        # Delegate to core for legacy methods
+        return getattr(self._core, name)
 
     def _parse_query(self) -> Dict[str, List[str]]:
         """Parse query parameters from the current request path."""
@@ -251,108 +377,140 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             return {"success": False, "error": str(exc)}
     
     def do_GET(self):
-        if self.path == '/api/data':
-            self.send_json_response(self.load_benchmark_data())
-        elif self.path == '/api/config/bench-root':
-            self.send_json_response(self.get_bench_root_info())
-        elif self.path == '/api/gpu':
+        # =================================================================
+        # UNIFIED API ENDPOINTS (10-domain model)
+        # Pattern: /api/{domain}/{operation}
+        # =================================================================
+        
+        # --- GPU Domain ---
+        if self.path in ('/api/gpu/info', '/api/gpu'):
             self.send_json_response(self.get_gpu_info())
         elif self.path == '/api/gpu/stream':
             self.stream_gpu_metrics()
         elif self.path == '/api/gpu/history':
             self.send_json_response(self.get_gpu_history())
-        elif self.path == '/api/software':
-            self.send_json_response(self.get_software_info())
-        elif self.path == '/api/deps':
-            self.send_json_response(self.get_dependency_health())
-        elif self.path == '/api/deps/check-updates':
-            self.send_json_response(self.check_dependency_updates())
-        elif self.path == '/api/speedtest':
-            self.send_json_response(self.run_speed_tests())
-        elif self.path == '/api/gpu-bandwidth':
+        elif self.path in ('/api/gpu/bandwidth', '/api/gpu-bandwidth'):
             self.send_json_response(self.run_gpu_bandwidth_test())
-        elif self.path == '/api/network-test':
-            self.send_json_response(self.run_network_tests())
-        elif self.path == '/api/system-context':
+        elif self.path == '/api/gpu/topology':
+            self.send_json_response(self.engine.gpu.topology())
+        elif self.path == '/api/gpu/power':
+            self.send_json_response(self.engine.analyze.power())
+        
+        # --- System Domain ---
+        elif self.path in ('/api/system/software', '/api/software'):
+            self.send_json_response(self.get_software_info())
+        elif self.path in ('/api/system/dependencies', '/api/deps'):
+            self.send_json_response(self.get_dependency_health())
+        elif self.path == '/api/system/dependencies/check-updates':
+            self.send_json_response(self.check_dependency_updates())
+        elif self.path in ('/api/system/context', '/api/system-context'):
             self.send_json_response(self.get_full_system_context())
-        elif self.path == '/api/llm-analysis':
-            self.send_json_response(self.load_llm_analysis())
-        elif self.path == '/api/profiles':
-            self.send_json_response(self.load_profile_data())
-        elif self.path == '/api/available':
-            self.send_json_response(self.get_available_benchmarks())
-        elif self.path == '/api/scan-all':
-            self.send_json_response(self.scan_all_chapters_and_labs())
-        elif self.path == '/api/targets':
+        elif self.path == '/api/system/capabilities':
+            self.send_json_response(self.engine.system.capabilities())
+        
+        # --- Benchmark Domain ---
+        elif self.path == '/api/benchmark/data':
+            self.send_json_response(self.load_benchmark_data())
+        elif self.path in ('/api/benchmark/targets', '/api/targets'):
             self.send_json_response(self.list_benchmark_targets())
-        # CSV Export endpoints
+        elif self.path in ('/api/benchmark/available', '/api/available'):
+            self.send_json_response(self.get_available_benchmarks())
+        elif self.path in ('/api/benchmark/scan', '/api/scan-all'):
+            self.send_json_response(self.scan_all_chapters_and_labs())
+        elif self.path == '/api/benchmark/speedtest':
+            self.send_json_response(self.run_speed_tests())
+        elif self.path == '/api/benchmark/network':
+            self.send_json_response(self.run_network_tests())
+        
+        # --- Profile Domain ---
+        elif self.path in ('/api/profile/flame', '/api/profiler/flame'):
+            self.send_json_response(self.get_flame_graph_data())
+        elif self.path in ('/api/profile/memory', '/api/profiler/memory'):
+            self.send_json_response(self.get_memory_timeline())
+        elif self.path in ('/api/profile/timeline', '/api/profiler/timeline'):
+            self.send_json_response(self.get_cpu_gpu_timeline())
+        elif self.path in ('/api/profile/kernels', '/api/profiler/kernels'):
+            self.send_json_response(self.get_kernel_breakdown())
+        elif self.path in ('/api/profile/hta', '/api/profiler/hta'):
+            self.send_json_response(self.get_hta_analysis())
+        elif self.path in ('/api/profile/torch', '/api/profiler/torch'):
+            self.send_json_response(self.get_torch_profiler())
+        elif self.path in ('/api/profile/compile', '/api/profiler/compile'):
+            self.send_json_response(self.get_compile_analysis())
+        elif self.path in ('/api/profile/roofline', '/api/profiler/roofline'):
+            self.send_json_response(self.get_roofline_data())
+        elif self.path in ('/api/profile/list', '/api/deep-profile/list'):
+            self.send_json_response(self.list_deep_profile_pairs())
+        elif self.path == '/api/profile/recommendations':
+            self.send_json_response(self.get_profile_recommendations())
+        elif self.path in ('/api/profiles', '/api/profile/data'):
+            self.send_json_response(self.load_profile_data())
+        
+        # --- Analyze Domain ---
+        elif self.path in ('/api/analyze/pareto', '/api/analysis/pareto'):
+            self.send_json_response(self.get_pareto_frontier())
+        elif self.path in ('/api/analyze/tradeoffs', '/api/analysis/tradeoffs'):
+            self.send_json_response(self.get_tradeoff_analysis())
+        elif self.path in ('/api/analyze/stacking', '/api/analysis/stacking', '/api/stacking'):
+            self.send_json_response(self.get_optimization_stacking())
+        elif self.path in ('/api/analyze/power', '/api/analysis/power'):
+            self.send_json_response(self.get_power_efficiency())
+        elif self.path in ('/api/analyze/scaling', '/api/analysis/scaling'):
+            self.send_json_response(self.get_scaling_analysis())
+        elif self.path in ('/api/analyze/leaderboards', '/api/analysis/leaderboards'):
+            self.send_json_response(self.get_categorized_leaderboards())
+        
+        # --- Optimize Domain ---
+        elif self.path in ('/api/optimize/recommendations', '/api/analysis/recommendations'):
+            self.send_json_response(self.get_constraint_recommendations())
+        elif self.path == '/api/optimize/jobs':
+            self.send_json_response(self.list_optimization_jobs())
+        
+        # --- AI Domain ---
+        elif self.path in ('/api/ai/analysis', '/api/llm-analysis'):
+            self.send_json_response(self.load_llm_analysis())
+        
+        # --- Config ---
+        elif self.path == '/api/config/bench-root':
+            self.send_json_response(self.get_bench_root_info())
+        
+        # --- Legacy: /api/data still supported ---
+        elif self.path == '/api/data':
+            self.send_json_response(self.load_benchmark_data())
+        
+        # --- Export Domain ---
         elif self.path == '/api/export/csv':
             self.send_csv_response(self.export_benchmarks_csv())
         elif self.path == '/api/export/csv/detailed':
             self.send_csv_response(self.export_detailed_csv())
-        # PDF Export endpoints
         elif self.path == '/api/export/pdf':
             self.export_pdf_report()
         elif self.path == '/api/export/html':
             self.export_html_report()
-        # Profiler visualization endpoints
-        elif self.path == '/api/profiler/flame':
-            self.send_json_response(self.get_flame_graph_data())
-        elif self.path == '/api/profiler/memory':
-            self.send_json_response(self.get_memory_timeline())
-        elif self.path == '/api/profiler/timeline':
-            self.send_json_response(self.get_cpu_gpu_timeline())
-        elif self.path == '/api/profiler/kernels':
-            self.send_json_response(self.get_kernel_breakdown())
-        elif self.path == '/api/profiler/hta':
-            self.send_json_response(self.get_hta_analysis())
-        elif self.path == '/api/profiler/torch':
-            self.send_json_response(self.get_torch_profiler())
-        elif self.path == '/api/profiler/compile':
-            self.send_json_response(self.get_compile_analysis())
-        elif self.path == '/api/profiler/roofline':
-            self.send_json_response(self.get_roofline_data())
-        # NEW: Deep profile comparison endpoints
-        elif self.path == '/api/deep-profile/list':
-            self.send_json_response(self.list_deep_profile_pairs())
-        elif self.path.startswith('/api/deep-profile/compare/'):
-            chapter = self.path.split('/api/deep-profile/compare/')[1]
+        
+        # --- Profile Domain (dynamic paths) ---
+        elif self.path.startswith('/api/profile/compare/') or self.path.startswith('/api/deep-profile/compare/'):
+            chapter = self.path.split('/compare/')[1]
             self.send_json_response(self.compare_profiles(chapter))
+        elif self.path.startswith('/api/profile/flamegraph/') or self.path.startswith('/api/deep-profile/flamegraph/'):
+            chapter = self.path.split('/flamegraph/')[1]
+            self.send_json_response(self.get_flamegraph_comparison(chapter))
         elif self.path == '/api/deep-profile/recommendations':
             self.send_json_response(self.get_profile_recommendations())
-        elif self.path.startswith('/api/deep-profile/flamegraph/'):
-            chapter = self.path.split('/api/deep-profile/flamegraph/')[1]
-            self.send_json_response(self.get_flamegraph_comparison(chapter))
-        # NEW: Live optimization SSE streaming
+        
+        # --- Optimize Domain (dynamic paths) ---
         elif self.path.startswith('/api/optimize/stream/'):
             job_id = self.path.split('/api/optimize/stream/')[1]
             self.stream_optimization_events(job_id)
-        elif self.path == '/api/optimize/jobs':
-            self.send_json_response(self.list_optimization_jobs())
-        # NEW: Multi-metric analysis endpoints
-        elif self.path == '/api/analysis/pareto':
-            self.send_json_response(self.get_pareto_frontier())
-        elif self.path == '/api/analysis/tradeoffs':
-            self.send_json_response(self.get_tradeoff_analysis())
-        elif self.path == '/api/analysis/recommendations':
-            self.send_json_response(self.get_constraint_recommendations())
-        elif self.path == '/api/analysis/leaderboards':
-            self.send_json_response(self.get_categorized_leaderboards())
-        elif self.path.startswith('/api/analysis/whatif'):
-            # Parse query params: ?vram=24&latency=50&throughput=1000
+        
+        # --- Analyze Domain (whatif with params) ---
+        elif self.path.startswith('/api/analyze/whatif') or self.path.startswith('/api/analysis/whatif'):
             from urllib.parse import urlparse, parse_qs
             parsed = urlparse(self.path)
             params = parse_qs(parsed.query)
             self.send_json_response(self.get_whatif_recommendations(params))
-        elif self.path == '/api/analysis/stacking':
-            self.send_json_response(self.get_optimization_stacking())
-        elif self.path == '/api/stacking':
-            # Legacy alias for static dashboard
-            self.send_json_response(self.get_optimization_stacking())
-        elif self.path == '/api/analysis/power':
-            self.send_json_response(self.get_power_efficiency())
-        elif self.path == '/api/analysis/scaling':
-            self.send_json_response(self.get_scaling_analysis())
+        
+        # --- Report generation ---
         elif self.path.startswith('/api/report'):
             params = self._parse_query()
             self.send_json_response(self.generate_report_from_query(params))
@@ -603,13 +761,22 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 "ncu_available": automation.ncu_available,
                 "output_dir": str(automation.output_dir),
             })
-        elif self.path.startswith('/api/nsight/job-status'):
+        elif self.path.startswith('/api/nsight/job-status') or self.path.startswith('/api/profile/job-status'):
+            # Legacy endpoint name kept for compatibility; use /api/job-status for new code
             params = self._parse_query()
             job_id = (params.get("job_id") or [None])[0]
             if not job_id:
                 self.send_json_response({"error": "job_id is required"})
             else:
                 self.send_json_response(self.get_profile_job_status(job_id))
+        elif self.path.startswith('/api/job-status'):
+            # UNIFIED job status: checks both Dashboard and MCP job stores
+            params = self._parse_query()
+            job_id = (params.get("job_id") or [None])[0]
+            if not job_id:
+                self.send_json_response({"error": "job_id is required"})
+            else:
+                self.send_json_response(self.get_unified_job_status(job_id))
         elif self.path.startswith('/api/mcp/job-status'):
             params = self._parse_query()
             job_id = (params.get("job_id") or [None])[0]
@@ -790,6 +957,8 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
             self.send_json_response(self.detect_bottlenecks())
         elif self.path == '/api/analysis/bottlenecks':
             self.send_json_response(self.get_bottleneck_summary())
+        elif self.path == '/api/benchmark/triage':
+            self.send_json_response(self.get_benchmark_triage())
         elif self.path == '/api/profiler/optimization-score':
             self.send_json_response(self.calculate_optimization_score())
         # NEW: Book-based technique explanations
@@ -2845,11 +3014,39 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         }
 
     def get_profile_job_status(self, job_id: str) -> dict:
+        """Get status of Dashboard-initiated profile job."""
         with _profile_job_lock:
             record = _profile_jobs.get(job_id)
         if not record:
             return {"job_id": job_id, "status": "not_found"}
         return record
+    
+    def get_unified_job_status(self, job_id: str) -> dict:
+        """UNIFIED job status: checks both Dashboard profile jobs AND MCP jobs.
+        
+        Use this for any job regardless of where it was started.
+        """
+        # First, check Dashboard profile jobs
+        with _profile_job_lock:
+            record = _profile_jobs.get(job_id)
+        if record:
+            record["source"] = "dashboard"
+            return record
+        
+        # Next, check MCP job store via the MCP tool
+        try:
+            mcp_result = self.call_mcp_tool({"tool": "aisp_job_status", "params": {"job_id": job_id}})
+            if mcp_result and mcp_result.get("status") != "not_found":
+                mcp_result["source"] = "mcp"
+                return mcp_result
+        except Exception:
+            pass  # MCP not available or job not found
+        
+        return {
+            "job_id": job_id,
+            "status": "not_found",
+            "note": "Job not found in Dashboard or MCP job stores. Check job_id is correct."
+        }
 
     def start_nsys_capture(self, params: dict) -> dict:
         from core.profiling.nsight_automation import NsightAutomation
@@ -2864,7 +3061,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         output_name = params.get("output_name") or "dashboard_nsys"
         precheck_only = bool(params.get("precheck_only"))
         dry_run = bool(params.get("dry_run"))
-        queue_only = bool(params.get("queue_only") or params.get("queue"))
+        run_async = bool(params.get("async") or params.get("queue"))
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
         force_lineinfo = bool(params.get("force_lineinfo", True))
@@ -2917,7 +3114,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 "run_details": getattr(auto, "last_run", {}),
             }
 
-        if queue_only:
+        if run_async:
             return self._start_profile_job("nsys", _runner)
         return _runner()
 
@@ -2934,7 +3131,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         output_name = params.get("output_name") or "dashboard_ncu"
         precheck_only = bool(params.get("precheck_only"))
         dry_run = bool(params.get("dry_run"))
-        queue_only = bool(params.get("queue_only") or params.get("queue"))
+        run_async = bool(params.get("async") or params.get("queue"))
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
         force_lineinfo = bool(params.get("force_lineinfo", True))
@@ -2981,7 +3178,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 "run_details": getattr(auto, "last_run", {}),
             }
 
-        if queue_only:
+        if run_async:
             return self._start_profile_job("ncu", _runner)
         return _runner()
 
@@ -3004,7 +3201,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         nvtx_label = params.get("nvtx_label", "dashboard_torch_profile")
         precheck_only = bool(params.get("precheck_only"))
         dry_run = bool(params.get("dry_run"))
-        queue_only = bool(params.get("queue_only") or params.get("queue"))
+        run_async = bool(params.get("async") or params.get("queue"))
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
 
@@ -3053,7 +3250,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 res.setdefault("error", runner.last_error or "torch profiler failed")
             return res
 
-        if queue_only:
+        if run_async:
             return self._start_profile_job("torch", _runner)
         return _runner()
 
@@ -3072,7 +3269,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
         output_name = params.get("output_name") or "dashboard_hta"
         precheck_only = bool(params.get("precheck_only"))
         dry_run = bool(params.get("dry_run"))
-        queue_only = bool(params.get("queue_only") or params.get("queue"))
+        run_async = bool(params.get("async") or params.get("queue"))
         timeout_param = params.get("timeout_seconds")
         timeout_seconds = int(timeout_param) if timeout_param not in (None, "") else None
         force_lineinfo = bool(params.get("force_lineinfo", True))
@@ -3118,7 +3315,7 @@ class PerformanceCore(PerformanceCoreBase, http.server.SimpleHTTPRequestHandler)
                 result.setdefault("error", runner.last_error or "HTA capture failed")
             return result
 
-        if queue_only:
+        if run_async:
             return self._start_profile_job("hta", _runner)
         return _runner()
 
@@ -5773,7 +5970,7 @@ print(response)
                 "inference": ["aisp_inference_vllm", "aisp_inference_quantization"],
                 "ai": ["aisp_ask", "aisp_explain", "aisp_ai_status", "aisp_suggest_tools", "aisp_help"],
                 "profiling": ["aisp_profile_flame", "aisp_profile_memory", "aisp_profile_kernels", "aisp_profile_roofline", "aisp_profile_nsys", "aisp_profile_ncu", "aisp_nsys_summary", "aisp_compare_nsys", "aisp_compare_ncu", "aisp_nsys_ncu_available"],
-                "benchmarks": ["aisp_run_benchmarks", "aisp_verify_benchmarks", "aisp_benchmark_targets", "aisp_available_benchmarks"],
+                "benchmarks": ["aisp_run_benchmarks", "aisp_benchmark_targets", "aisp_available_benchmarks"],
                 "tests": ["aisp_test_speed", "aisp_test_network", "aisp_test_disk", "aisp_test_pcie", "aisp_test_mem_hierarchy", "aisp_test_tensor_core", "aisp_test_sfu", "aisp_test_network_loopback"],
                 "exports": ["aisp_export_csv", "aisp_export_pdf", "aisp_export_html"],
             }
@@ -7262,6 +7459,102 @@ print(json.dumps(info))
     def get_whatif_recommendations(self, params: dict) -> dict:
         """What-If Constraint Solver: Find optimizations matching user constraints."""
         return self.analyzer.get_whatif_recommendations(params)
+    
+    def get_benchmark_triage(self, data_file: Optional[Path] = None) -> dict:
+        """Post-benchmark triage: analyze results and return actionable recommendations.
+        
+        Returns summary, regressions, improvements, and recommended next tools/actions.
+        """
+        data = load_benchmark_results(data_file)
+        benchmarks = data.get("benchmarks", [])
+        
+        if not benchmarks:
+            return {"error": "No benchmark results found. Run benchmarks first."}
+        
+        # Analyze
+        total = len(benchmarks)
+        passed = sum(1 for b in benchmarks if b.get("speedup", 0) >= 1.0)
+        failed = total - passed
+        avg_speedup = sum(b.get("speedup", 1.0) for b in benchmarks) / total if total > 0 else 0
+        
+        regressions = sorted(
+            [b for b in benchmarks if b.get("speedup", 1.0) < 0.95],
+            key=lambda x: x.get("speedup", 1.0)
+        )[:10]
+        
+        improvements = sorted(
+            [b for b in benchmarks if b.get("speedup", 1.0) > 1.05],
+            key=lambda x: x.get("speedup", 1.0),
+            reverse=True
+        )[:10]
+        
+        slow_kernels = [b for b in benchmarks if b.get("baseline_time_ms", 0) > 100]
+        
+        # Build recommendations
+        recommendations = []
+        if regressions:
+            recommendations.append({
+                "tool": "aisp_analyze_bottlenecks",
+                "action": "Identify root causes",
+                "reason": f"{len(regressions)} regression(s) detected",
+                "priority": "high",
+                "endpoint": "/api/analysis/bottlenecks"
+            })
+        if slow_kernels:
+            recommendations.append({
+                "tool": "aisp_profile_nsys",
+                "action": "Profile slow operations",
+                "reason": f"{len(slow_kernels)} benchmark(s) >100ms baseline",
+                "priority": "medium",
+                "endpoint": "/api/profiler/nsys-capture"
+            })
+        if improvements:
+            recommendations.append({
+                "tool": "aisp_benchmark_report",
+                "action": "Generate report",
+                "reason": f"Document {len(improvements)} improvement(s)",
+                "priority": "low",
+                "endpoint": "/api/export/html"
+            })
+        recommendations.append({
+            "tool": "aisp_benchmark_compare_runs",
+            "action": "Compare with baseline",
+            "reason": "Track progress over time",
+            "priority": "medium",
+            "endpoint": "/api/compare/runs"
+        })
+        
+        return {
+            "success": True,
+            "summary": {
+                "total_benchmarks": total,
+                "passed": passed,
+                "failed": failed,
+                "pass_rate": f"{(passed/total)*100:.1f}%" if total > 0 else "N/A",
+                "avg_speedup": round(avg_speedup, 2),
+            },
+            "regressions": [
+                {
+                    "benchmark": f"{b.get('chapter')}:{b.get('name')}",
+                    "speedup": round(b.get("speedup", 0), 2),
+                    "baseline_ms": round(b.get("baseline_time_ms", 0), 1),
+                }
+                for b in regressions
+            ],
+            "improvements": [
+                {
+                    "benchmark": f"{b.get('chapter')}:{b.get('name')}",
+                    "speedup": round(b.get("speedup", 0), 2),
+                    "baseline_ms": round(b.get("baseline_time_ms", 0), 1),
+                }
+                for b in improvements
+            ],
+            "recommendations": recommendations,
+            "next_steps_summary": (
+                f"Found {len(regressions)} regression(s) and {len(improvements)} improvement(s). "
+                + ("Focus on fixing regressions first." if regressions else "Results look good!")
+            ),
+        }
     
     # =========================================================================
     # ADVANCED SYSTEM ANALYSIS METHODS (NEW!)

@@ -16,7 +16,6 @@ if str(repo_root) not in sys.path:
 
 import torch
 import torch.nn as nn
-from core.benchmark.smoke import is_smoke_mode
 
 from core.harness.benchmark_harness import (
     BaseBenchmark,
@@ -51,9 +50,8 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
 
     def __init__(self):
         super().__init__()
-        low_mem = is_smoke_mode()
-        self.seq_len = 1024 if low_mem else 4096
-        self.hidden_size = 1024 if low_mem else 4096
+        self.seq_len = 4096
+        self.hidden_size = 4096
         self.reserve_cores = 2
         self.apply_affinity = False
         self.preferred_nics: List[str] = []
@@ -142,9 +140,7 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        low_mem = is_smoke_mode()
-        # Minimum warmup=5 even in smoke mode to exclude JIT overhead
-        return BenchmarkConfig(iterations=6 if low_mem else 12, warmup=5 if low_mem else 10)
+        return BenchmarkConfig(iterations=12, warmup=10)
 
     def validate_result(self) -> Optional[str]:
         if not self.host_buffers or self.norm is None:

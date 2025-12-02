@@ -14,7 +14,12 @@ from typing import Any, List, Optional, Sequence
 from core.profiling.nvtx_helper import canonicalize_nvtx_name
 
 
+# =============================================================================
 # Metric sets for different profiling scenarios
+# Updated with comprehensive stall metrics, tensor core breakdown, and
+# register pressure detection for Hopper/Blackwell architectures
+# =============================================================================
+
 ROOFLINE_METRICS = [
     # Kernel timing
     "gpu__time_duration.avg",
@@ -26,6 +31,79 @@ ROOFLINE_METRICS = [
     "lts__throughput.avg.pct_of_peak_sustained_elapsed",
     # Occupancy - active warps
     "sm__warps_active.avg.pct_of_peak_sustained_active",
+    # SM cycles active (different perspective from warp active)
+    "sm__cycles_active.avg.pct_of_peak_sustained_elapsed",
+]
+
+# Complete set of warp stall reasons - critical for understanding "why slow"
+WARP_STALL_METRICS = [
+    # Primary stall reasons (most common bottlenecks)
+    "smsp__warp_issue_stalled_barrier_per_warp_active.pct",           # Barrier sync
+    "smsp__warp_issue_stalled_dependency_per_warp_active.pct",        # Data dependencies
+    "smsp__warp_issue_stalled_memory_throttle_per_warp_active.pct",   # Memory pipeline full
+    "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",   # Waiting for L2/DRAM
+    "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct",  # Waiting for L1/shared
+    "smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.pct", # Math pipe congestion
+    "smsp__warp_issue_stalled_imc_miss_per_warp_active.pct",          # L2/FB miss pressure
+    # Extended stall reasons (often overlooked but critical)
+    "smsp__warp_issue_stalled_wait_per_warp_active.pct",              # Wait for exec resources
+    "smsp__warp_issue_stalled_mio_throttle_per_warp_active.pct",      # Memory I/O congestion
+    "smsp__warp_issue_stalled_tex_throttle_per_warp_active.pct",      # Texture cache pressure
+    "smsp__warp_issue_stalled_drain_per_warp_active.pct",             # Pipeline draining
+    "smsp__warp_issue_stalled_lg_throttle_per_warp_active.pct",       # Local/global throttle
+    "smsp__warp_issue_stalled_no_instruction_per_warp_active.pct",    # Instruction fetch stalls
+    "smsp__warp_issue_stalled_sleeping_per_warp_active.pct",          # Intentionally yielded
+    "smsp__warp_issue_stalled_membar_per_warp_active.pct",            # Memory barrier stalls
+    "smsp__warp_issue_stalled_not_selected_per_warp_active.pct",      # Scheduler didn't select
+    "smsp__warp_issue_stalled_dispatch_stall_per_warp_active.pct",    # Dispatch unit stalls
+    "smsp__warp_issue_stalled_misc_per_warp_active.pct",              # Miscellaneous stalls
+]
+
+# Register pressure and local memory spill detection
+REGISTER_PRESSURE_METRICS = [
+    "launch__registers_per_thread",
+    "launch__shared_mem_per_block",
+    "l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum",   # Local mem loads (SPILLS!)
+    "l1tex__t_sectors_pipe_lsu_mem_local_op_st.sum",   # Local mem stores (SPILLS!)
+    "l1tex__t_bytes_pipe_lsu_mem_local_op_ld.sum",     # Spill load bytes
+    "l1tex__t_bytes_pipe_lsu_mem_local_op_st.sum",     # Spill store bytes
+]
+
+# Tensor Core metrics broken down by precision
+TENSOR_CORE_METRICS = [
+    # Overview
+    "sm__inst_executed_pipe_tensor.sum",
+    "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",
+    # FP16 Tensor Core (HMMA)
+    "sm__pipe_tensor_op_hmma_cycles_active.avg.pct_of_peak_sustained_elapsed",
+    "sm__inst_executed_pipe_tensor_op_hmma.sum",
+    # INT8 Tensor Core (IMMA)
+    "sm__pipe_tensor_op_imma_cycles_active.avg.pct_of_peak_sustained_elapsed",
+    "sm__inst_executed_pipe_tensor_op_imma.sum",
+    # FP8 (Hopper/Blackwell SM 9.0+)
+    "sm__inst_executed_pipe_fp8.sum",
+    # FP64 MMA
+    "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_dmma_pred_on.sum",
+    "sm__pipe_fp64_cycles_active.avg.pct_of_peak_sustained_elapsed",
+]
+
+# Cache and atomic metrics
+CACHE_METRICS = [
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit_rate.pct",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_st_lookup_hit_rate.pct",
+    "lts__t_sectors_op_read_hit_rate.pct",
+    "lts__t_sectors_op_write_hit_rate.pct",
+    "lts__t_sector_op_atom_hit_rate.pct",  # Atomic hit rate in L2
+    "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum",
+    "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_st.sum",
+]
+
+# Atomic operation metrics
+ATOMIC_METRICS = [
+    "lts__t_sectors_op_atom.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.sum",
+    "smsp__sass_thread_inst_executed_op_atom_pred_on.sum",
 ]
 
 DEEP_DIVE_METRICS = [
@@ -33,6 +111,8 @@ DEEP_DIVE_METRICS = [
     *ROOFLINE_METRICS,
     # Memory throughput counters (sectors + bytes) for bandwidth + reuse analysis
     "dram__sectors_read.sum",
+    "dram__bytes_read.sum",
+    "dram__bytes_write.sum",
     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",
     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
     "l1tex__t_bytes_pipe_lsu_mem_global_op_ld.sum",
@@ -43,12 +123,16 @@ DEEP_DIVE_METRICS = [
     "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
     "sm__sass_thread_inst_executed_op_fp16_pred_on.sum",
     "sm__sass_thread_inst_executed_op_fp32_pred_on.sum",
-    # Tensor Core utilization (if applicable)
-    "sm__inst_executed_pipe_tensor.sum",
+    # Tensor Core utilization
+    *TENSOR_CORE_METRICS,
+    # IPC metric
+    "sm__sass_inst_executed_per_cycle.avg",
     # Occupancy proxy already in roofline (sm__warps_active...), keep explicit time
     "gpu__time_duration.sum",
-    # Shared memory bank conflicts
-    "l1tex__data_bank_conflicts_pipe_lsu_mem_shared_op_ld.sum",
+    # Cache and bank conflicts
+    *CACHE_METRICS,
+    # Register pressure and spills
+    *REGISTER_PRESSURE_METRICS,
 ]
 
 MINIMAL_METRICS = [
@@ -57,11 +141,33 @@ MINIMAL_METRICS = [
     "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
 ]
 
+# Comprehensive metrics set - everything for deep analysis
+COMPREHENSIVE_METRICS = [
+    *DEEP_DIVE_METRICS,
+    *WARP_STALL_METRICS,
+    *ATOMIC_METRICS,
+    # Shared memory detailed
+    "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_ld.sum",
+    "l1tex__data_pipe_lsu_wavefronts_mem_shared_op_st.sum",
+    "l1tex__t_bytes_pipe_lsu_mem_shared_op_ld.sum",
+    "l1tex__t_bytes_pipe_lsu_mem_shared_op_st.sum",
+    # Occupancy limiters
+    "launch__occupancy_limit_registers",
+    "launch__occupancy_limit_shared_mem",
+    "launch__occupancy_limit_warps",
+    "launch__occupancy_limit_blocks",
+    "sm__ctas_launched.sum",
+    # GPC cycles for scaling
+    "gpc__cycles_elapsed.max",
+]
+
 # =============================================================================
 # Chapter-Specific Metric Sets
 # =============================================================================
 # Use these for targeted profiling of specific optimization techniques.
 # Each set focuses on the metrics most relevant to that chapter's topic.
+# Updated with comprehensive stall reasons, tensor core breakdown, and
+# register pressure detection.
 
 # Ch6: Kernel Fundamentals - Bank conflicts, warp divergence, occupancy
 CH6_KERNEL_METRICS = [
@@ -75,8 +181,11 @@ CH6_KERNEL_METRICS = [
     # Occupancy details
     "sm__warps_active.avg.pct_of_peak_sustained_active",
     "launch__occupancy_per_block_size",
-    "launch__registers_per_thread",
-    "launch__shared_mem_per_block",
+    "launch__occupancy_limit_registers",
+    "launch__occupancy_limit_shared_mem",
+    "launch__occupancy_limit_warps",
+    "launch__occupancy_limit_blocks",
+    *REGISTER_PRESSURE_METRICS,
 ]
 
 # Ch7: Memory Access - Coalescing, vectorization, cache behavior
@@ -91,53 +200,58 @@ CH7_MEMORY_METRICS = [
     # L2 cache behavior
     "lts__t_sectors_op_read_hit_rate.pct",
     "lts__t_sectors_op_write_hit_rate.pct",
+    "lts__t_sector_op_atom_hit_rate.pct",  # Atomic hit rate
     # Transaction counts
     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",
     "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
-]
-
-# Ch8: Optimization Techniques - Stall analysis, ILP, register pressure
-CH8_OPTIMIZATION_METRICS = [
-    *DEEP_DIVE_METRICS,
-    # Stall reasons (THE KEY to understanding "why faster")
-    "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
-    "smsp__warp_issue_stalled_dependency_per_warp_active.pct",
-    "smsp__warp_issue_stalled_memory_throttle_per_warp_active.pct",
+    # DRAM bytes
+    "dram__bytes_read.sum",
+    "dram__bytes_write.sum",
+    # Memory stalls
     "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",
     "smsp__warp_issue_stalled_short_scoreboard_per_warp_active.pct",
-    "smsp__warp_issue_stalled_not_selected_per_warp_active.pct",
-    # ILP metrics
-    "smsp__inst_executed_per_warp.ratio",
-    # Register pressure
-    "launch__registers_per_thread",
-    "launch__shared_mem_per_block",
+    "smsp__warp_issue_stalled_lg_throttle_per_warp_active.pct",
 ]
 
-# Ch9: Compute-Bound - Tensor Core utilization, arithmetic intensity
+# Ch8: Optimization Techniques - COMPLETE stall analysis, ILP, register pressure
+CH8_OPTIMIZATION_METRICS = [
+    *DEEP_DIVE_METRICS,
+    # ALL stall reasons (THE KEY to understanding "why faster")
+    *WARP_STALL_METRICS,
+    # ILP metrics
+    "smsp__inst_executed_per_warp.ratio",
+    "sm__sass_inst_executed_per_cycle.avg",
+]
+
+# Ch9: Compute-Bound - Tensor Core utilization by precision, arithmetic intensity
 CH9_COMPUTE_METRICS = [
     *ROOFLINE_METRICS,
-    # Tensor Core utilization
-    "sm__inst_executed_pipe_tensor.sum",
-    "sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed",
+    # ALL Tensor Core metrics (FP8/FP16/INT8/FP64)
+    *TENSOR_CORE_METRICS,
     # FMA operations
-    "smsp__sass_thread_inst_executed_op_dfma_pred_on.sum",
-    "smsp__sass_thread_inst_executed_op_dmma_pred_on.sum",
     "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",
     # Instruction throughput
     "sm__inst_executed.avg.per_cycle_elapsed",
+    "sm__sass_inst_executed_per_cycle.avg",
+    # Math pipe stalls
+    "smsp__warp_issue_stalled_math_pipe_throttle_per_warp_active.pct",
 ]
 
-# Ch10: Pipelining - Pipeline utilization, async copy
+# Ch10: Pipelining - Pipeline utilization, async copy, barrier stalls
 CH10_PIPELINE_METRICS = [
     *ROOFLINE_METRICS,
     # Async copy metrics
     "l1tex__t_sectors_pipe_lsu_mem_global_op_ld_lookup_hit_rate.pct",
-    # Pipeline stalls
+    # Pipeline stalls - complete set
     "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
     "smsp__warp_issue_stalled_membar_per_warp_active.pct",
+    "smsp__warp_issue_stalled_drain_per_warp_active.pct",
+    "smsp__warp_issue_stalled_wait_per_warp_active.pct",
     # SM utilization
     "sm__warps_active.avg.pct_of_peak_sustained_active",
     "sm__ctas_active.avg.pct_of_peak_sustained_active",
+    # MIO throttle (memory I/O congestion)
+    "smsp__warp_issue_stalled_mio_throttle_per_warp_active.pct",
 ]
 
 # Ch11: Streams - Overlap metrics (use nsys primarily)
@@ -146,6 +260,7 @@ CH11_STREAM_METRICS = [
     # Basic timing for overlap analysis
     "gpu__time_duration.sum",
     "gpu__time_duration.avg",
+    "gpc__cycles_elapsed.max",  # For scaling analysis
 ]
 
 # Ch12: CUDA Graphs - Launch overhead metrics
@@ -154,15 +269,51 @@ CH12_GRAPH_METRICS = [
     # Launch timing
     "gpu__time_duration.avg",
     "gpu__time_duration.sum",
+    "sm__ctas_launched.sum",
 ]
 
-# Ch13-14: PyTorch/Triton - General performance
+# Ch13-14: PyTorch/Triton - General performance with tensor core breakdown
 CH13_PYTORCH_METRICS = [
     *ROOFLINE_METRICS,
-    # Tensor Core for FP8/FP16
-    "sm__inst_executed_pipe_tensor.sum",
+    # ALL Tensor Core metrics for FP8/FP16/INT8
+    *TENSOR_CORE_METRICS,
     # Memory efficiency
     "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+    "dram__bytes_read.sum",
+    "dram__bytes_write.sum",
+    # Register spills (common in compiled code)
+    *REGISTER_PRESSURE_METRICS,
+]
+
+# Ch15: Attention Optimization - Texture cache, memory patterns
+CH15_ATTENTION_METRICS = [
+    *ROOFLINE_METRICS,
+    *TENSOR_CORE_METRICS,
+    # Texture throttle (relevant for attention)
+    "smsp__warp_issue_stalled_tex_throttle_per_warp_active.pct",
+    # Memory stalls
+    "smsp__warp_issue_stalled_long_scoreboard_per_warp_active.pct",
+    "smsp__warp_issue_stalled_memory_throttle_per_warp_active.pct",
+    # Cache behavior
+    *CACHE_METRICS,
+]
+
+# Ch16: Distributed Training - NVLink, atomics, barriers
+CH16_DISTRIBUTED_METRICS = [
+    *ROOFLINE_METRICS,
+    # Barrier stalls (critical for distributed)
+    "smsp__warp_issue_stalled_barrier_per_warp_active.pct",
+    "smsp__warp_issue_stalled_membar_per_warp_active.pct",
+    # Atomics
+    *ATOMIC_METRICS,
+    # Memory throughput
+    "dram__bytes_read.sum",
+    "dram__bytes_write.sum",
+]
+
+# Ch17: Blackwell/Hopper specific metrics
+CH17_BLACKWELL_METRICS = [
+    *COMPREHENSIVE_METRICS,  # Everything for Blackwell analysis
 ]
 
 # Mapping from chapter number to metric set
@@ -176,6 +327,22 @@ CHAPTER_METRICS = {
     12: CH12_GRAPH_METRICS,
     13: CH13_PYTORCH_METRICS,
     14: CH13_PYTORCH_METRICS,  # Same as Ch13
+    15: CH15_ATTENTION_METRICS,
+    16: CH16_DISTRIBUTED_METRICS,
+    17: CH17_BLACKWELL_METRICS,
+}
+
+# Convenience mapping for metric set names
+METRIC_SET_MAP = {
+    "minimal": MINIMAL_METRICS,
+    "roofline": ROOFLINE_METRICS,
+    "deep_dive": DEEP_DIVE_METRICS,
+    "comprehensive": COMPREHENSIVE_METRICS,
+    "stalls": WARP_STALL_METRICS,
+    "tensor_core": TENSOR_CORE_METRICS,
+    "cache": CACHE_METRICS,
+    "atomics": ATOMIC_METRICS,
+    "register_pressure": REGISTER_PRESSURE_METRICS,
 }
 
 
@@ -195,6 +362,9 @@ NCU_SET_BY_METRIC = {
     "deep_dive": "full",
     "roofline": "roofline",
     "minimal": "speed-of-light",
+    "comprehensive": "full",
+    "stalls": "full",
+    "tensor_core": "full",
 }
 
 

@@ -1,4 +1,8 @@
-"""baseline_nccl.py - Baseline without NCCL in distributed training context."""
+"""baseline_nccl.py - Baseline: CPU-based reduction (inefficient).
+
+This baseline copies each shard to CPU for aggregation, then back to GPU.
+This is visibly slower than the optimized path which stays on GPU.
+"""
 
 from __future__ import annotations
 
@@ -17,65 +21,64 @@ from typing import Optional
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
     WorkloadMetadata,
 )
 
 
 class BaselineNcclBenchmark(BaseBenchmark):
-    """Baseline: No NCCL - CPU-based or inefficient communication.
-    
-    NCCL: This baseline does not use NCCL for collective communication.
-    Uses CPU-based or inefficient communication patterns.
-    """
+    """Baseline: CPU-based reduction - copies each shard to CPU for aggregation."""
     
     def __init__(self):
         super().__init__()
         self.skip_output_check = True
-        self.model = None
-        self.input = None
-        self.output = None
+        # Match optimized workload size
+        self.batch_size = 1024
+        self.hidden_dim = 4096
+        self.inner_dim = 8192
+        self.num_shards = 8  # More shards = more CPU round-trips
+        
+        self.model: Optional[nn.Module] = None
+        self.input: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+        
+        tokens = self.batch_size * self.hidden_dim
+        self._workload = WorkloadMetadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
 
     def skip_output_verification(self) -> bool:
         return True
-        self.batch = 256
-        self.hidden = 2048
-        tokens = self.batch * self.hidden
-        self._workload = WorkloadMetadata(
-            requests_per_iteration=float(self.batch),
-            tokens_per_iteration=float(tokens),
-        )
     
     def setup(self) -> None:
-        """Setup: Initialize model without NCCL."""
+        """Setup: Initialize model."""
         torch.manual_seed(42)
-        # Baseline: No NCCL - CPU-based communication
-        # NCCL provides optimized GPU-to-GPU collective communication
-        # This baseline does not use NCCL
         
         self.model = nn.Sequential(
-            nn.Linear(2048, 4096),
+            nn.Linear(self.hidden_dim, self.inner_dim),
             nn.ReLU(),
-            nn.Linear(4096, 2048),
+            nn.Linear(self.inner_dim, self.hidden_dim),
         ).to(self.device).eval()
         
-        self.input = torch.randn(256, 2048, device=self.device)
-        self.output = torch.zeros_like(self.input)
+        self.input = torch.randn(self.batch_size, self.hidden_dim, device=self.device)
+        shard_size = self.batch_size // self.num_shards
+        self.output = torch.zeros(shard_size, self.hidden_dim, device=self.device)
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
-        """Benchmark: Operations without NCCL."""
+        """Benchmark: CPU-based reduction (inefficient)."""
         with self._nvtx_range("baseline_nccl"):
             with torch.no_grad():
                 output = self.model(self.input)
                 
-                # Naively copy shards to CPU to aggregate
-                shards = torch.chunk(output, chunks=4, dim=0)
-                reduced = sum(shard.cpu() for shard in shards) / 4.0
+                # Naively copy each shard to CPU to aggregate (slow!)
+                shards = torch.chunk(output, chunks=self.num_shards, dim=0)
+                # This is the bottleneck: multiple GPU->CPU copies + CPU addition
+                cpu_shards = [shard.cpu() for shard in shards]
+                reduced = sum(cpu_shards) / float(self.num_shards)
+                # Copy result back to GPU
                 self.output = reduced.to(self.device)
         self._synchronize()
-
     
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
@@ -88,7 +91,7 @@ class BaselineNcclBenchmark(BaseBenchmark):
         """Return benchmark configuration."""
         return BenchmarkConfig(
             iterations=50,
-            warmup=5,
+            warmup=10,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -110,6 +113,7 @@ class BaselineNcclBenchmark(BaseBenchmark):
         if self.input is None:
             return "Input not initialized"
         return None
+
 
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""

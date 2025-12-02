@@ -51,7 +51,6 @@
 #   - Run examples: python3 ch01/performance_basics.py
 #   - Drive the benchmark suite: python cli/aisp.py bench run
 #   - Capture peak performance: python core/benchmark/benchmark_peak.py
-#   - Verify examples: python cli/aisp.py bench verify
 #
 
 set -e  # Exit on any error
@@ -589,7 +588,7 @@ status = {
     "transformer_engine": {"ok": False, "error": ""},
 }
 
-def torchao_fp8_smoke():
+def torchao_fp8_check():
     try:
         from torchao.float8 import Float8LinearConfig, convert_to_float8_training
     except Exception as exc:
@@ -605,7 +604,7 @@ def torchao_fp8_smoke():
     except Exception as exc:
         return False, str(exc)
 
-def te_fp8_smoke():
+def te_fp8_check():
     try:
         import transformer_engine.pytorch as te
     except Exception as exc:
@@ -624,16 +623,16 @@ def te_fp8_smoke():
     except Exception as exc:
         return False, str(exc)
 
-status["torchao"]["ok"], status["torchao"]["error"] = torchao_fp8_smoke()
-status["transformer_engine"]["ok"], status["transformer_engine"]["error"] = te_fp8_smoke()
+status["torchao"]["ok"], status["torchao"]["error"] = torchao_fp8_check()
+status["transformer_engine"]["ok"], status["transformer_engine"]["error"] = te_fp8_check()
 
 for name, result in status.items():
     if result["ok"] is True:
-        print(f"[setup] ✓ {name} FP8 smoke test passed")
+        print(f"[setup] ✓ {name} FP8 runtime check passed")
     elif result["ok"] is None:
-        print(f"[setup] ⚠ {name} FP8 smoke test skipped: {result['error']}")
+        print(f"[setup] ⚠ {name} FP8 runtime check skipped: {result['error']}")
     else:
-        print(f"[setup] ERROR: {name} FP8 smoke test failed: {result['error']}")
+        print(f"[setup] ERROR: {name} FP8 runtime check failed: {result['error']}")
 
 if not all(entry["ok"] or entry["ok"] is None for entry in status.values()):
     raise SystemExit(1)
@@ -1883,12 +1882,12 @@ fi
 echo "✓ PyTorch CUDA verified after Transformer Engine"
 
 echo ""
-echo "Running FP8 runtime smoke tests (torchao + Transformer Engine)..."
+echo "Running FP8 runtime checks (torchao + Transformer Engine)..."
 if ! verify_fp8_functionality; then
-    echo "ERROR: FP8 runtime smoke tests failed"
+    echo "ERROR: FP8 runtime checks failed"
     exit 1
 fi
-echo "✓ FP8 runtime smoke tests passed"
+echo "✓ FP8 runtime checks passed"
 
 # Snapshot Transformer Engine capability (NVFP4 / MXFP8) after installation
 echo ""

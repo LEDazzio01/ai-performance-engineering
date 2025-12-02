@@ -1,45 +1,32 @@
-# Chapter 2 Makefile (includes Blackwell and Grace-Blackwell NVLink demos)
+# Chapter 2 Makefile - Memory Transfer and NVLink demos
+# Auto-builds all *.cu files
 
 include ../core/common/cuda_arch.mk
 
 NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas -O3
-NVCC_DEBUG_FLAGS = $(NVCC_FLAGS) -G
 SUFFIX = $(TARGET_SUFFIX)
 
-BASE_TARGETS = baseline_memory_transfer optimized_memory_transfer_zero_copy optimized_memory_transfer_nvlink cpu_gpu_grace_blackwell_coherency
-TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+# Auto-detect all .cu files and derive targets
+CUDA_SOURCES := $(wildcard *.cu)
+BASE_TARGETS := $(CUDA_SOURCES:.cu=)
+TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean compare profile-hta profile-perf profile-all b200 gb10 b300 gb300 debug $(TARGETS)
+.PHONY: all clean compare profile-hta profile-perf profile-all b200 gb10 b300 gb300
 
 all: $(TARGETS)
 	@echo "Building Chapter 2 targets with $(ARCH) (CUDA $(CUDA_VERSION))"
 	@echo "✓ Targeting $(ARCH_NAME)"
+	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
-baseline_memory_transfer$(SUFFIX): baseline_memory_transfer.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
-
-optimized_memory_transfer_zero_copy$(SUFFIX): optimized_memory_transfer_zero_copy.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
-
-optimized_memory_transfer_nvlink$(SUFFIX): optimized_memory_transfer_nvlink.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $<
-
-cpu_gpu_grace_blackwell_coherency$(SUFFIX): cpu_gpu_grace_blackwell_coherency.cu
+# Default pattern rule
+%$(SUFFIX): %.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
 compare: clean
-	@echo "========================================"
-	@echo "Building Chapter 2 for both architectures..."
-	@echo "========================================"
 	@for arch in $(ARCH_LIST); do \
-		echo ""; \
 		echo ">>> Building $${arch}..."; \
 		$(MAKE) ARCH=$${arch} all; \
 	done
-	@echo ""
-	@echo "Run binaries:"
-	@echo "  ./optimized_memory_transfer_nvlink_sm100"
-	@echo "  ./optimized_memory_transfer_nvlink_sm121"
 
 b200: ARCH=sm_100
 b200: clean all
@@ -54,47 +41,13 @@ gb300: ARCH=sm_103
 gb300: clean all
 
 profile-hta: all
-	@echo "HTA (Holistic Tracing Analysis) profiling..."
-	@for exe in $(TARGETS); do \
-		if [ -x "$$exe" ]; then \
-			echo "Profiling $$exe..."; \
-			nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl \
-				-o hta_profile_$${exe}_$(ARCH) ./$$exe 2>/dev/null || \
-				echo "HTA profiling failed for $$exe"; \
-		fi; \
-	done
+	@for exe in $(TARGETS); do nsys profile --force-overwrite=true -t cuda,nvtx -o hta_$$exe ./$$exe 2>/dev/null || true; done
 
 profile-perf: all
-	@echo "Perf system-level profiling..."
-	@for exe in $(TARGETS); do \
-		if [ -x "$$exe" ]; then \
-			echo "Profiling $$exe with perf..."; \
-			perf record -g -o perf.data_$(ARCH)_$$exe ./$$exe 2>/dev/null || \
-				echo "perf failed for $$exe"; \
-			perf report -i perf.data_$(ARCH)_$$exe 2>/dev/null || true; \
-		fi; \
-	done
+	@for exe in $(TARGETS); do perf record -g -o perf_$$exe ./$$exe || true; done
 
-profile-all: all
-	@echo "Comprehensive profiling with all tools..."
-	@for exe in $(TARGETS); do \
-		if [ -x "$$exe" ]; then \
-			echo "1. Nsight Systems timeline (HTA)..."; \
-			nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl \
-				-o comprehensive_hta_$$exe_$(ARCH) ./$$exe 2>/dev/null || true; \
-			echo "2. Perf system-level analysis..."; \
-			perf record -g -o perf.data_$(ARCH)_$$exe ./$$exe 2>/dev/null || true; \
-			perf report -i perf.data_$(ARCH)_$$exe 2>/dev/null || true; \
-		fi; \
-	done
+profile-all: profile-hta profile-perf
 
 clean:
-	rm -f optimized_memory_transfer_nvlink_sm100 optimized_memory_transfer_nvlink_sm121
-	rm -f cpu_gpu_grace_blackwell_coherency_sm100 cpu_gpu_grace_blackwell_coherency_sm121
-	rm -f cpu_gpu_zero_copy_coherent_sm100 cpu_gpu_zero_copy_coherent_sm121
-	rm -f *.o *.so *.a
-	rm -f nsys_profile_* hta_profile_* perf.data_* comprehensive_*
-debug:
-	@echo "Building Chapter 2 debug targets with lineinfo and -G"
-	$(NVCC) $(NVCC_DEBUG_FLAGS) -o optimized_memory_transfer_nvlink_debug optimized_memory_transfer_nvlink.cu
-	$(NVCC) $(NVCC_DEBUG_FLAGS) -o cpu_gpu_grace_blackwell_coherency_debug cpu_gpu_grace_blackwell_coherency.cu
+	rm -f *_sm100 *_sm103 *_sm120 *_sm121 *_sm122 *_sm123 *.o *.so *.a
+	rm -f nsys_* ncu_* hta_* perf_* comprehensive_*

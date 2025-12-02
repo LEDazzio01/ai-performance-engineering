@@ -15,29 +15,47 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 
 import os
 import time
-def run_quick_bandwidth_smoke() -> float:
-    """Ultra-light smoke: single GPU tensor add and sync."""
-    device = torch.device("cuda:0")
-    a = torch.randn(1024, device=device)
-    b = torch.randn(1024, device=device)
-    torch.cuda.synchronize()
-    start = time.time()
-    for _ in range(5):
-        _ = a + b
-    torch.cuda.synchronize()
-    elapsed = (time.time() - start) / 5
-    return elapsed * 1000.0  # ms
+from typing import Optional
+
+
+def measure_peer_bandwidth(size_mb: int = 256, iterations: int = 50, async_copy: bool = False) -> float:
+    """
+    Measure GPU-to-GPU bandwidth by copying a large tensor between two devices.
+    """
+    if torch.cuda.device_count() < 2:
+        raise RuntimeError("SKIPPED: bandwidth benchmark suite requires >=2 GPUs")
+    bytes_per_iter = size_mb * 1024 * 1024
+    numel = bytes_per_iter // 4  # float32
+    src = torch.randn(numel, device="cuda:0")
+    dst = torch.empty_like(src, device="cuda:1")
+    stream = torch.cuda.Stream(device="cuda:1") if async_copy else None
+
+    torch.cuda.synchronize("cuda:0")
+    torch.cuda.synchronize("cuda:1")
+    start = time.perf_counter()
+    for _ in range(iterations):
+        if stream is not None:
+            with torch.cuda.stream(stream):
+                dst.copy_(src, non_blocking=True)
+        else:
+            dst.copy_(src, non_blocking=False)
+    if stream is not None:
+        stream.synchronize()
+    torch.cuda.synchronize("cuda:0")
+    torch.cuda.synchronize("cuda:1")
+    elapsed = (time.perf_counter() - start) / iterations
+    gb_per_iter = bytes_per_iter / 1e9
+    return gb_per_iter / elapsed
 
 
 class BandwidthSuiteMultiGPU(BaseBenchmark):
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: bandwidth benchmark suite requires >=2 GPUs")
-        if int(os.environ.get("WORLD_SIZE", "1")) > 1:
-            raise RuntimeError("SKIPPED: bandwidth smoke runs single-process; launch with --launch-via python")
+        self.last_bandwidth_gbps: Optional[float] = None
 
     def benchmark_fn(self) -> None:
-        run_quick_bandwidth_smoke()
+        self.last_bandwidth_gbps = measure_peer_bandwidth()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -48,13 +66,8 @@ class BandwidthSuiteMultiGPU(BaseBenchmark):
 
 
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_memory_transfer_metrics
-        return compute_memory_transfer_metrics(
-            bytes_transferred=self._bytes_transferred if hasattr(self, '_bytes_transferred') else float(getattr(self, 'N', 1024) * 4),
-            elapsed_ms=getattr(self, '_last_elapsed_ms', 1.0),
-            transfer_type="hbm",
-        )
+        """Return measured P2P bandwidth."""
+        return {"p2p_bandwidth_gbps": float(self.last_bandwidth_gbps or 0.0)}
 
 def get_benchmark() -> BaseBenchmark:
     return BandwidthSuiteMultiGPU()

@@ -16,13 +16,13 @@
         "baseline_throughput.requests_per_s": 20.27775003796122,
         "baseline_throughput.samples_per_s": 2595.552004859036,
         "baseline_time_ms": 49.92940902709961,
-        "best_optimized_p75_ms": 2.0604159832000732,
-        "best_optimized_speedup": 32.488996788247135,
-        "best_optimized_throughput.latency_ms": 2.0604159832000732,
-        "best_optimized_throughput.requests_per_s": 485.33888697896816,
-        "best_optimized_throughput.samples_per_s": 62123.377533307925,
-        "best_optimized_time_ms": 2.0604159832000732,
-        "best_speedup": 32.488996788247135
+        "best_optimized_p75_ms": 0.19446399807929993,
+        "best_optimized_speedup": 5223.1106027175865,
+        "best_optimized_throughput.latency_ms": 0.19446399807929993,
+        "best_optimized_throughput.requests_per_s": 5142.340021170463,
+        "best_optimized_throughput.samples_per_s": 658219.5227098193,
+        "best_optimized_time_ms": 0.19446399807929993,
+        "best_speedup": 5223.1106027175865
       },
       "type": "python"
     }

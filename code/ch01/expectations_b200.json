@@ -11,9 +11,9 @@
         "updated_at": "2025-11-30T23:03:24.535375"
       },
       "metrics": {
-        "baseline_p75_ms": 0.698,
-        "baseline_p90_ms": 0.698,
-        "baseline_time_ms": 0.6983333333333333,
+        "baseline_p75_ms": 0.334,
+        "baseline_p90_ms": 0.334,
+        "baseline_time_ms": 0.336,
         "best_optimized_p75_ms": 0.01,
         "best_optimized_p90_ms": 0.01,
         "best_optimized_speedup": 69.83333333333333,

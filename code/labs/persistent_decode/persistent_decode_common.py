@@ -31,7 +31,6 @@ class DecodeProfile:
 class DecodeOptions:
     tier: str = "medium"  # small | medium | large
     quantization: str = "fp32"  # fp32 | fp16 | int4
-    quick: bool = False
     block_k: Optional[int] = None
     num_programs: Optional[int] = None
 

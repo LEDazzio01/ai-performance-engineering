@@ -224,9 +224,7 @@ __global__ void stream_ordered_memory_example() {
     // Example of stream-ordered memory allocation
     // This is a placeholder for actual implementation
     // See ch11/stream_ordered_allocator.cu for a full cudaMallocAsync demo.
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    (void)tid;  // Suppress unused variable warning
-    // Your kernel code here
+    // Kernel placeholder - no computation needed for this demo
 }
 
 #if CUDART_VERSION >= 13000

@@ -9,7 +9,7 @@ This script:
 5. Identifies benchmarks that need fixing
 
 Usage:
-    python core/harness/run_all_benchmarks_with_metrics.py [--targets chX chY:example]
+    python core/harness/run_benchmarks_with_metrics.py [--targets chX chY:example]
 """
 
 import sys
@@ -31,7 +31,7 @@ from core.env import apply_env_defaults, dump_environment_and_capabilities
 apply_env_defaults()
 
 import torch
-from core.harness.run_all_benchmarks import (
+from core.harness.run_benchmarks import (
     discover_benchmarks, discover_cuda_benchmarks,
     load_benchmark, BenchmarkHarness, BenchmarkMode, BenchmarkConfig,
     profile_python_benchmark, profile_cuda_executable,
@@ -39,7 +39,7 @@ from core.harness.run_all_benchmarks import (
     ensure_cuda_executables_built, reset_cuda_state,
     format_time_ms
 )
-from core.verification.verify_all_benchmarks import chapter_slug, resolve_target_chapters
+from core.discovery import chapter_slug, resolve_target_chapters
 
 
 @dataclass

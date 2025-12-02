@@ -13,7 +13,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from labs.moe_parallelism.benchmarking import PlanBenchmark, run_benchmark  # noqa: E402
 from labs.moe_parallelism.moe_env_presets import (  # noqa: E402
-    DEFAULT_SMOKE_TEST,
     DEFAULT_VALIDATION,
     EnvPreset,
     estimate_collective,
@@ -84,7 +83,6 @@ def _baseline_presets() -> Dict[str, EnvPreset]:
             "No CUDA graph capture or high-priority NCCL streams, so decode sees extra launch jitter.",
         ],
         validation=DEFAULT_VALIDATION,
-        smoke_test=DEFAULT_SMOKE_TEST,
     )
 
     nvl72_env = EnvPreset(
@@ -119,7 +117,6 @@ def _baseline_presets() -> Dict[str, EnvPreset]:
             "Keeps graph capture off, so router/expert bursts repeatedly negotiate streams.",
         ],
         validation=DEFAULT_VALIDATION,
-        smoke_test=DEFAULT_SMOKE_TEST,
     )
     return {"nvlink": nvlink_env, "nvl72": nvl72_env}
 
@@ -158,11 +155,11 @@ def _build_arg_parser(default_fabric: str = "nvlink") -> argparse.ArgumentParser
         help="Fabric to model: nvlink (single node) or nvl72 (multi-node InfiniBand).",
     )
     parser.add_argument("--ngpu", type=int, help="Number of GPUs to use in validation commands.")
-    parser.add_argument("--model", dest="model_path", default=None, help="Model path for the smoke test.")
-    parser.add_argument("--tp", type=int, help="Tensor parallel degree for the smoke test.")
-    parser.add_argument("--pp", type=int, help="Pipeline parallel degree for the smoke test.")
-    parser.add_argument("--max-len", type=int, dest="max_len", help="Max sequence length for the smoke test.")
-    parser.add_argument("--max-seqs", type=int, dest="max_seqs", help="Max concurrent sequences for the smoke test.")
+    parser.add_argument("--model", dest="model_path", default=None, help="Model path for validation.")
+    parser.add_argument("--tp", type=int, help="Tensor parallel degree for validation commands.")
+    parser.add_argument("--pp", type=int, help="Pipeline parallel degree for validation commands.")
+    parser.add_argument("--max-len", type=int, dest="max_len", help="Max sequence length for validation commands.")
+    parser.add_argument("--max-seqs", type=int, dest="max_seqs", help="Max concurrent sequences for validation commands.")
     parser.add_argument("--gpu-util", type=float, dest="gpu_util", help="GPU memory utilization target for vLLM.")
     return parser
 

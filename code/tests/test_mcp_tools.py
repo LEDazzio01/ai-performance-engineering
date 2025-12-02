@@ -60,7 +60,6 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_benchmark_targets",
         "aisp_list_chapters",
         "aisp_run_benchmarks",
-        "aisp_verify_benchmarks",
         "aisp_benchmark_report",
         "aisp_benchmark_export",
         "aisp_benchmark_compare_runs",
@@ -157,7 +156,6 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
 SLOW_TOOLS = {
     "aisp_gpu_bandwidth",
     "aisp_run_benchmarks",
-    "aisp_verify_benchmarks",
     "aisp_profile_nsys",
     "aisp_profile_ncu",
     "aisp_profile_torch",
@@ -179,7 +177,7 @@ SLOW_TOOLS = {
     "aisp_hw_p2p",
 }
 
-BENCHMARK_SLOW_TOOLS = {"aisp_run_benchmarks", "aisp_verify_benchmarks"}
+BENCHMARK_SLOW_TOOLS = {"aisp_run_benchmarks"}
 
 TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
     "aisp_run_benchmarks": {
@@ -187,7 +185,6 @@ TOOL_PARAMS: Dict[str, Dict[str, Any]] = {
         "profile": "minimal",
         "llm_analysis": False,
     },
-    "aisp_verify_benchmarks": {"targets": ["ch10:atomic"]},
     "aisp_benchmark_report": {
         "data_file": str(BENCH_FILE),
         "output": str(REPORT_OUTPUT),

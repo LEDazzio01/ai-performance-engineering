@@ -86,6 +86,20 @@ class GPUMetrics:
     encoder_util: float  # percent
     decoder_util: float  # percent
     nvlink_errors: int = 0  # total error count
+    # Extended metrics for deep profiling
+    pcie_replay_counter: int = 0  # PCIe link quality indicator
+    xid_errors: int = 0  # GPU XID error events
+    retired_pages_sbe: int = 0  # Single-bit ECC retired pages
+    retired_pages_dbe: int = 0  # Double-bit ECC retired pages
+    sm_active: float = 0.0  # SM activity percentage (profiling)
+    sm_occupancy: float = 0.0  # SM occupancy percentage (profiling)
+    tensor_active: float = 0.0  # Tensor core activity percentage
+    dram_active: float = 0.0  # DRAM/HBM activity percentage
+    fp64_active: float = 0.0  # FP64 pipe activity
+    fp32_active: float = 0.0  # FP32 pipe activity
+    fp16_active: float = 0.0  # FP16 pipe activity
+    pcie_gen: int = 0  # PCIe generation (4, 5, etc.)
+    pcie_width: int = 0  # PCIe link width (x16, etc.)
 
 
 class DCGMPrometheusExporter:
@@ -208,6 +222,100 @@ class DCGMPrometheusExporter:
             ['gpu', 'hostname']
         )
         
+        # =================================================================
+        # Extended Profiling Metrics (DCGM Profiling Fields)
+        # =================================================================
+        
+        # PCIe health metrics
+        self.pcie_replay_counter = Counter(
+            'dcgm_pcie_replay_total',
+            'Total PCIe replay events (link quality indicator)',
+            ['gpu', 'hostname']
+        )
+        
+        self.pcie_gen = Gauge(
+            'dcgm_pcie_generation',
+            'PCIe generation (4, 5, etc.)',
+            ['gpu', 'hostname']
+        )
+        
+        self.pcie_width = Gauge(
+            'dcgm_pcie_link_width',
+            'PCIe link width (16 for x16)',
+            ['gpu', 'hostname']
+        )
+        
+        # Error tracking
+        self.xid_errors = Counter(
+            'dcgm_xid_errors_total',
+            'Total GPU XID error events',
+            ['gpu', 'hostname', 'xid_code']
+        )
+        
+        self.retired_pages_sbe = Gauge(
+            'dcgm_retired_pages_sbe',
+            'Retired pages due to single-bit ECC errors',
+            ['gpu', 'hostname']
+        )
+        
+        self.retired_pages_dbe = Gauge(
+            'dcgm_retired_pages_dbe',
+            'Retired pages due to double-bit ECC errors',
+            ['gpu', 'hostname']
+        )
+        
+        # SM profiling metrics
+        self.sm_active = Gauge(
+            'dcgm_sm_active_percent',
+            'SM activity percentage',
+            ['gpu', 'hostname']
+        )
+        
+        self.sm_occupancy = Gauge(
+            'dcgm_sm_occupancy_percent',
+            'SM occupancy percentage',
+            ['gpu', 'hostname']
+        )
+        
+        # Pipe utilization metrics
+        self.tensor_active = Gauge(
+            'dcgm_tensor_active_percent',
+            'Tensor core activity percentage',
+            ['gpu', 'hostname']
+        )
+        
+        self.dram_active = Gauge(
+            'dcgm_dram_active_percent',
+            'DRAM/HBM activity percentage',
+            ['gpu', 'hostname']
+        )
+        
+        self.fp64_active = Gauge(
+            'dcgm_fp64_active_percent',
+            'FP64 pipe activity percentage',
+            ['gpu', 'hostname']
+        )
+        
+        self.fp32_active = Gauge(
+            'dcgm_fp32_active_percent',
+            'FP32 pipe activity percentage',
+            ['gpu', 'hostname']
+        )
+        
+        self.fp16_active = Gauge(
+            'dcgm_fp16_active_percent',
+            'FP16 pipe activity percentage',
+            ['gpu', 'hostname']
+        )
+        
+        # Throughput histogram for latency analysis
+        self.kernel_duration = Histogram(
+            'dcgm_kernel_duration_seconds',
+            'Histogram of kernel execution durations',
+            ['gpu', 'hostname'],
+            buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0)
+        )
+        
         # System info
         self.gpu_info = Info(
             'dcgm_gpu_info',
@@ -223,6 +331,7 @@ class DCGMPrometheusExporter:
                 groupId=dcgm_structs.DCGM_GROUP_ALL_GPUS
             )
 
+            # Core metrics
             field_mapping = {
                 'gpu_util': dcgm_fields.DCGM_FI_DEV_GPU_UTIL,
                 'mem_copy': dcgm_fields.DCGM_FI_DEV_MEM_COPY_UTIL,
@@ -235,6 +344,37 @@ class DCGMPrometheusExporter:
                 'nvlink_total': dcgm_fields.DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL,
                 'nvlink_errors': dcgm_fields.DCGM_FI_DEV_GPU_NVLINK_ERRORS,
             }
+            
+            # Extended metrics - PCIe health and errors
+            extended_fields = {
+                'pcie_replay': getattr(dcgm_fields, 'DCGM_FI_DEV_PCIE_REPLAY_COUNTER', None),
+                'xid_errors': getattr(dcgm_fields, 'DCGM_FI_DEV_XID_ERRORS', None),
+                'retired_sbe': getattr(dcgm_fields, 'DCGM_FI_DEV_RETIRED_SBE', None),
+                'retired_dbe': getattr(dcgm_fields, 'DCGM_FI_DEV_RETIRED_DBE', None),
+                'pcie_gen': getattr(dcgm_fields, 'DCGM_FI_DEV_PCIE_LINK_GEN', None),
+                'pcie_width': getattr(dcgm_fields, 'DCGM_FI_DEV_PCIE_LINK_WIDTH', None),
+            }
+            
+            # Profiling metrics (DCGM_FI_PROF_* fields) - require profiling mode
+            profiling_fields = {
+                'sm_active': getattr(dcgm_fields, 'DCGM_FI_PROF_SM_ACTIVE', None),
+                'sm_occupancy': getattr(dcgm_fields, 'DCGM_FI_PROF_SM_OCCUPANCY', None),
+                'tensor_active': getattr(dcgm_fields, 'DCGM_FI_PROF_PIPE_TENSOR_ACTIVE', None),
+                'dram_active': getattr(dcgm_fields, 'DCGM_FI_PROF_DRAM_ACTIVE', None),
+                'fp64_active': getattr(dcgm_fields, 'DCGM_FI_PROF_PIPE_FP64_ACTIVE', None),
+                'fp32_active': getattr(dcgm_fields, 'DCGM_FI_PROF_PIPE_FP32_ACTIVE', None),
+                'fp16_active': getattr(dcgm_fields, 'DCGM_FI_PROF_PIPE_FP16_ACTIVE', None),
+            }
+            
+            # Merge all available fields
+            for name, field_id in extended_fields.items():
+                if field_id is not None:
+                    field_mapping[name] = field_id
+            
+            for name, field_id in profiling_fields.items():
+                if field_id is not None:
+                    field_mapping[name] = field_id
+            
             self.dcgm_field_ids = field_mapping
 
             self.dcgm_field_group = pydcgm.DcgmFieldGroup(
@@ -347,6 +487,23 @@ class DCGMPrometheusExporter:
                 except Exception:
                     pcie_tx = pcie_rx = 0
 
+            # Extract extended metrics
+            pcie_replay = int(self._extract_field(field_series, 'pcie_replay', 0.0))
+            xid_errors = int(self._extract_field(field_series, 'xid_errors', 0.0))
+            retired_sbe = int(self._extract_field(field_series, 'retired_sbe', 0.0))
+            retired_dbe = int(self._extract_field(field_series, 'retired_dbe', 0.0))
+            pcie_gen = int(self._extract_field(field_series, 'pcie_gen', 0.0))
+            pcie_width = int(self._extract_field(field_series, 'pcie_width', 0.0))
+            
+            # Extract profiling metrics
+            sm_active = self._extract_field(field_series, 'sm_active', 0.0)
+            sm_occupancy = self._extract_field(field_series, 'sm_occupancy', 0.0)
+            tensor_active = self._extract_field(field_series, 'tensor_active', 0.0)
+            dram_active = self._extract_field(field_series, 'dram_active', 0.0)
+            fp64_active = self._extract_field(field_series, 'fp64_active', 0.0)
+            fp32_active = self._extract_field(field_series, 'fp32_active', 0.0)
+            fp16_active = self._extract_field(field_series, 'fp16_active', 0.0)
+
             metrics.append(GPUMetrics(
                 gpu_id=gpu_id,
                 gpu_util=gpu_util,
@@ -363,7 +520,21 @@ class DCGMPrometheusExporter:
                 memory_clock=memory_clock,
                 encoder_util=0.0,
                 decoder_util=0.0,
-                nvlink_errors=nvlink_errors
+                nvlink_errors=nvlink_errors,
+                # Extended metrics
+                pcie_replay_counter=pcie_replay,
+                xid_errors=xid_errors,
+                retired_pages_sbe=retired_sbe,
+                retired_pages_dbe=retired_dbe,
+                sm_active=sm_active,
+                sm_occupancy=sm_occupancy,
+                tensor_active=tensor_active,
+                dram_active=dram_active,
+                fp64_active=fp64_active,
+                fp32_active=fp32_active,
+                fp16_active=fp16_active,
+                pcie_gen=pcie_gen,
+                pcie_width=pcie_width,
             ))
 
         return metrics
@@ -537,6 +708,34 @@ class DCGMPrometheusExporter:
             if m.encoder_util > 0:
                 self.encoder_utilization.labels(gpu=gpu_label, hostname=self.hostname).set(m.encoder_util)
                 self.decoder_utilization.labels(gpu=gpu_label, hostname=self.hostname).set(m.decoder_util)
+            
+            # Extended metrics - PCIe health
+            if m.pcie_gen > 0:
+                self.pcie_gen.labels(gpu=gpu_label, hostname=self.hostname).set(m.pcie_gen)
+            if m.pcie_width > 0:
+                self.pcie_width.labels(gpu=gpu_label, hostname=self.hostname).set(m.pcie_width)
+            
+            # Error tracking (counters - track deltas)
+            if m.retired_pages_sbe > 0:
+                self.retired_pages_sbe.labels(gpu=gpu_label, hostname=self.hostname).set(m.retired_pages_sbe)
+            if m.retired_pages_dbe > 0:
+                self.retired_pages_dbe.labels(gpu=gpu_label, hostname=self.hostname).set(m.retired_pages_dbe)
+            
+            # Profiling metrics - SM and pipe utilization
+            if m.sm_active > 0:
+                self.sm_active.labels(gpu=gpu_label, hostname=self.hostname).set(m.sm_active)
+            if m.sm_occupancy > 0:
+                self.sm_occupancy.labels(gpu=gpu_label, hostname=self.hostname).set(m.sm_occupancy)
+            if m.tensor_active > 0:
+                self.tensor_active.labels(gpu=gpu_label, hostname=self.hostname).set(m.tensor_active)
+            if m.dram_active > 0:
+                self.dram_active.labels(gpu=gpu_label, hostname=self.hostname).set(m.dram_active)
+            if m.fp64_active > 0:
+                self.fp64_active.labels(gpu=gpu_label, hostname=self.hostname).set(m.fp64_active)
+            if m.fp32_active > 0:
+                self.fp32_active.labels(gpu=gpu_label, hostname=self.hostname).set(m.fp32_active)
+            if m.fp16_active > 0:
+                self.fp16_active.labels(gpu=gpu_label, hostname=self.hostname).set(m.fp16_active)
 
             if NVML_AVAILABLE:
                 try:

@@ -884,8 +884,8 @@ def measure_torch_compile_speedup(
         raise RuntimeError(f"torch.compile speedup measurement failed: {e}") from e
 
 
-def run_all_benchmarks(output_dir: Path = None) -> dict:
-    """Run all peak performance benchmarks."""
+def run_peak_benchmarks(output_dir: Path = None) -> dict:
+    """Run peak performance benchmarks."""
     if output_dir is None:
         output_dir = Path.cwd()
 
@@ -1047,7 +1047,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        results = run_all_benchmarks(output_dir)
+        results = run_peak_benchmarks(output_dir)
         if "error" in results and results["error"] == "CUDA not available":
             sys.exit(1)
     except KeyboardInterrupt:

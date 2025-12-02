@@ -174,7 +174,7 @@ class NvshmemIbgdaMicrobench(CudaBinaryBenchmark):
 
         self._parsed_metrics = self._parse_metrics(completed.stdout)
         if self.world_size <= 1 and not self._parsed_metrics:
-            # Single-PE smoke test: no metrics emitted.
+            # Single-PE dry run: no metrics emitted.
             self._parsed_metrics = {"single_pe": 1.0}
         self._parsed_metrics["elapsed_ms"] = elapsed_ms
         return BinaryRunResult(time_ms=elapsed_ms, raw_stdout=completed.stdout, raw_stderr=completed.stderr)

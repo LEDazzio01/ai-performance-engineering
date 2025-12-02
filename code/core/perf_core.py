@@ -1,9 +1,24 @@
 """
-Shared PerformanceCore facade used by CLI, MCP, and libraries.
+Shared PerformanceCore facade used internally by the engine layer.
 
-This wraps the dashboard's PerformanceCore without starting an HTTP server,
-so other layers can reuse the business logic without subclassing an HTTP
-handler or duplicating GPU/system collection.
+This wraps PerformanceCoreBase without starting an HTTP server,
+providing low-level access to GPU/system collection and profiling artifacts.
+
+IMPORTANT: For most use cases, prefer the unified engine API:
+
+    from core.engine import get_engine
+    
+    engine = get_engine()
+    engine.gpu.info()          # Instead of get_core().get_gpu_info()
+    engine.analyze.bottlenecks()  # Clean domain-organized API
+    engine.optimize.recommend()
+
+The engine provides a clean 10-domain API (gpu, system, profile, analyze,
+optimize, distributed, inference, benchmark, ai, export) that is consistent
+across CLI, MCP, and Dashboard interfaces.
+
+This module is primarily for internal use by engine.py and advanced users
+who need direct access to the underlying PerformanceCoreBase methods.
 """
 
 from __future__ import annotations

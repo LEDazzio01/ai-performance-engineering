@@ -92,13 +92,13 @@ def _resolve_physical_gpu_index(logical_index: int) -> int:
 
 
 def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optional[float]]:
-    """Return a snapshot of GPU telemetry (temperature, power, utilization).
+    """Return a snapshot of GPU telemetry (temperature, power, utilization, errors).
 
     Args:
         device_index: Logical CUDA device index. Defaults to the current device.
 
     Returns:
-        Dict with temperature/power/utilization data (values may be None when unavailable).
+        Dict with temperature/power/utilization/error data (values may be None when unavailable).
     """
     metrics: Dict[str, Optional[float]] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -117,6 +117,20 @@ def query_gpu_telemetry(device_index: Optional[int] = None) -> Dict[str, Optiona
         "nvlink_rx_bytes_total": None,
         "nvlink_link_count": None,
         "nvlink_status": "unknown",
+        # ECC and error metrics
+        "ecc_errors_corrected": None,
+        "ecc_errors_uncorrected": None,
+        "retired_pages_sbe": None,
+        "retired_pages_dbe": None,
+        # PCIe metrics
+        "pcie_tx_bytes": None,
+        "pcie_rx_bytes": None,
+        "pcie_replay_counter": None,
+        "pcie_generation": None,
+        "pcie_link_width": None,
+        # Performance state
+        "performance_state": None,
+        "throttle_reasons": None,
     }
 
     if not torch.cuda.is_available():
@@ -192,6 +206,46 @@ def _query_via_nvml(logical_index: int) -> Optional[Dict[str, Optional[float]]]:
         "nvlink_tx_bytes_total": None,
         "nvlink_rx_bytes_total": None,
     }
+    
+    # ECC error metrics
+    ecc_corrected = safe(lambda: pynvml.nvmlDeviceGetTotalEccErrors(  # type: ignore[attr-defined]
+        handle, pynvml.NVML_MEMORY_ERROR_TYPE_CORRECTED, pynvml.NVML_VOLATILE_ECC))  # type: ignore[attr-defined]
+    ecc_uncorrected = safe(lambda: pynvml.nvmlDeviceGetTotalEccErrors(  # type: ignore[attr-defined]
+        handle, pynvml.NVML_MEMORY_ERROR_TYPE_UNCORRECTED, pynvml.NVML_VOLATILE_ECC))  # type: ignore[attr-defined]
+    metrics["ecc_errors_corrected"] = float(ecc_corrected) if ecc_corrected is not None else None
+    metrics["ecc_errors_uncorrected"] = float(ecc_uncorrected) if ecc_uncorrected is not None else None
+    
+    # Retired pages
+    retired_sbe = safe(lambda: pynvml.nvmlDeviceGetRetiredPages(  # type: ignore[attr-defined]
+        handle, pynvml.NVML_PAGE_RETIREMENT_CAUSE_MULTIPLE_SINGLE_BIT_ECC_ERRORS))  # type: ignore[attr-defined]
+    retired_dbe = safe(lambda: pynvml.nvmlDeviceGetRetiredPages(  # type: ignore[attr-defined]
+        handle, pynvml.NVML_PAGE_RETIREMENT_CAUSE_DOUBLE_BIT_ECC_ERROR))  # type: ignore[attr-defined]
+    metrics["retired_pages_sbe"] = float(len(retired_sbe)) if retired_sbe is not None else None
+    metrics["retired_pages_dbe"] = float(len(retired_dbe)) if retired_dbe is not None else None
+    
+    # PCIe metrics
+    pcie_tx = safe(lambda: pynvml.nvmlDeviceGetPcieThroughput(handle, pynvml.NVML_PCIE_UTIL_TX_BYTES))  # type: ignore[attr-defined]
+    pcie_rx = safe(lambda: pynvml.nvmlDeviceGetPcieThroughput(handle, pynvml.NVML_PCIE_UTIL_RX_BYTES))  # type: ignore[attr-defined]
+    metrics["pcie_tx_bytes"] = float(pcie_tx * 1024) if pcie_tx is not None else None  # KB/s to bytes/s
+    metrics["pcie_rx_bytes"] = float(pcie_rx * 1024) if pcie_rx is not None else None
+    
+    # PCIe link info
+    pcie_gen = safe(lambda: pynvml.nvmlDeviceGetCurrPcieLinkGeneration(handle))  # type: ignore[attr-defined]
+    pcie_width = safe(lambda: pynvml.nvmlDeviceGetCurrPcieLinkWidth(handle))  # type: ignore[attr-defined]
+    metrics["pcie_generation"] = float(pcie_gen) if pcie_gen is not None else None
+    metrics["pcie_link_width"] = float(pcie_width) if pcie_width is not None else None
+    
+    # PCIe replay counter (link quality indicator)
+    pcie_replay = safe(lambda: pynvml.nvmlDeviceGetPcieReplayCounter(handle))  # type: ignore[attr-defined]
+    metrics["pcie_replay_counter"] = float(pcie_replay) if pcie_replay is not None else None
+    
+    # Performance state
+    pstate = safe(lambda: pynvml.nvmlDeviceGetPerformanceState(handle))  # type: ignore[attr-defined]
+    metrics["performance_state"] = float(pstate) if pstate is not None else None
+    
+    # Throttle reasons (bitmask)
+    throttle = safe(lambda: pynvml.nvmlDeviceGetCurrentClocksThrottleReasons(handle))  # type: ignore[attr-defined]
+    metrics["throttle_reasons"] = float(throttle) if throttle is not None else None
 
     nvlink_totals = _query_nvlink_counters_via_nvml(handle, logical_index)
     if nvlink_totals:
@@ -350,6 +404,52 @@ def format_gpu_telemetry(metrics: Dict[str, Optional[float]]) -> str:
     fan = metrics.get("fan_speed_pct")
     if fan is not None:
         parts.append(f"fan={fan:.0f}%")
+    
+    # PCIe metrics
+    pcie_gen = metrics.get("pcie_generation")
+    pcie_width = metrics.get("pcie_link_width")
+    if pcie_gen is not None and pcie_width is not None:
+        parts.append(f"pcie=Gen{int(pcie_gen)}x{int(pcie_width)}")
+    
+    # Error indicators (only show if non-zero)
+    ecc_corrected = metrics.get("ecc_errors_corrected")
+    if ecc_corrected is not None and ecc_corrected > 0:
+        parts.append(f"ecc_corr={int(ecc_corrected)}")
+    ecc_uncorrected = metrics.get("ecc_errors_uncorrected")
+    if ecc_uncorrected is not None and ecc_uncorrected > 0:
+        parts.append(f"ecc_uncorr={int(ecc_uncorrected)}⚠")
+    
+    # Throttle indicator
+    throttle = metrics.get("throttle_reasons")
+    if throttle is not None and throttle > 0:
+        parts.append(f"throttled⚠")
+    
     if not parts:
         return "GPU telemetry unavailable"
     return ", ".join(parts)
+
+
+def get_throttle_reason_names(throttle_bitmask: int) -> List[str]:
+    """Decode throttle reasons bitmask into human-readable names."""
+    if not _NVML_AVAILABLE or throttle_bitmask == 0:
+        return []
+    
+    reasons = []
+    # NVML throttle reason constants
+    reason_map = {
+        getattr(pynvml, "nvmlClocksThrottleReasonGpuIdle", 0x0000000000000001): "idle",
+        getattr(pynvml, "nvmlClocksThrottleReasonApplicationsClocksSetting", 0x0000000000000002): "app_clocks",
+        getattr(pynvml, "nvmlClocksThrottleReasonSwPowerCap", 0x0000000000000004): "sw_power_cap",
+        getattr(pynvml, "nvmlClocksThrottleReasonHwSlowdown", 0x0000000000000008): "hw_slowdown",
+        getattr(pynvml, "nvmlClocksThrottleReasonSyncBoost", 0x0000000000000010): "sync_boost",
+        getattr(pynvml, "nvmlClocksThrottleReasonSwThermalSlowdown", 0x0000000000000020): "sw_thermal",
+        getattr(pynvml, "nvmlClocksThrottleReasonHwThermalSlowdown", 0x0000000000000040): "hw_thermal",
+        getattr(pynvml, "nvmlClocksThrottleReasonHwPowerBrakeSlowdown", 0x0000000000000080): "power_brake",
+        getattr(pynvml, "nvmlClocksThrottleReasonDisplayClockSetting", 0x0000000000000100): "display_clocks",
+    }
+    
+    for mask, name in reason_map.items():
+        if mask and (throttle_bitmask & mask):
+            reasons.append(name)
+    
+    return reasons

@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import warnings
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 # Repository root (…/code)
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -141,6 +141,12 @@ def chapter_slug(chapter_dir: Path, repo_root: Path, bench_root: Optional[Path] 
         return chapter_dir.name
 
 
+def _parse_examples(examples: str) -> List[str]:
+    """Split example payloads like 'a,b c' into distinct names."""
+    tokens = examples.replace(",", " ").split()
+    return [tok.strip() for tok in tokens if tok.strip()]
+
+
 def normalize_chapter_token(
     token: str,
     repo_root: Optional[Path] = None,
@@ -230,7 +236,7 @@ def discover_benchmarks(
     
     Note: This function only discovers Python benchmarks (.py files).
     CUDA benchmarks (.cu files) should be discovered separately via discover_cuda_benchmarks()
-    in core.harness.run_all_benchmarks to avoid trying to load .cu files as Python modules.
+    in core.harness.run_benchmarks to avoid trying to load .cu files as Python modules.
     
     Args:
         chapter_dir: Path to chapter directory (e.g., Path('ch16'))
@@ -355,6 +361,70 @@ def discover_all_chapters(repo_root: Path, bench_roots: Optional[List[Path]] = N
     # Stable, human-friendly ordering
     chapter_dirs.sort(key=lambda p: p.as_posix())
     return chapter_dirs
+
+
+def resolve_target_chapters(
+    targets: Optional[List[str]],
+    bench_root: Optional[Path] = None,
+    repo_root: Optional[Path] = None,
+) -> Tuple[List[Path], Dict[str, Set[str]]]:
+    """
+    Translate CLI target tokens into chapter directories + per-chapter filters.
+
+    Args:
+        targets: List like ["ch07", "ch07:memory_access"] (None/"all" -> every chapter)
+
+    Returns:
+        (chapter_dirs, chapter_filters)
+          chapter_dirs: ordered list of chapter paths to run
+          chapter_filters: map of chapter slug -> set of example names to include
+    """
+    repo_root = Path(repo_root or DEFAULT_REPO_ROOT)
+    chapter_filters: Dict[str, Set[str]] = {}
+
+    roots = [Path(bench_root).resolve()] if bench_root else get_bench_roots(repo_root=repo_root)
+    primary_root = roots[0]
+
+    # Default: run everything
+    if not targets or any(str(t).lower() == "all" for t in targets):
+        return discover_all_chapters(primary_root, bench_roots=roots), chapter_filters
+
+    chapter_dirs: List[Path] = []
+    for raw_target in targets:
+        if not raw_target:
+            continue
+
+        target = str(raw_target).strip()
+        if not target:
+            continue
+
+        chapter_token, sep, examples = target.partition(":")
+        normalized = normalize_chapter_token(chapter_token, repo_root=repo_root, bench_root=primary_root)
+        chapter_dir = Path(normalized)
+        if not chapter_dir.is_absolute():
+            chapter_dir = (primary_root / normalized).resolve()
+        if not chapter_dir.is_dir():
+            raise FileNotFoundError(f"Chapter '{normalized}' not found at {chapter_dir}")
+
+        if chapter_dir not in chapter_dirs:
+            chapter_dirs.append(chapter_dir)
+
+        # Collect per-chapter example filters when provided
+        if sep:
+            slug = chapter_slug(chapter_dir, repo_root, bench_root=primary_root)
+            allowed = {example for _, _, example in discover_benchmarks(chapter_dir)}
+            for example in _parse_examples(examples):
+                if allowed and example not in allowed:
+                    raise ValueError(
+                        f"Example '{example}' not found in {slug}. "
+                        f"Available: {', '.join(sorted(allowed))}"
+                    )
+                chapter_filters.setdefault(slug, set()).add(example)
+
+    if not chapter_dirs:
+        raise ValueError("No valid chapters resolved from targets.")
+
+    return chapter_dirs, chapter_filters
 
 
 def discover_benchmark_pairs(repo_root: Path, chapter: str = "all") -> List[Tuple[Path, List[Path], str]]:

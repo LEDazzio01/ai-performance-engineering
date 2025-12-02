@@ -41,7 +41,7 @@ This repo now defaults to the fastest kernels available on Blackwell/GB200: Flas
 - Target: prefill + decode tokens/sec with flags enabled one by one. Use the built-in sweep to get % gains vs baseline.
 - How to run: `python -m labs.nanochat_fullstack.scripts.bench_b200_flags --batch-size 2 --prompt-len 256 --decode-len 64 --iters 2` (see `labs/nanochat_fullstack/scripts/bench_b200_flags.py`). It reports tokens/sec and % change vs baseline.
 - Web server: `python -m labs.nanochat_fullstack.scripts.chat_web --enable-batch-decode --enable-dynamic-batching --batch-size 4 --batch-timeout-ms 10 ...` and measure end-to-end throughput; toggle `--enable-batch-decode` off to get the baseline.
-- Quick local smoke (NVIDIA B200, `karpathy/nanochat-d32` step 650, bf16 autocast, 8 mixed-length prompts, `max_new_tokens=64`, `temperature=0.0`, `top_k=50`):
+- Quick local run (NVIDIA B200, `karpathy/nanochat-d32` step 650, bf16 autocast, 8 mixed-length prompts, `max_new_tokens=64`, `temperature=0.0`, `top_k=50`):
   - Single-path (`enable_batch_decode` off): 512 new tokens in 8.25s → ~62 tok/s.
   - Batched decode (`enable_batch_decode` on): 512 new tokens in 2.57s → ~199 tok/s (**~3.2x / +220% decode throughput** vs single-path).
   - Reuse-ids buffer: no meaningful uplift in this micro-run (~199 tok/s without reuse vs ~175 tok/s with reuse).
@@ -53,7 +53,7 @@ This repo now defaults to the fastest kernels available on Blackwell/GB200: Flas
 
 ## Sanity checks
 - Engine KV-cache resize test: `PYTHONPATH=labs/nanochat_fullstack python -m pytest tests/test_engine.py -q`.
-- Manual smoke: default (unpadded) forward with loss and padded-attention forward with an attention mask both execute on small random inputs.
+- Manual check: default (unpadded) forward with loss and padded-attention forward with an attention mask both execute on small random inputs.
 - Single-request inference remains the default path unless `--enable-batch-decode` is provided.
 - Training path: unchanged. A quick micro-bench on the d32 checkpoint (B200, bf16 autocast, batch=1, seq=512, 5 train steps with backward) runs at ~3.4K tok/s. No training flags were added; focus here is inference.
 - Training throughput snapshot (d32, B200, bf16 autocast, seq=512, 2 steps per run): flash SDP on, torch.compile off, scaling batch size pushes throughput; fp32 logits slow the fastest configs. Measured tok/s:

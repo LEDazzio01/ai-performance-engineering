@@ -49,20 +49,14 @@ UTILITY_SCRIPTS = {
 from core.analysis.performance_analyzer import PerformanceAnalyzer, load_benchmark_data as load_benchmark_results
 from core.plugins.loader import load_plugin_apps
 
-# Optional capability: bench LLM features (provided by extension)
-try:
-    from core.capabilities import has_capability
-except Exception:
-    def has_capability(name: str) -> bool:
-        return False
-
 # Load plugins (if installed) to allow capability registration
 try:
     load_plugin_apps()
 except Exception:
     pass
 
-LLM_CAPABLE = has_capability("bench.llm") or has_capability("llm")
+# LLM features are always available - everything is in this single package
+LLM_CAPABLE = True
 
 
 def _expand_multi_value_option(option_names: List[str]) -> None:
@@ -97,9 +91,8 @@ _expand_multi_value_option(["--targets", "-t"])
 from core.env import apply_env_defaults, dump_environment_and_capabilities
 from core.utils.logger import setup_logging, get_logger
 from core.benchmark.artifact_manager import ArtifactManager
-from core.verification.verify_all_benchmarks import resolve_target_chapters, run_verification
 from core.profiling import profiler_config as profiler_config_mod
-from core.discovery import chapter_slug, discover_all_chapters
+from core.discovery import chapter_slug, discover_all_chapters, resolve_target_chapters
 
 apply_env_defaults()
 
@@ -202,13 +195,13 @@ except ImportError:
 try:
     import torch  # noqa: F401
     from core.utils.chapter_compare_template import discover_benchmarks
-    from core.harness.run_all_benchmarks import test_chapter, generate_markdown_report
+    from core.harness.run_benchmarks import test_chapter, generate_markdown_report
 
     BENCHMARK_AVAILABLE = True
 except ImportError:
     BENCHMARK_AVAILABLE = False
 
-# Test functions come from run_all_benchmarks; if that import failed above, this is False.
+    # Test functions come from run_benchmarks; if that import failed above, this is False.
 TEST_FUNCTIONS_AVAILABLE = BENCHMARK_AVAILABLE
 
 # Typer app setup
@@ -415,23 +408,7 @@ if TYPER_AVAILABLE:
         dry_run: bool = Option(False, "--dry-run", help="Describe planned execution without running benchmarks."),
     ):
         """Run benchmarks - discover, run, and summarize results."""
-        if not LLM_CAPABLE:
-            llm_requested = any(
-                [
-                    llm_analysis,
-                    force_llm,
-                    llm_provider,
-                    apply_llm_patches,
-                    rebenchmark_llm_patches,
-                    llm_patch_retries != 2,
-                    patch_strategy != "ast",
-                    no_llm_cache,
-                    llm_explain,
-                ]
-            )
-            if llm_requested:
-                typer.echo("LLM analysis and auto-patching are available only via the aisp extension package.", err=True)
-                raise typer.Exit(code=1)
+        # LLM features are always available - no capability check needed
 
         active_bench_root = Path(bench_root).resolve() if bench_root else repo_root
 
@@ -505,30 +482,6 @@ if TYPER_AVAILABLE:
             use_llm_cache=not no_llm_cache,
             llm_explain=llm_explain,
         )
-
-    @app.command()
-    def verify(
-        targets: Optional[List[str]] = Option(None, "--targets", "-t", help="Chapter(s) or chapter:example pairs to verify. Repeat the flag for multiple targets. Omit or use 'all' for every chapter."),
-        bench_root: Optional[Path] = Option(None, "--bench-root", "-r", help="Root directory to scan for benchmarks (defaults to repo root)."),
-        timeout_seconds: Optional[int] = Option(None, "--timeout-seconds", help="Override suite timeout in seconds for verification (0 disables timeout)"),
-        precheck_only: bool = Option(False, "--precheck-only", help="Validate targets and print planned command without running."),
-        dry_run: bool = Option(False, "--dry-run", help="Describe planned verification without running."),
-    ):
-        """Run the lightweight benchmark verification harness."""
-        target_list = list(targets) if targets else None
-        if precheck_only or dry_run:
-            plan = {
-                "precheck_only": precheck_only,
-                "dry_run": dry_run,
-                "targets": target_list or ["all"],
-                "bench_root": str(Path(bench_root).resolve()) if bench_root else str(repo_root),
-                "timeout_seconds": timeout_seconds,
-            }
-            typer.echo(json.dumps(plan, indent=2))
-            raise typer.Exit(code=0)
-
-        exit_code = run_verification(target_list, bench_root=bench_root, timeout_seconds=timeout_seconds)
-        raise typer.Exit(code=exit_code)
 
     @app.command("list-targets")
     def list_targets(
@@ -793,6 +746,131 @@ if TYPER_AVAILABLE:
         if payload.get("memory_optimizations") is not None:
             typer.echo(f"Memory-focused:   {payload['memory_optimizations']} | Speed-focused: {payload.get('speed_optimizations', 0)}")
         typer.echo(f"Timestamp:        {payload.get('timestamp', 'N/A')}")
+
+    @app.command("triage")
+    def triage(
+        data_file: Optional[Path] = Option(None, "--data-file", "-d", help="Path to benchmark_test_results.json"),
+        baseline_file: Optional[Path] = Option(None, "--baseline", "-b", help="Optional baseline for regression detection"),
+        json_output: bool = Option(False, "--json", help="Output as JSON"),
+        top_n: int = Option(10, "--top", "-n", help="Number of items to show"),
+    ):
+        """Post-benchmark triage: analyze results and get actionable recommendations.
+        
+        Use after running benchmarks to:
+        - Identify regressions and improvements
+        - Get specific tool recommendations
+        - Plan next optimization steps
+        """
+        data = load_benchmark_results(data_file)
+        benchmarks = data.get("benchmarks", [])
+        
+        if not benchmarks:
+            typer.echo("❌ No benchmark results found. Run `aisp bench run` first.")
+            raise typer.Exit(1)
+        
+        # Analyze
+        total = len(benchmarks)
+        passed = sum(1 for b in benchmarks if b.get("speedup", 0) >= 1.0)
+        failed = total - passed
+        avg_speedup = sum(b.get("speedup", 1.0) for b in benchmarks) / total if total > 0 else 0
+        
+        regressions = sorted(
+            [b for b in benchmarks if b.get("speedup", 1.0) < 0.95],
+            key=lambda x: x.get("speedup", 1.0)
+        )[:top_n]
+        
+        improvements = sorted(
+            [b for b in benchmarks if b.get("speedup", 1.0) > 1.05],
+            key=lambda x: x.get("speedup", 1.0),
+            reverse=True
+        )[:top_n]
+        
+        slow_kernels = [b for b in benchmarks if b.get("baseline_time_ms", 0) > 100]
+        
+        # Build recommendations
+        recommendations = []
+        if regressions:
+            recommendations.append({
+                "tool": "aisp profile bottleneck",
+                "reason": f"Identify root cause of {len(regressions)} regression(s)",
+                "priority": "high"
+            })
+        if slow_kernels:
+            recommendations.append({
+                "tool": "aisp profile nsys",
+                "reason": f"Profile {len(slow_kernels)} slow benchmark(s) (>100ms)",
+                "priority": "medium"
+            })
+        if improvements:
+            recommendations.append({
+                "tool": "aisp bench report --output report.html",
+                "reason": f"Document {len(improvements)} improvement(s)",
+                "priority": "low"
+            })
+        recommendations.append({
+            "tool": "aisp bench compare-runs",
+            "reason": "Compare with previous baseline",
+            "priority": "medium"
+        })
+        
+        result = {
+            "summary": {
+                "total": total,
+                "passed": passed,
+                "failed": failed,
+                "pass_rate": f"{(passed/total)*100:.1f}%" if total > 0 else "N/A",
+                "avg_speedup": round(avg_speedup, 2),
+            },
+            "regressions": [
+                {
+                    "benchmark": f"{b.get('chapter')}:{b.get('name')}",
+                    "speedup": round(b.get("speedup", 0), 2),
+                    "baseline_ms": round(b.get("baseline_time_ms", 0), 1),
+                }
+                for b in regressions
+            ],
+            "improvements": [
+                {
+                    "benchmark": f"{b.get('chapter')}:{b.get('name')}",
+                    "speedup": round(b.get("speedup", 0), 2),
+                    "baseline_ms": round(b.get("baseline_time_ms", 0), 1),
+                }
+                for b in improvements
+            ],
+            "recommendations": recommendations,
+        }
+        
+        if json_output:
+            typer.echo(json.dumps(result, indent=2))
+            return
+        
+        # Pretty print
+        typer.echo("\n" + "=" * 60)
+        typer.echo("🔍 BENCHMARK TRIAGE")
+        typer.echo("=" * 60)
+        
+        s = result["summary"]
+        typer.echo(f"\n📊 Summary: {s['total']} benchmarks | {s['pass_rate']} pass rate | {s['avg_speedup']:.2f}x avg speedup")
+        
+        if result["regressions"]:
+            typer.echo(f"\n⚠️  REGRESSIONS ({len(result['regressions'])} found):")
+            for r in result["regressions"]:
+                typer.echo(f"   • {r['benchmark']}: {r['speedup']:.2f}x ({r['baseline_ms']:.1f}ms baseline)")
+        else:
+            typer.echo("\n✅ No regressions detected!")
+        
+        if result["improvements"]:
+            typer.echo(f"\n🚀 TOP IMPROVEMENTS ({len(result['improvements'])} found):")
+            for i in result["improvements"]:
+                typer.echo(f"   • {i['benchmark']}: {i['speedup']:.2f}x ({i['baseline_ms']:.1f}ms baseline)")
+        
+        typer.echo(f"\n💡 RECOMMENDED NEXT STEPS:")
+        for i, rec in enumerate(result["recommendations"], 1):
+            priority_icon = "🔴" if rec["priority"] == "high" else "🟡" if rec["priority"] == "medium" else "🟢"
+            typer.echo(f"   {i}. {priority_icon} {rec['tool']}")
+            typer.echo(f"      └─ {rec['reason']}")
+        
+        typer.echo()
 
     @app.command("whatif")
     def whatif(

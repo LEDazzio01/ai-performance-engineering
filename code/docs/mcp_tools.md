@@ -24,7 +24,6 @@ Tools for running benchmarks and performance verification.
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `run_benchmarks` | Run benchmarks via the bench CLI with optional profiling/LLM analysis | `targets`, `profile`, `llm_analysis`, `apply_patches` |
-| `verify_benchmarks` | Verify benchmarks via the bench CLI (smoke tests) | `targets` |
 | `available_benchmarks` | List available benchmarks | - |
 | `benchmark_targets` | List benchmark targets supported by the harness | - |
 | `list_chapters` | List all discoverable chapters and labs | - |

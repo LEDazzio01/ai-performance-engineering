@@ -1530,8 +1530,7 @@ class BenchmarkHarness:
             config.percentiles = [25, 50, 75, 99]
         
         gpu_mem_logger: Optional[GpuMemoryLogger] = None
-        # GPU memory logging is disabled for smoke stability.
-        if False and should_enable_gpu_memory_logging(getattr(config, "enable_gpu_memory_logging", False)):
+        if should_enable_gpu_memory_logging(getattr(config, "enable_gpu_memory_logging", False)):
             log_interval = resolve_gpu_log_interval(getattr(config, "gpu_memory_log_interval_seconds", 5.0))
             log_path = resolve_gpu_log_path(getattr(config, "gpu_memory_log_path", None))
             gpu_mem_logger = GpuMemoryLogger(self.device, interval=log_interval, log_path=log_path)
@@ -2746,9 +2745,8 @@ class BenchmarkHarness:
             return times_ms, profiling_outputs
             
         except Exception as e:
-            # Fallback to non-profiling benchmark
-            times, inference_data = self._benchmark_without_profiling(fn, config)
-            return times, {}
+            # NO SILENT FALLBACK - profiling was explicitly requested, so raise on failure
+            raise RuntimeError(f"Profiling failed (no silent fallback): {e}") from e
     
     
     # Profiling methods moved to profiling.profiling_runner module
@@ -2784,10 +2782,9 @@ class BenchmarkHarness:
                 time_ms = tt.do_bench(fn, warmup=0, rep=1)  # We handle warmup
                 times_ms.append(time_ms)
             return times_ms
-        except ImportError:
-            # Fallback to custom if Triton not available
-            times, _ = self._benchmark_custom(fn, config)
-            return times
+        except ImportError as e:
+            # Triton not installed - fail explicitly, don't silently fall back
+            raise RuntimeError(f"Triton benchmarking mode requested but Triton not available: {e}") from e
     
     def _benchmark_pytorch(self, fn: Callable, config: BenchmarkConfig) -> List[float]:
         """Use PyTorch's Timer."""
@@ -2814,9 +2811,8 @@ class BenchmarkHarness:
             
             return times_ms
         except Exception as e:
-            # Fallback to custom on error
-            times, _ = self._benchmark_custom(fn, config)
-            return times
+            # NO SILENT FALLBACK - PyTorch Timer mode was explicitly requested
+            raise RuntimeError(f"PyTorch Timer benchmarking failed: {e}") from e
     
     def _benchmark_custom(self, fn: Callable, config: BenchmarkConfig) -> tuple[List[float], Optional[Dict[str, List[float]]]]:
         """Custom benchmarking with CUDA Events for accurate GPU timing.
@@ -3376,7 +3372,7 @@ def benchmark_main(
         name: Optional name for output
     """
     # Run directly without harness to avoid CUDA subprocess issues
-    # The harness subprocess mode is designed for run_all_benchmarks.py
+        # The harness subprocess mode is designed for run_benchmarks.py
     # which properly manages CUDA context by spawning fresh subprocesses
     
     benchmark = get_benchmark_fn()
@@ -3396,20 +3392,38 @@ def benchmark_main(
         if cuda_available:
             torch.cuda.synchronize()
     
-    # Timed runs
+    # Check if benchmark reports its own timing (e.g., CudaBinaryBenchmark parses kernel time from output)
+    use_reported_time = bool(getattr(benchmark, "use_reported_time", False))
+    
+    # Timed runs - use CUDA events for GPU timing (accurate), perf_counter for CPU only
     times_ms: List[float] = []
-    for _ in range(iterations):
-        if cuda_available:
-            torch.cuda.synchronize()
+    if cuda_available:
+        # GPU: use CUDA Events for accurate GPU timing
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()  # sync once before timing loop
         
-        start = time.perf_counter()
-        benchmark.benchmark_fn()
-        
-        if cuda_available:
-            torch.cuda.synchronize()
-        
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        times_ms.append(elapsed_ms)
+        for _ in range(iterations):
+            start_event.record()
+            benchmark.benchmark_fn()
+            end_event.record()
+            end_event.synchronize()
+            elapsed_ms = start_event.elapsed_time(end_event)
+            
+            # Use benchmark-reported time if available (e.g., parsed from CUDA binary output)
+            if use_reported_time:
+                reported = getattr(benchmark, "last_time_ms", None)
+                if reported is not None:
+                    elapsed_ms = reported
+            
+            times_ms.append(elapsed_ms)
+    else:
+        # CPU: use perf_counter (only valid for CPU-only benchmarks)
+        for _ in range(iterations):
+            start = time.perf_counter()
+            benchmark.benchmark_fn()
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            times_ms.append(elapsed_ms)
     
     # Teardown
     benchmark.teardown()

@@ -4,7 +4,7 @@ This repo already collects benchmark artifacts, but two quick additions make it 
 
 ## Quick Actions
 - Fill the one-page intake (`templates/performance_intake.yaml`) so goals, SLOs, workload shape, and constraints are explicit.
-- Run the triage bundle to gather a clean baseline: `core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag smoke -- <your command>`.
+- Run the triage bundle to gather a clean baseline: `core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag baseline -- <your command>`.
 - Pick 2–3 high-ROI experiments (below) and A/B them with the same inputs, logging before/after metrics.
 
 ## One-Page Intake
@@ -19,7 +19,7 @@ Usage:
 core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts
 
 # Snapshots + runtime capture for a representative command
-core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag smoke --nsys -- \
+core/scripts/profiling/perf_triage_bundle.sh --output-root ./artifacts --tag baseline --nsys -- \
   python ch01/baseline_matmul.py --batch-size 32
 ```
 

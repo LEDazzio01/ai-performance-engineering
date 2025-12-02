@@ -1,5 +1,5 @@
 """
-🚀 PerformanceEngine - The Core Brain of AI Systems Performance
+🚀 PerformanceEngine - The Unified Core of AI Systems Performance
 
 This is THE single source of truth for all performance analysis functionality.
 All interfaces (CLI, MCP, Web UI, Python API) should use this engine.
@@ -12,24 +12,68 @@ Architecture:
     │ aisp  │ Tools │  UI   │  API   │
     └───────┴───────┴───────┴────────┘
 
-COMPLETE COVERAGE: Wraps ALL 185 PerformanceCore methods.
+UNIFIED DOMAIN MODEL: 10 clean domains with consistent naming.
+
+Domains:
+    1. gpu        - Hardware info, topology, power, bandwidth
+    2. system     - Software stack, dependencies, capabilities
+    3. profile    - nsys/ncu profiling, flame graphs, HTA
+    4. analyze    - Bottlenecks, pareto, scaling, memory patterns
+    5. optimize   - Recommendations, ROI, techniques, compound effects
+    6. distributed- Parallelism planning, NCCL, FSDP, tensor parallel
+    7. inference  - vLLM config, quantization, deployment
+    8. benchmark  - Run & track benchmarks, history, targets
+    9. ai         - Ask questions, explain concepts, LLM analysis
+   10. export     - CSV, PDF, HTML reports
 
 Usage:
-    from core.engine import PerformanceEngine
+    from core.engine import get_engine
     
-    engine = PerformanceEngine()
+    engine = get_engine()
+    
+    # GPU info
+    engine.gpu.info()
+    engine.gpu.bandwidth()
+    engine.gpu.topology()
     
     # System info
-    gpu_info = engine.gpu.info()
-    software = engine.system.software()
+    engine.system.software()
+    engine.system.dependencies()
+    
+    # Profiling
+    engine.profile.flame_graph()
+    engine.profile.compare(chapter="ch11")
     
     # Analysis
-    bottlenecks = engine.analyze.bottlenecks()
-    recommendations = engine.optimize.recommend(model_size=70, gpus=8)
+    engine.analyze.bottlenecks()
+    engine.analyze.pareto()
+    engine.analyze.whatif(max_vram_gb=24)
+    
+    # Optimization
+    engine.optimize.recommend(model_size=70, gpus=8)
+    engine.optimize.techniques()
+    engine.optimize.roi()
+    
+    # Distributed training
+    engine.distributed.plan(model_size=70, gpus=16, nodes=2)
+    engine.distributed.nccl()
+    
+    # Inference
+    engine.inference.vllm_config(model="70b")
+    engine.inference.quantization()
+    
+    # Benchmarks
+    engine.benchmark.run(targets=["ch07"])
+    engine.benchmark.history()
+    engine.benchmark.targets()
     
     # AI-powered
-    answer = engine.ai.ask("Why is my attention kernel slow?")
-    explanation = engine.ai.explain("flash-attention")
+    engine.ai.ask("Why is my attention kernel slow?")
+    engine.ai.explain("flash-attention")
+    
+    # Export
+    engine.export.csv()
+    engine.export.html()
 """
 
 from __future__ import annotations
@@ -37,10 +81,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Callable
-from functools import cached_property
+from typing import Optional, Dict, Any, List, Callable, Union
 
 
 # Find code root
@@ -60,7 +104,6 @@ def _get_handler():
     global _handler_instance
     if _handler_instance is None:
         from core.perf_core import get_core
-
         _handler_instance = get_core()
     return _handler_instance
 
@@ -73,422 +116,411 @@ def _get_analyzer():
             PerformanceAnalyzer,
             load_benchmark_data,
         )
-
         _analyzer_instance = PerformanceAnalyzer(load_benchmark_data)
     return _analyzer_instance
 
 
-def _get_llm():
-    """Get unified LLM client."""
+def _safe_call(func: Callable, *args, **kwargs) -> Dict[str, Any]:
+    """Safely call a function, returning error dict on failure."""
     try:
-        from core.llm import llm_call, is_available
-        return llm_call if is_available() else None
-    except Exception:
-        return None
+        return func(*args, **kwargs)
+    except AttributeError as e:
+        return {"error": f"Method not available: {e}", "success": False}
+    except Exception as e:
+        return {"error": str(e), "success": False}
 
 
 # =============================================================================
-# SUB-ENGINES - Complete Coverage
+# DOMAIN MODEL SPECIFICATION
 # =============================================================================
 
-class GPUEngine:
+DOMAINS = {
+    "gpu": {
+        "description": "GPU hardware info, topology, power, bandwidth",
+        "operations": ["info", "topology", "power", "bandwidth", "nvlink", "control"]
+    },
+    "system": {
+        "description": "Software stack, dependencies, environment",
+        "operations": ["software", "dependencies", "capabilities", "context", "parameters"]
+    },
+    "profile": {
+        "description": "Profiling with nsys/ncu/torch, flame graphs, HTA",
+        "operations": ["nsys", "ncu", "torch", "hta", "flame_graph", "compare", "kernels"]
+    },
+    "analyze": {
+        "description": "Performance analysis and bottleneck detection",
+        "operations": ["bottlenecks", "pareto", "scaling", "whatif", "stacking", "power", "memory"]
+    },
+    "optimize": {
+        "description": "Optimization recommendations and techniques",
+        "operations": ["recommend", "techniques", "roi", "compound", "playbooks"]
+    },
+    "distributed": {
+        "description": "Distributed training: parallelism, NCCL, FSDP",
+        "operations": ["plan", "nccl", "fsdp", "tensor_parallel", "pipeline", "slurm"]
+    },
+    "inference": {
+        "description": "Inference optimization: vLLM, quantization, deployment",
+        "operations": ["vllm_config", "quantization", "deploy", "estimate"]
+    },
+    "benchmark": {
+        "description": "Run benchmarks, track history, list targets",
+        "operations": ["run", "targets", "history", "data", "compare_runs"]
+    },
+    "ai": {
+        "description": "LLM-powered analysis, questions, explanations",
+        "operations": ["ask", "explain", "analyze_kernel", "suggest_tools", "status"]
+    },
+    "export": {
+        "description": "Export reports in CSV, PDF, HTML formats",
+        "operations": ["csv", "pdf", "html", "report"]
+    },
+}
+
+
+# =============================================================================
+# DOMAIN 1: GPU
+# =============================================================================
+
+class GPUDomain:
     """
-    GPU operations (15 methods).
+    GPU hardware operations.
     
-    Methods:
-        info()              - Get GPU information
-        bandwidth_test()    - Memory bandwidth test
-        topology()          - Multi-GPU topology
-        nvlink()           - NVLink status
-        clock_pin(enable)   - Pin/unpin clocks
-        power_limit(watts)  - Set power limit
-        persistence(enable) - Persistence mode
-        preset(name)        - Apply preset
-        control_state()     - Get control state
-        timeline()          - CPU/GPU timeline
-        cuda_version()      - CUDA version
-        environment()       - CUDA environment
-        compute_capability()- Compute capability
-        multi_gpu_topology()- Multi-GPU topology details
-        memory_info()       - Detailed memory info
+    Operations:
+        info()          - Get GPU name, memory, temperature, power, utilization
+        topology()      - Multi-GPU topology: NVLink, PCIe, P2P matrix
+        power()         - Power draw, limits, thermal status, throttling
+        bandwidth()     - Memory bandwidth test (actual vs theoretical)
+        nvlink()        - NVLink status and bandwidth
+        control()       - GPU control state (clocks, persistence)
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
     def info(self) -> Dict[str, Any]:
-        """Get GPU information."""
+        """Get GPU information: name, memory, temperature, power, utilization."""
         return _get_handler().get_gpu_info()
     
-    def bandwidth_test(self) -> Dict[str, Any]:
-        """Run GPU memory bandwidth test."""
-        return _get_handler().run_gpu_bandwidth_test()
-    
     def topology(self) -> Dict[str, Any]:
-        """Get GPU topology."""
+        """Get GPU topology: NVLink/PCIe connections, P2P matrix, NUMA affinity."""
         return _get_handler().get_gpu_topology()
     
+    def power(self) -> Dict[str, Any]:
+        """Get power status: draw, limits, temperature, throttling state."""
+        return _safe_call(_get_analyzer().get_power_efficiency)
+    
+    def bandwidth(self) -> Dict[str, Any]:
+        """Run GPU memory bandwidth test (actual vs theoretical HBM bandwidth)."""
+        return _safe_call(_get_handler().run_gpu_bandwidth_test)
+    
     def nvlink(self) -> Dict[str, Any]:
-        """Get NVLink information."""
-        return _get_handler().get_nvlink_info()
+        """Get NVLink status: links per GPU, total bandwidth."""
+        return _get_handler().get_nvlink_status()
     
-    def clock_pin(self, enable: bool = True) -> Dict[str, Any]:
-        """Pin or unpin GPU clocks."""
-        return _get_handler().pin_gpu_clocks({"enable": enable})
+    def control(self) -> Dict[str, Any]:
+        """Get GPU control state: clock settings, persistence mode."""
+        return _safe_call(_get_handler().get_gpu_control_state)
     
-    def power_limit(self, watts: int) -> Dict[str, Any]:
-        """Set GPU power limit."""
-        return _get_handler().set_power_limit({"watts": watts})
-    
-    def persistence(self, enable: bool = True) -> Dict[str, Any]:
-        """Set persistence mode."""
-        return _get_handler().set_persistence_mode({"enable": enable})
-    
-    def preset(self, name: str) -> Dict[str, Any]:
-        """Apply GPU preset."""
-        return _get_handler().apply_gpu_preset({"preset": name})
-    
-    def control_state(self) -> Dict[str, Any]:
-        """Get GPU control state."""
-        return _get_handler().get_gpu_control_state()
-    
-    def timeline(self) -> Dict[str, Any]:
-        """Get CPU/GPU timeline."""
-        return _get_handler().get_cpu_gpu_timeline()
-    
-    def cuda_version(self) -> Dict[str, Any]:
-        """Get CUDA version info."""
-        return _get_handler()._get_cuda_version_ai()
-    
-    def environment(self) -> Dict[str, Any]:
-        """Get CUDA environment."""
-        return _get_handler().get_cuda_environment()
-    
-    def multi_gpu_topology(self) -> Dict[str, Any]:
-        """Get multi-GPU topology details."""
-        return _get_handler().get_multi_gpu_topology()
+    def topology_matrix(self) -> Dict[str, Any]:
+        """Get raw nvidia-smi topo -m output."""
+        try:
+            proc = subprocess.run(["nvidia-smi", "topo", "-m"], capture_output=True, text=True, timeout=5)
+            return {"stdout": proc.stdout, "stderr": proc.stderr, "returncode": proc.returncode}
+        except Exception as e:
+            return {"error": str(e), "success": False}
 
 
-class SystemEngine:
+# =============================================================================
+# DOMAIN 2: SYSTEM
+# =============================================================================
+
+class SystemDomain:
     """
-    System operations (7 methods).
+    System and software stack operations.
     
-    Methods:
-        software()          - Software stack info
-        dependencies()      - Dependency health
-        check_updates()     - Check for updates
-        context()           - Full system context
-        capabilities()      - Hardware capabilities
-        scan_all()          - Scan chapters and labs
-        available()         - Available benchmarks
+    Operations:
+        software()      - PyTorch, CUDA, Python versions
+        dependencies()  - Check ML/AI dependency health
+        capabilities()  - Hardware capabilities (TMA, FP8, tensor cores)
+        context()       - Full system context for AI analysis
+        parameters()    - Kernel parameters affecting performance
+        container()     - Container/cgroup limits
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
     def software(self) -> Dict[str, Any]:
-        """Get software stack information."""
+        """Get software stack: PyTorch, CUDA, cuDNN, Python versions."""
         return _get_handler().get_software_info()
     
     def dependencies(self) -> Dict[str, Any]:
-        """Check dependency health."""
+        """Check ML/AI dependency health: torch, triton, flash-attn, etc."""
         return _get_handler().get_dependency_health()
     
-    def check_updates(self) -> Dict[str, Any]:
-        """Check for dependency updates."""
-        return _get_handler().check_dependency_updates()
+    def capabilities(self) -> Dict[str, Any]:
+        """Get hardware capabilities: TMA, TMEM, tensor cores, FP8 support."""
+        return _get_handler().get_hardware_capabilities()
     
     def context(self) -> Dict[str, Any]:
         """Get full system context for AI analysis."""
         return _get_handler().get_full_system_context()
     
-    def capabilities(self) -> Dict[str, Any]:
-        """Get hardware capabilities."""
-        return _get_handler().get_hardware_capabilities()
+    def parameters(self) -> Dict[str, Any]:
+        """Get kernel parameters affecting performance (swappiness, etc.)."""
+        return _get_handler().get_system_parameters()
     
-    def scan_all(self) -> Dict[str, Any]:
-        """Scan all chapters and labs."""
-        return _get_handler().scan_all_chapters_and_labs()
+    def container(self) -> Dict[str, Any]:
+        """Get container/cgroup limits."""
+        return _get_handler().get_container_limits()
     
-    def available(self) -> Dict[str, Any]:
-        """Get available benchmarks."""
-        return _get_handler().get_available_benchmarks()
+    def cpu_memory(self) -> Dict[str, Any]:
+        """Analyze CPU/memory hierarchy: NUMA, caches, TLB."""
+        return _get_handler().get_cpu_memory_analysis()
 
 
-class ProfileEngine:
+# =============================================================================
+# DOMAIN 3: PROFILE
+# =============================================================================
+
+class ProfileDomain:
     """
-    Profiling operations (22 methods).
+    Profiling operations with nsys, ncu, torch.profiler.
     
-    Methods:
-        flame_graph()           - Flame graph visualization
-        memory_timeline()       - Memory allocation timeline
-        kernel_breakdown()      - Kernel execution breakdown
-        hta()                   - Holistic Trace Analysis
-        compile_analysis()      - torch.compile analysis
-        roofline()             - Roofline model data
-        bottlenecks()          - Detect bottlenecks
-        optimization_score()    - Calculate optimization score
-        interactive_roofline()  - Interactive roofline
-        profile_list()         - List deep profiles
-        compare(chapter)       - Compare profiles
-        recommendations()      - Profile recommendations
-        ask(question)          - Natural language query
-        analyze_kernel(code)   - AI kernel analysis
-        generate_patch(params) - Generate optimization patch
+    Operations:
+        nsys(command)       - Run Nsight Systems profiling
+        ncu(command)        - Run Nsight Compute profiling
+        torch(script)       - Run torch.profiler capture
+        hta(command)        - Run HTA-friendly nsys capture + analysis
+        flame_graph()       - Get flame graph visualization data
+        compare(chapter)    - Compare baseline vs optimized profiles
+        kernels()           - Get kernel execution breakdown
+        list_profiles()     - List available profile pairs
+        memory_timeline()   - Memory allocation timeline
+        roofline()          - Roofline model data
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
     def flame_graph(self) -> Dict[str, Any]:
-        """Get flame graph data."""
+        """Get flame graph visualization data."""
         return _get_handler().get_flame_graph_data()
+    
+    def kernels(self) -> Dict[str, Any]:
+        """Get kernel execution breakdown."""
+        return _get_handler().get_kernel_breakdown()
     
     def memory_timeline(self) -> Dict[str, Any]:
         """Get memory allocation timeline."""
         return _get_handler().get_memory_timeline()
     
-    def kernel_breakdown(self) -> Dict[str, Any]:
-        """Get kernel execution breakdown."""
-        return _get_handler().get_kernel_breakdown()
-    
     def hta(self) -> Dict[str, Any]:
-        """Holistic Trace Analysis."""
+        """Get Holistic Trace Analysis data."""
         return _get_handler().get_hta_analysis()
-
-    def torch_profiler(self) -> Dict[str, Any]:
-        """Latest torch.profiler capture summary."""
+    
+    def torch(self) -> Dict[str, Any]:
+        """Get latest torch.profiler capture summary."""
         return _get_handler().get_torch_profiler()
     
     def compile_analysis(self) -> Dict[str, Any]:
-        """torch.compile analysis."""
+        """Get torch.compile analysis."""
         return _get_handler().get_compile_analysis()
     
     def roofline(self) -> Dict[str, Any]:
         """Get roofline model data."""
         return _get_handler().get_roofline_data()
     
-    def bottlenecks(self) -> Dict[str, Any]:
-        """Detect performance bottlenecks."""
-        return _get_handler().detect_bottlenecks()
-    
-    def optimization_score(self) -> Dict[str, Any]:
-        """Calculate optimization score."""
-        return _get_handler().calculate_optimization_score()
-    
-    def interactive_roofline(self) -> Dict[str, Any]:
-        """Get interactive roofline data."""
-        return _get_handler().get_interactive_roofline()
-    
-    def profile_list(self) -> Dict[str, Any]:
-        """List deep profile pairs."""
-        return _get_handler().list_deep_profile_pairs()
-    
     def compare(self, chapter: str) -> Dict[str, Any]:
-        """Compare before/after profiles."""
+        """Compare baseline vs optimized profiles for a chapter."""
         return _get_handler().compare_profiles(chapter)
     
+    def list_profiles(self) -> Dict[str, Any]:
+        """List available profile pairs for comparison."""
+        return _get_handler().list_deep_profile_pairs()
+    
     def recommendations(self) -> Dict[str, Any]:
-        """Get profile-based recommendations."""
+        """Get profiling recommendations."""
         return _get_handler().get_profile_recommendations()
     
-    def ask(self, question: str) -> Dict[str, Any]:
-        """Ask natural language question about profiles."""
-        return _get_handler().profiler_ask({"question": question})
-    
-    def analyze_kernel(self, code: str) -> Dict[str, Any]:
-        """Analyze kernel with AI."""
-        return _get_handler().analyze_kernel_with_llm({"code": code})
-    
-    def generate_patch(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate optimization patch."""
-        return _get_handler().generate_optimization_patch(params)
-    
-    def communication_analysis(self) -> Dict[str, Any]:
-        """Get communication analysis."""
-        return _get_handler().get_comm_analysis()
-    
-    def data_loading(self) -> Dict[str, Any]:
-        """Get data loading analysis."""
-        return _get_handler().get_data_loading_analysis()
+    def nsys_summary(self, report_path: str) -> Dict[str, Any]:
+        """Summarize an existing nsys report."""
+        return _safe_call(_get_handler().summarize_nsys_report, report_path)
 
 
-class AnalyzeEngine:
+# =============================================================================
+# DOMAIN 4: ANALYZE
+# =============================================================================
+
+class AnalyzeDomain:
     """
-    Analysis operations (27 methods).
+    Performance analysis and bottleneck detection.
     
-    Methods:
-        llm_analysis()          - Load LLM analysis
-        bottlenecks()           - AI bottleneck analysis
-        pareto()                - Pareto frontier
-        tradeoffs()             - Trade-off analysis
-        scaling()               - Scaling analysis
-        power()                 - Power efficiency
-        energy()                - Energy analysis
-        stacking()              - Optimization stacking
-        whatif(params)          - What-if scenarios
-        warp_divergence()       - Warp divergence analysis
-        bank_conflicts()        - Bank conflict analysis
-        memory_access()         - Memory access patterns
-        data_loading()          - Data loading pipeline analysis
-        occupancy()             - Occupancy analysis
-        cpu_memory()            - CPU-memory correlation
-        system_params()         - System parameters
-        container_limits()      - Container resource limits
-        comm_overlap(model)     - Communication overlap
-        leaderboards()          - Categorized leaderboards
+    Operations:
+        bottlenecks()       - Identify performance bottlenecks
+        pareto()            - Pareto frontier analysis
+        scaling()           - Scaling analysis (GPU count)
+        whatif(params)      - What-if constraint analysis
+        stacking()          - Optimization stacking compatibility
+        power()             - Power efficiency analysis
+        memory()            - Memory access pattern analysis
+        warp_divergence()   - Warp divergence analysis
+        bank_conflicts()    - Shared memory bank conflict analysis
+        leaderboards()      - Categorized performance leaderboards
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
-    def llm_analysis(self) -> Dict[str, Any]:
-        """Load LLM analysis results."""
-        return _get_handler().load_llm_analysis()
-    
-    def bottlenecks(self, analysis_type: str = "bottleneck") -> Dict[str, Any]:
-        """Run bottleneck analysis combining profile insights and (optionally) LLM."""
-        profile_result: Dict[str, Any] = {}
-        try:
-            profile_result = _get_handler().detect_bottlenecks()
-        except Exception as exc:
-            profile_result = {"error": str(exc)}
-
-        if analysis_type == "llm":
-            llm_only: Dict[str, Any] = {}
+    def bottlenecks(self, mode: str = "both") -> Dict[str, Any]:
+        """
+        Identify performance bottlenecks.
+        
+        Args:
+            mode: "profile" for static analysis, "llm" for AI, "both" for combined
+        """
+        profile_result = {}
+        llm_result = {}
+        
+        if mode in ["profile", "both"]:
             try:
-                llm_only = _get_handler().run_ai_analysis("bottleneck")
-            except Exception as exc:
-                llm_only = {"error": str(exc)}
-            return {"llm": llm_only, "source": "llm"}
-
-        if analysis_type in ["profile", "static"]:
-            return {"profile": profile_result, "source": "profile"}
-
-        llm_result: Dict[str, Any] = {}
-        try:
-            llm_result = _get_handler().run_ai_analysis(analysis_type)
-        except Exception as exc:
-            llm_result = {"error": str(exc)}
-
+                profile_result = _safe_call(_get_handler().detect_bottlenecks)
+            except Exception as e:
+                profile_result = {"error": str(e)}
+        
+        if mode in ["llm", "both"]:
+            try:
+                llm_result = _safe_call(_get_handler().run_ai_analysis, "bottleneck")
+            except Exception as e:
+                llm_result = {"error": str(e)}
+        
         return {
-            "profile": profile_result,
-            "llm": llm_result,
-            "source": "profile+llm" if llm_result else "profile",
+            "profile": profile_result if mode != "llm" else None,
+            "llm": llm_result if mode != "profile" else None,
+            "source": mode,
         }
     
     def pareto(self) -> Dict[str, Any]:
-        """Pareto frontier analysis."""
+        """Get Pareto frontier analysis (throughput vs latency vs memory)."""
         return _get_analyzer().get_pareto_frontier()
     
-    def tradeoffs(self) -> Dict[str, Any]:
-        """Trade-off analysis."""
-        return _get_analyzer().get_tradeoff_analysis()
-    
     def scaling(self) -> Dict[str, Any]:
-        """Scaling analysis."""
+        """Analyze scaling behavior with GPU count."""
         return _get_analyzer().get_scaling_analysis()
+    
+    def whatif(
+        self, 
+        max_vram_gb: Optional[float] = None,
+        max_latency_ms: Optional[float] = None,
+        min_throughput: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        What-if analysis: find optimizations meeting constraints.
+        
+        Args:
+            max_vram_gb: Maximum VRAM budget in GB
+            max_latency_ms: Maximum latency constraint in ms
+            min_throughput: Minimum throughput requirement
+        """
+        params = {}
+        if max_vram_gb is not None:
+            params["vram"] = [str(max_vram_gb)]
+        if max_latency_ms is not None:
+            params["latency"] = [str(max_latency_ms)]
+        if min_throughput is not None:
+            params["throughput"] = [str(min_throughput)]
+        return _get_analyzer().get_whatif_recommendations(params)
+    
+    def stacking(self) -> Dict[str, Any]:
+        """Analyze optimization stacking compatibility."""
+        return _get_analyzer().get_optimization_stacking()
     
     def power(self) -> Dict[str, Any]:
         """Power efficiency analysis."""
         return _get_analyzer().get_power_efficiency()
     
-    def energy(self) -> Dict[str, Any]:
-        """Energy analysis."""
-        return _get_handler().get_energy_analysis()
+    def tradeoffs(self) -> Dict[str, Any]:
+        """Trade-off analysis between metrics."""
+        return _get_analyzer().get_tradeoff_analysis()
     
-    def stacking(self) -> Dict[str, Any]:
-        """Optimization stacking analysis."""
-        return _get_analyzer().get_optimization_stacking()
+    def memory(self, stride: int = 1, element_size: int = 4) -> Dict[str, Any]:
+        """Analyze memory access patterns for coalescing."""
+        return _get_handler().get_memory_access_patterns(stride, element_size)
     
-    def whatif(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """What-if scenario analysis."""
-        return _get_analyzer().get_whatif_recommendations(params)
+    def warp_divergence(self, code: str = "") -> Dict[str, Any]:
+        """Analyze warp divergence patterns in kernel code."""
+        return _get_handler().get_warp_divergence(code)
     
-    def warp_divergence(self) -> Dict[str, Any]:
-        """Warp divergence analysis."""
-        return _get_handler().get_warp_divergence()
-    
-    def bank_conflicts(self) -> Dict[str, Any]:
-        """Bank conflict analysis."""
-        return _get_handler().get_bank_conflicts()
-    
-    def memory_access(self) -> Dict[str, Any]:
-        """Memory access pattern analysis."""
-        return _get_handler().get_memory_access_patterns()
-
-    def data_loading(self) -> Dict[str, Any]:
-        """Data loading pipeline analysis."""
-        return _get_handler().get_data_loading_analysis()
-    
-    def occupancy(self) -> Dict[str, Any]:
-        """Occupancy analysis."""
-        return _get_handler().get_occupancy_analysis()
-    
-    def cpu_memory(self) -> Dict[str, Any]:
-        """CPU-memory correlation analysis."""
-        return _get_handler().get_cpu_memory_analysis()
-    
-    def system_params(self) -> Dict[str, Any]:
-        """Get system parameters."""
-        return _get_handler().get_system_parameters()
-    
-    def container_limits(self) -> Dict[str, Any]:
-        """Get container resource limits."""
-        return _get_handler().get_container_limits()
-    
-    def comm_overlap(self, model: str = "default") -> Dict[str, Any]:
-        """Communication overlap analysis."""
-        return _get_handler().get_comm_overlap_analysis(model)
+    def bank_conflicts(self, stride: int = 1, element_size: int = 4) -> Dict[str, Any]:
+        """Analyze shared memory bank conflicts."""
+        return _get_handler().get_bank_conflicts(stride, element_size)
     
     def leaderboards(self) -> Dict[str, Any]:
-        """Get categorized leaderboards."""
+        """Get categorized performance leaderboards."""
         return _get_analyzer().get_categorized_leaderboards()
     
     def cost(self) -> Dict[str, Any]:
-        """Cost analysis."""
+        """Cost analysis for benchmarks."""
         return _get_analyzer().get_cost_analysis()
     
     def predict_scaling(self, model_size: float, gpus: int) -> Dict[str, Any]:
-        """Predict scaling behavior."""
+        """Predict scaling behavior for model size and GPU count."""
         return _get_handler().predict_scaling({"model_size": model_size, "gpus": gpus})
-
-
-class OptimizeEngine:
-    """
-    Optimization operations (38 methods).
     
-    Methods:
-        recommend(model, gpus, goal)    - Get recommendations
-        compound(techniques)            - Compound optimization effects
-        roi()                           - ROI calculation
-        playbooks()                     - Optimization playbooks
-        auto_tune()                     - Auto-tuning
-        optimal_stack()                 - Optimal technique stack
-        start(params)                   - Start optimization job
-        stop(job_id)                    - Stop optimization job
-        stream(job_id)                  - Stream optimization events
-        jobs()                          - List optimization jobs
-        rlhf(model, algorithm)          - RLHF optimization
-        moe(model)                      - MoE optimization
-        long_context(model, seq_len)    - Long context optimization
+    def comm_overlap(self, model: str = "llama-3.1-70b") -> Dict[str, Any]:
+        """Analyze communication overlap opportunities."""
+        return _get_handler().get_comm_overlap_analysis(model)
+    
+    def data_loading(self) -> Dict[str, Any]:
+        """Analyze data loading pipeline."""
+        return _get_handler().get_data_loading_analysis()
+    
+    def energy(self) -> Dict[str, Any]:
+        """Energy efficiency analysis."""
+        return _get_handler().get_energy_analysis()
+
+
+# =============================================================================
+# DOMAIN 5: OPTIMIZE
+# =============================================================================
+
+class OptimizeDomain:
+    """
+    Optimization recommendations and techniques.
+    
+    Operations:
+        recommend(model_size, gpus, goal)  - Get recommendations
+        techniques()                        - List all optimization techniques
+        roi()                              - Calculate optimization ROI
+        compound(techniques)               - Analyze compound effects
+        playbooks()                        - Get optimization playbooks
+        details(technique)                 - Get technique details
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
-    def recommend(self, model_size: float = 7, gpus: int = 1, 
-                  goal: str = "throughput") -> Dict[str, Any]:
-        """Get optimization recommendations."""
-        # Use PerformanceCore for recommendations
-        result = _get_analyzer().get_constraint_recommendations()
+    def recommend(
+        self, 
+        model_size: float = 7, 
+        gpus: int = 1, 
+        goal: str = "throughput"
+    ) -> Dict[str, Any]:
+        """
+        Get optimization recommendations for a model configuration.
+        
+        Args:
+            model_size: Model size in billions of parameters
+            gpus: Number of GPUs available
+            goal: Optimization goal: "throughput", "latency", or "memory"
+        """
+        result = _safe_call(_get_analyzer().get_constraint_recommendations)
         
         # Add model-specific recommendations
-        techniques = []
-        steps = []
-        
         if model_size >= 70:
-            techniques = ["Tensor Parallelism", "Pipeline Parallelism", "FP8 Training", "Flash Attention", "Gradient Checkpointing"]
+            techniques = ["Tensor Parallelism", "Pipeline Parallelism", "FP8 Training", 
+                         "Flash Attention", "Gradient Checkpointing"]
             steps = [
                 f"Use TP={min(8, gpus)} for 70B+ models",
                 "Enable FP8 with Transformer Engine",
@@ -511,6 +543,9 @@ class OptimizeEngine:
             ]
         
         return {
+            "model_size": model_size,
+            "gpus": gpus,
+            "goal": goal,
             "techniques": techniques,
             "estimated_speedup": (1.5, 3.0),
             "estimated_memory_reduction": 40 if model_size >= 70 else 20,
@@ -518,91 +553,65 @@ class OptimizeEngine:
             "rationale": f"Recommendations for {model_size}B model on {gpus} GPUs optimizing for {goal}",
             "implementation_steps": steps,
             "success": True,
-            **result
+            **(result if isinstance(result, dict) else {})
         }
     
-    def compound(self, techniques: List[str]) -> Dict[str, Any]:
-        """Analyze compound optimization effects."""
-        return _get_handler().get_compound_effect({"techniques": techniques})
-    
-    def roi(self) -> Dict[str, Any]:
-        """Calculate optimization ROI."""
-        return _get_handler().get_optimization_roi()
-    
-    def playbooks(self) -> Dict[str, Any]:
-        """Get optimization playbooks."""
-        return _get_handler().get_optimization_playbooks()
-    
-    def auto_tune(self) -> Dict[str, Any]:
-        """Get auto-tuning recommendations."""
-        return _get_handler().get_auto_tune_recommendations()
-    
-    def optimal_stack(self) -> Dict[str, Any]:
-        """Get optimal technique stack."""
-        return _get_handler().get_optimal_stack()
-    
-    def start(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Start optimization job."""
-        return _get_handler().start_optimization(params)
-    
-    def stop(self, job_id: str) -> Dict[str, Any]:
-        """Stop optimization job."""
-        return _get_handler().stop_optimization(job_id)
-    
-    def jobs(self) -> Dict[str, Any]:
-        """List optimization jobs."""
-        return _get_handler().list_optimization_jobs()
-    
-    def stacking(self) -> Dict[str, Any]:
-        """Optimization stacking guide."""
-        return _get_handler().get_optimization_stacking()
-    
-    def rlhf(self, model: str = "7b", algorithm: str = "ppo", 
-             compare: bool = False) -> Dict[str, Any]:
-        """RLHF optimization recommendations."""
-        return _get_handler().get_rlhf_optimization(model, algorithm, compare)
-    
-    def moe(self, model: str = "mixtral") -> Dict[str, Any]:
-        """MoE optimization recommendations."""
-        return _get_handler().get_moe_optimization(model)
-    
-    def long_context(self, model: str = "7b", 
-                     seq_length: int = 32768) -> Dict[str, Any]:
-        """Long context optimization."""
-        return _get_handler().get_long_context_optimization(model, seq_length)
-    
-    def all_techniques(self) -> Dict[str, Any]:
-        """Get all optimization techniques."""
+    def techniques(self) -> Dict[str, Any]:
+        """Get list of all available optimization techniques."""
         return _get_handler().get_all_optimizations()
     
-    def technique_details(self, technique: str) -> Dict[str, Any]:
-        """Get technique details."""
-        return _get_handler().get_optimization_details(technique)
-
-
-class DistributedEngine:
-    """
-    Distributed training operations (11 methods).
+    def roi(self) -> Dict[str, Any]:
+        """Calculate ROI for optimization techniques."""
+        return _get_handler().get_optimization_roi()
     
-    Methods:
-        plan(model, gpus, nodes)    - Plan parallelism strategy
-        nccl(nodes, gpus, diagnose) - NCCL tuning
-        topology()                  - Parallelism topology
-        presets()                   - Get presets
-        recommendations()           - Get recommendations
-        analyze_model(params)       - Analyze model for parallelism
-        compare(strategies)         - Compare strategies
-        fsdp(model)                 - FSDP recommendations
-        tensor_parallel(model)      - Tensor parallelism config
-        pipeline_parallel(model)    - Pipeline parallelism config
-        large_scale(params)         - Large scale config
+    def compound(self, techniques: List[str]) -> Dict[str, Any]:
+        """Analyze compound effects of multiple techniques together."""
+        return _safe_call(_get_handler().get_compound_effect, {"techniques": techniques})
+    
+    def playbooks(self) -> Dict[str, Any]:
+        """Get optimization playbooks for common scenarios."""
+        return _safe_call(_get_handler().get_optimization_playbooks)
+    
+    def details(self, technique: str) -> Dict[str, Any]:
+        """Get detailed information about a specific technique."""
+        return _safe_call(_get_handler().get_optimization_details, technique)
+
+
+# =============================================================================
+# DOMAIN 6: DISTRIBUTED
+# =============================================================================
+
+class DistributedDomain:
+    """
+    Distributed training: parallelism planning, NCCL, FSDP.
+    
+    Operations:
+        plan(model_size, gpus, nodes)  - Plan parallelism strategy
+        nccl(nodes, gpus)              - NCCL tuning recommendations
+        fsdp(model)                    - FSDP configuration
+        tensor_parallel(model)         - Tensor parallelism config
+        pipeline(model)                - Pipeline parallelism config
+        slurm(model, nodes, gpus)      - Generate SLURM script
+        cost_estimate(params)          - Estimate cloud costs
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
-    def plan(self, model_size: float, gpus: int, nodes: int = 1) -> Dict[str, Any]:
-        """Plan parallelism strategy."""
+    def plan(
+        self, 
+        model_size: float = 7, 
+        gpus: int = 8, 
+        nodes: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Plan parallelism strategy for distributed training.
+        
+        Args:
+            model_size: Model size in billions of parameters
+            gpus: Total number of GPUs
+            nodes: Number of nodes
+        """
         try:
             from core.optimization.parallelism_planner.cli import get_parallelism_recommendations
             return get_parallelism_recommendations(
@@ -611,241 +620,235 @@ class DistributedEngine:
                 num_nodes=nodes
             )
         except Exception:
-            return _get_handler().get_parallelism_recommendations()
+            return _safe_call(_get_handler().get_parallelism_recommendations)
     
-    def nccl(self, nodes: int = 1, gpus: int = 8, 
-             diagnose: bool = False) -> Dict[str, Any]:
-        """Get NCCL tuning recommendations."""
+    def nccl(self, nodes: int = 1, gpus: int = 8, diagnose: bool = False) -> Dict[str, Any]:
+        """
+        Get NCCL tuning recommendations.
+        
+        Args:
+            nodes: Number of nodes
+            gpus: GPUs per node
+            diagnose: If True, run diagnostics
+        """
         return _get_handler().get_nccl_recommendations(nodes, gpus, diagnose)
     
-    def topology(self) -> Dict[str, Any]:
-        """Get parallelism topology."""
-        return _get_handler().get_parallelism_topology()
-    
-    def presets(self) -> Dict[str, Any]:
-        """Get parallelism presets."""
-        return _get_handler().get_parallelism_presets()
-    
-    def recommendations(self) -> Dict[str, Any]:
-        """Get parallelism recommendations."""
-        return _get_handler().get_parallelism_recommendations()
-    
-    def analyze_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze model for parallelism."""
-        return _get_handler().analyze_parallelism_model(params)
-    
-    def compare(self, strategies: List[str]) -> Dict[str, Any]:
-        """Compare parallelism strategies."""
-        return _get_handler().compare_parallelism_strategies({"strategies": strategies})
-    
     def fsdp(self, model: str = "7b") -> Dict[str, Any]:
-        """Get FSDP recommendations."""
-        return _get_handler().get_fsdp_config(model)
+        """Get FSDP configuration for a model."""
+        return _safe_call(_get_handler().get_fsdp_config, model)
     
     def tensor_parallel(self, model: str = "70b") -> Dict[str, Any]:
-        """Get tensor parallelism config."""
-        return _get_handler().get_tensor_parallel_config(model)
+        """Get tensor parallelism configuration."""
+        return _safe_call(_get_handler().get_tensor_parallel_config, model)
     
-    def pipeline_parallel(self, model: str = "70b") -> Dict[str, Any]:
-        """Get pipeline parallelism config."""
-        return _get_handler().get_pipeline_parallel_config(model)
+    def pipeline(self, model: str = "70b") -> Dict[str, Any]:
+        """Get pipeline parallelism configuration."""
+        return _safe_call(_get_handler().get_pipeline_parallel_config, model)
     
-    def large_scale(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get large scale training config."""
-        return _get_handler().get_large_scale_config(params)
+    def slurm(
+        self, 
+        model: str = "7b", 
+        nodes: int = 1, 
+        gpus: int = 8, 
+        framework: str = "pytorch"
+    ) -> Dict[str, Any]:
+        """Generate SLURM job script for distributed training."""
+        return _get_handler().generate_slurm_script(model, nodes, gpus, framework)
+    
+    def cost_estimate(
+        self,
+        model_size: Optional[float] = None,
+        training_tokens: Optional[float] = None,
+        provider: str = "aws"
+    ) -> Dict[str, Any]:
+        """
+        Estimate cloud costs for training.
+        
+        Args:
+            model_size: Model size in billions
+            training_tokens: Training tokens in billions
+            provider: Cloud provider (aws, gcp, azure)
+        """
+        params = {"provider": provider}
+        if model_size is not None:
+            params["model_size"] = model_size
+        if training_tokens is not None:
+            params["training_tokens"] = training_tokens
+        return _get_handler().get_cloud_cost_estimate(params)
+    
+    def topology(self) -> Dict[str, Any]:
+        """Get parallelism topology info."""
+        return _safe_call(_get_handler().get_parallelism_topology)
 
 
-class InferenceEngine:
+# =============================================================================
+# DOMAIN 7: INFERENCE
+# =============================================================================
+
+class InferenceDomain:
     """
-    Inference operations (6 methods).
+    Inference optimization: vLLM, quantization, deployment.
     
-    Methods:
-        vllm_config(model, target)  - Generate vLLM config
-        quantization(params)        - Quantization comparison
-        deploy_config(params)       - Generate deploy config
-        status()                    - Inference status
-        estimate(params)            - Estimate inference perf
-        kv_cache(model)             - KV cache analysis
+    Operations:
+        vllm_config(model, target)   - Generate vLLM configuration
+        quantization(model_size)     - Quantization recommendations (FP8, INT8, INT4)
+        deploy(params)               - Generate deployment configuration
+        estimate(params)             - Estimate inference performance
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
-    def vllm_config(self, model: str, target: str = "throughput",
-                    compare: bool = False) -> Dict[str, Any]:
-        """Generate vLLM configuration."""
+    def vllm_config(
+        self, 
+        model: str = "7b", 
+        target: str = "throughput",
+        compare: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Generate vLLM configuration.
+        
+        Args:
+            model: Model name or size (e.g., "llama-7b", "70b")
+            target: Optimization target: "throughput" or "latency"
+            compare: If True, compare inference engines
+        """
         return _get_handler().get_vllm_config(model, target, compare)
     
-    def quantization(self, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Get quantization comparison."""
-        return _get_handler().get_quantization_comparison(params or {})
+    def quantization(self, model_size: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Get quantization recommendations (FP8, INT8, INT4).
+        
+        Args:
+            model_size: Model size in billions of parameters
+        """
+        params = {}
+        if model_size is not None:
+            params["params"] = model_size * 1e9
+        return _get_handler().get_quantization_comparison(params)
     
-    def deploy_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate deployment config."""
-        return _get_handler().generate_deploy_config(params)
-    
-    def status(self) -> Dict[str, Any]:
-        """Get inference status."""
-        return _get_handler().get_inference_status()
+    def deploy(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate deployment configuration."""
+        return _safe_call(_get_handler().generate_deploy_config, params)
     
     def estimate(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Estimate inference performance."""
-        return _get_handler().get_inference_estimate(params)
+        return _safe_call(_get_handler().get_inference_estimate, params)
 
 
-class TrainingEngine:
+# =============================================================================
+# DOMAIN 8: BENCHMARK
+# =============================================================================
+
+class BenchmarkDomain:
     """
-    Training operations (5 methods).
+    Benchmark execution and history tracking.
     
-    Methods:
-        estimate(params)            - Estimate training time
-        moe_config(params)          - MoE configuration
-        diagnose_error(params)      - Diagnose training error
-        checkpoint_config(model)    - Checkpoint configuration
-        gradient_analysis()         - Gradient analysis
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def estimate(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Estimate training time."""
-        return _get_handler().get_training_estimate(params)
-    
-    def moe_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get MoE configuration."""
-        return _get_handler().get_moe_config(params)
-    
-    def diagnose_error(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Diagnose training error."""
-        return _get_handler().diagnose_training_error(params)
-    
-    def checkpoint_config(self, model: str = "7b") -> Dict[str, Any]:
-        """Get checkpoint configuration."""
-        return _get_handler().get_checkpoint_config(model)
-
-
-class BatchEngine:
-    """
-    Batch size operations (4 methods).
-    
-    Methods:
-        analyze(params)         - Analyze batch size
-        calculate(params)       - Calculate optimal batch
-        recommendations()       - Get recommendations
-        models_that_fit(vram)   - Models that fit in VRAM
+    Operations:
+        run(targets)        - Run benchmarks on specified targets
+        targets()           - List available benchmark targets
+        history()           - Get historical benchmark runs
+        data()              - Load benchmark results data
+        compare_runs(a, b)  - Compare two benchmark runs
+        available()         - Get available benchmarks with details
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
-    def analyze(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze batch size."""
-        return _get_handler().get_batch_size_analysis(params)
+    def run(
+        self, 
+        targets: List[str],
+        profile: str = "minimal",
+        llm_analysis: bool = True,
+        dry_run: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Run benchmarks on specified targets.
+        
+        Args:
+            targets: List of targets (e.g., ["ch07", "ch11:streams"])
+            profile: Profile level: "minimal", "standard", "full"
+            llm_analysis: Whether to include LLM analysis
+            dry_run: If True, just show what would run
+        """
+        if dry_run:
+            return {
+                "dry_run": True,
+                "targets": targets,
+                "profile": profile,
+                "llm_analysis": llm_analysis,
+                "command": f"aisp bench run -t {' -t '.join(targets)} --profile {profile}",
+            }
+        
+        # Actual execution would be handled by CLI or subprocess
+        return {
+            "targets": targets,
+            "profile": profile,
+            "note": "Use CLI for actual benchmark execution: aisp bench run -t <target>",
+        }
     
-    def calculate(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate optimal batch size."""
-        return _get_handler().calculate_batch_for_model(params)
+    def targets(self, chapter: Optional[str] = None) -> Dict[str, Any]:
+        """
+        List available benchmark targets.
+        
+        Args:
+            chapter: Optional chapter filter
+        """
+        return _get_handler().list_benchmark_targets()
     
-    def recommendations(self) -> Dict[str, Any]:
-        """Get batch size recommendations."""
-        return _get_handler().get_batch_size_recommendations()
+    def history(self) -> Dict[str, Any]:
+        """Get historical benchmark runs with trends."""
+        return _get_handler().get_history_runs()
+    
+    def trends(self) -> Dict[str, Any]:
+        """Get performance trends over time."""
+        return _get_handler().get_performance_trends()
+    
+    def data(self) -> Dict[str, Any]:
+        """Load current benchmark results data."""
+        return _get_handler().load_benchmark_data()
+    
+    def available(self) -> Dict[str, Any]:
+        """Get available benchmarks with detailed info."""
+        return _get_handler().get_available_benchmarks()
+    
+    def speed_test(self) -> Dict[str, Any]:
+        """Run quick speed tests (GEMM, memory, attention)."""
+        return _safe_call(_get_handler().run_speed_tests)
+    
+    def network_test(self) -> Dict[str, Any]:
+        """Run network throughput tests."""
+        return _safe_call(_get_handler().run_network_tests)
 
 
-class CostEngine:
+# =============================================================================
+# DOMAIN 9: AI
+# =============================================================================
+
+class AIDomain:
     """
-    Cost operations (3 methods).
+    AI/LLM-powered analysis and questions.
     
-    Methods:
-        calculator()            - Cost calculator
-        cloud_estimate(params)  - Cloud cost estimate
-        roi()                   - ROI analysis
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def calculator(self) -> Dict[str, Any]:
-        """Get cost calculator."""
-        return _get_handler().get_cost_calculator()
-    
-    def cloud_estimate(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get cloud cost estimate."""
-        return _get_handler().get_cloud_cost_estimate(params)
-    
-    def roi(self) -> Dict[str, Any]:
-        """Get ROI analysis."""
-        return _get_handler().get_optimization_roi()
-
-
-class ClusterEngine:
-    """
-    Cluster operations (5 methods).
-    
-    Methods:
-        slurm(model, nodes, gpus)   - Generate SLURM script
-        spot_config(params)         - Spot instance config
-        diagnose(error)             - Diagnose cluster error
-        elastic_scaling()           - Elastic scaling config
-        fault_tolerance()           - Fault tolerance config
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def slurm(self, model: str = "7b", nodes: int = 1, 
-              gpus: int = 8, framework: str = "pytorch") -> Dict[str, Any]:
-        """Generate SLURM script."""
-        return _get_handler().generate_slurm_script(model, nodes, gpus, framework)
-    
-    def spot_config(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get spot instance configuration."""
-        return _get_handler().get_spot_instance_config(params)
-    
-    def diagnose(self, error: str = "") -> Dict[str, Any]:
-        """Diagnose cluster error."""
-        return _get_handler().diagnose_cluster_error({"error": error})
-    
-    def elastic_scaling(self) -> Dict[str, Any]:
-        """Get elastic scaling configuration."""
-        try:
-            return _get_handler().get_elastic_scaling_config()
-        except AttributeError:
-            return {"message": "Configure based on workload patterns", "success": True}
-    
-    def fault_tolerance(self) -> Dict[str, Any]:
-        """Get fault tolerance configuration."""
-        try:
-            return _get_handler().get_fault_tolerance_config()
-        except AttributeError:
-            return {"message": "Use checkpoint saving and auto-restart", "success": True}
-
-
-class AIEngine:
-    """
-    AI/LLM operations (12 methods).
-    
-    Uses the unified LLM client from core.llm.
-    
-    Methods:
-        ask(question)           - Ask performance question
-        explain(concept)        - Explain concept with citations
-        analyze_kernel(code)    - Analyze kernel code
-        suggest()               - Get AI suggestions
-        context()               - Get AI context
-        status()                - Check AI status
-        advisor(params)         - LLM advisor
-        distributed(params)     - Distributed training AI
-        inference_ai(params)    - Inference optimization AI
-        rlhf_ai(params)         - RLHF optimization AI
-        custom_query(params)    - Custom AI query
+    Operations:
+        ask(question)           - Ask a performance question
+        explain(concept)        - Explain a concept with citations
+        analyze_kernel(code)    - Analyze CUDA kernel code
+        suggest_tools(query)    - Suggest tools for a task
+        status()                - Check AI/LLM availability
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
     def ask(self, question: str, include_citations: bool = True) -> Dict[str, Any]:
-        """Ask a performance question with book citations."""
+        """
+        Ask a performance question with optional book citations.
+        
+        Args:
+            question: Your performance question
+            include_citations: Whether to include book citations
+        """
         result = {"question": question, "success": False}
         
         # Get book citations
@@ -857,17 +860,18 @@ class AIEngine:
             except Exception:
                 result["citations"] = []
         
-        # Get LLM response using unified client
+        # Get LLM response
         try:
             from core.llm import llm_call, is_available, PERF_EXPERT_SYSTEM
             
             if not is_available():
-                result["error"] = "LLM not configured"
+                result["error"] = "LLM not configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY."
                 return result
             
             # Build context
             context = _get_handler().get_full_system_context()
-            context_str = f"System: {context.get('gpu', {}).get('name', 'Unknown GPU')}"
+            gpu_name = context.get("gpu_info", {}).get("name", "Unknown GPU")
+            context_str = f"System: {gpu_name}"
             
             prompt = f"Context: {context_str}\n\nQuestion: {question}"
             response = llm_call(prompt, system=PERF_EXPERT_SYSTEM)
@@ -880,23 +884,71 @@ class AIEngine:
         return result
     
     def explain(self, concept: str) -> Dict[str, Any]:
-        """Explain a concept with book citations."""
-        return _get_handler().get_llm_explanation(concept)
+        """
+        Explain a GPU/AI performance concept with book citations.
+        
+        Args:
+            concept: The concept to explain (e.g., "flash-attention", "tensor parallelism")
+        """
+        return _safe_call(_get_handler().get_llm_explanation, concept)
     
     def analyze_kernel(self, code: str) -> Dict[str, Any]:
-        """Analyze CUDA kernel with AI."""
-        return _get_handler().analyze_kernel_with_llm({"code": code})
+        """
+        Analyze CUDA kernel code with AI.
+        
+        Args:
+            code: CUDA kernel code to analyze
+        """
+        return _safe_call(_get_handler().analyze_kernel_with_llm, {"code": code})
     
-    def suggest(self) -> Dict[str, Any]:
-        """Get AI suggestions."""
-        return _get_handler().get_ai_suggestions()
-    
-    def context(self) -> Dict[str, Any]:
-        """Get AI context."""
-        return _get_handler().get_ai_context()
+    def suggest_tools(self, query: str) -> Dict[str, Any]:
+        """
+        Suggest relevant tools based on user intent.
+        
+        Args:
+            query: User intent (e.g., "I keep OOMing on 24GB VRAM")
+        """
+        # Return tool suggestions based on query keywords
+        suggestions = []
+        query_lower = query.lower()
+        
+        if "oom" in query_lower or "memory" in query_lower or "vram" in query_lower:
+            suggestions.extend([
+                {"tool": "gpu.info", "reason": "Check current VRAM usage"},
+                {"tool": "analyze.memory", "reason": "Analyze memory access patterns"},
+                {"tool": "inference.quantization", "reason": "Reduce memory with quantization"},
+                {"tool": "optimize.recommend", "reason": "Get memory optimization tips"},
+            ])
+        
+        if "slow" in query_lower or "latency" in query_lower:
+            suggestions.extend([
+                {"tool": "analyze.bottlenecks", "reason": "Identify bottlenecks"},
+                {"tool": "profile.flame_graph", "reason": "Visualize time breakdown"},
+                {"tool": "optimize.recommend", "reason": "Get optimization recommendations"},
+            ])
+        
+        if "distributed" in query_lower or "multi-gpu" in query_lower or "parallel" in query_lower:
+            suggestions.extend([
+                {"tool": "gpu.topology", "reason": "Check GPU interconnects"},
+                {"tool": "distributed.plan", "reason": "Plan parallelism strategy"},
+                {"tool": "distributed.nccl", "reason": "NCCL tuning recommendations"},
+            ])
+        
+        if not suggestions:
+            suggestions = [
+                {"tool": "system.context", "reason": "Get full system overview"},
+                {"tool": "analyze.bottlenecks", "reason": "Start with bottleneck analysis"},
+                {"tool": "ai.ask", "reason": "Ask your specific question"},
+            ]
+        
+        return {
+            "query": query,
+            "suggestions": suggestions[:5],
+            "note": "Call suggested tools in order for best results",
+        }
     
     def status(self) -> Dict[str, Any]:
-        """Check AI/LLM status using unified client."""
+        """Check AI/LLM backend availability."""
         try:
             from core.llm import get_llm_status
             status = get_llm_status()
@@ -912,176 +964,57 @@ class AIEngine:
                 "provider": None,
                 "model": None,
                 "book_available": True,
-                "error": str(e)
+                "error": str(e),
             }
-    
-    def advisor(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get LLM advisor response."""
-        return _get_handler().get_llm_advice(params)
-    
-    def distributed_ai(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get distributed training AI advice."""
-        return _get_handler().get_distributed_llm_advice(params)
-    
-    def inference_ai(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get inference optimization AI advice."""
-        return _get_handler().get_inference_llm_advice(params)
-    
-    def custom_query(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Run custom AI query."""
-        return _get_handler().custom_llm_query({"query": query, "context": context or {}})
 
 
-class TestEngine:
+# =============================================================================
+# DOMAIN 10: EXPORT
+# =============================================================================
+
+class ExportDomain:
     """
-    Test/benchmark operations (6 methods).
+    Export reports in various formats.
     
-    Methods:
-        speed()         - Run speed tests
-        bandwidth()     - GPU bandwidth test
-        network()       - Network tests
-        benchmark()     - Run benchmark
-        targets()       - List benchmark targets
-        data()          - Load benchmark data
+    Operations:
+        csv()           - Export benchmarks to CSV
+        csv_detailed()  - Export detailed CSV with all metrics
+        pdf()           - Generate PDF report
+        html()          - Generate HTML report
+        report(params)  - Generate custom report
     """
     
     def __init__(self, parent: 'PerformanceEngine'):
         self._parent = parent
     
-    def speed(self) -> Dict[str, Any]:
-        """Run speed tests."""
-        return _get_handler().run_speed_tests()
-    
-    def bandwidth(self) -> Dict[str, Any]:
-        """GPU memory bandwidth test."""
-        return _get_handler().run_gpu_bandwidth_test()
-    
-    def network(self) -> Dict[str, Any]:
-        """Run network tests."""
-        return _get_handler().run_network_tests()
-    
-    def benchmark(self, target: str = "all") -> Dict[str, Any]:
-        """Run benchmark."""
-        return _get_handler().run_benchmark({"target": target})
-    
-    def targets(self) -> Dict[str, Any]:
-        """List benchmark targets."""
-        return _get_handler().list_benchmark_targets()
-    
-    def data(self) -> Dict[str, Any]:
-        """Load benchmark data."""
-        return _get_handler().load_benchmark_data()
-
-
-class ExportEngine:
-    """
-    Export operations (4 methods).
-    
-    Methods:
-        csv()           - Export to CSV
-        csv_detailed()  - Detailed CSV export
-        pdf()           - Export to PDF
-        html()          - Export to HTML
-        config(params)  - Export configuration
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def csv(self) -> str:
-        """Export to CSV."""
+    def csv(self, detailed: bool = False) -> str:
+        """
+        Export benchmarks to CSV.
+        
+        Args:
+            detailed: If True, include all metrics
+        """
+        if detailed:
+            return _get_handler().export_detailed_csv()
         return _get_handler().export_benchmarks_csv()
     
-    def csv_detailed(self) -> str:
-        """Export detailed CSV."""
-        return _get_handler().export_detailed_csv()
-    
     def pdf(self) -> bytes:
-        """Export to PDF."""
+        """Generate PDF report."""
         try:
             return _get_handler().generate_pdf_report()
         except AttributeError:
             return b""
     
     def html(self) -> str:
-        """Export to HTML."""
+        """Generate HTML report."""
         try:
             return _get_handler().generate_html_report()
         except AttributeError:
             return "<html><body>Report not available</body></html>"
     
-    def config(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Export configuration."""
-        return _get_handler().export_config(params)
-
-
-class HistoryEngine:
-    """
-    History operations (3 methods).
-    
-    Methods:
-        runs()      - Get historical runs
-        trends()    - Performance trends
-        compare()   - Compare runs
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def runs(self) -> Dict[str, Any]:
-        """Get historical runs."""
-        return _get_handler().get_history_runs()
-    
-    def trends(self) -> Dict[str, Any]:
-        """Get performance trends."""
-        return _get_handler().get_performance_trends()
-
-
-class HuggingFaceEngine:
-    """
-    HuggingFace operations (3 methods).
-    
-    Methods:
-        search(query)   - Search HF models
-        trending(task)  - Trending models
-        model_info(id)  - Get model info
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def search(self, query: str) -> Dict[str, Any]:
-        """Search HuggingFace models."""
-        return _get_handler().search_hf_models(query)
-    
-    def trending(self, task: str = "text-generation") -> Dict[str, Any]:
-        """Get trending models."""
-        return _get_handler().get_hf_trending_models()
-    
-    def model_info(self, model_id: str) -> Dict[str, Any]:
-        """Get model information."""
-        return _get_handler().get_hf_model_info(model_id)
-
-
-class NCUEngine:
-    """
-    NCU/Nsight operations (2 methods).
-    
-    Methods:
-        deepdive()          - NCU deep dive analysis
-        compare(before, after) - Compare NCU profiles
-    """
-    
-    def __init__(self, parent: 'PerformanceEngine'):
-        self._parent = parent
-    
-    def deepdive(self) -> Dict[str, Any]:
-        """NCU deep dive analysis."""
-        return _get_handler().get_ncu_deepdive()
-    
-    def compare(self, before: str, after: str) -> Dict[str, Any]:
-        """Compare NCU profiles."""
-        return _get_handler()._compare_ncu_files(before, after)
+    def report(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate custom report with specified parameters."""
+        return _safe_call(_get_handler().generate_report, params)
 
 
 # =============================================================================
@@ -1090,38 +1023,34 @@ class NCUEngine:
 
 class PerformanceEngine:
     """
-    🚀 The Core Brain of AI Systems Performance
+    🚀 The Unified Core of AI Systems Performance
     
-    This is the single source of truth for all performance analysis.
+    This is THE single source of truth for all performance analysis.
     All interfaces (CLI, MCP, Web UI) should use this engine.
     
-    COMPLETE COVERAGE: 185 methods across 16 sub-engines.
+    UNIFIED DOMAIN MODEL: 10 clean domains with consistent naming.
     
-    Sub-engines:
-        engine.gpu          GPU operations (15 methods)
-        engine.system       System operations (7 methods)
-        engine.profile      Profiling operations (22 methods)
-        engine.analyze      Analysis operations (27 methods)
-        engine.optimize     Optimization operations (38 methods)
-        engine.distributed  Distributed training (11 methods)
-        engine.inference    Inference optimization (6 methods)
-        engine.training     Training operations (5 methods)
-        engine.batch        Batch size operations (4 methods)
-        engine.cost         Cost operations (3 methods)
-        engine.cluster      Cluster operations (5 methods)
-        engine.ai           AI/LLM operations (12 methods)
-        engine.test         Test operations (6 methods)
-        engine.export       Export operations (5 methods)
-        engine.history      History operations (3 methods)
-        engine.hf           HuggingFace operations (3 methods)
-        engine.ncu          NCU/Nsight operations (2 methods)
+    Domains:
+        engine.gpu          GPU hardware info, topology, power, bandwidth
+        engine.system       Software stack, dependencies, capabilities
+        engine.profile      nsys/ncu profiling, flame graphs, HTA
+        engine.analyze      Bottlenecks, pareto, scaling, memory patterns
+        engine.optimize     Recommendations, ROI, techniques, compound
+        engine.distributed  Parallelism planning, NCCL, FSDP
+        engine.inference    vLLM config, quantization, deployment
+        engine.benchmark    Run & track benchmarks, history, targets
+        engine.ai           Ask questions, explain concepts, LLM analysis
+        engine.export       CSV, PDF, HTML reports
     
     Usage:
-        engine = PerformanceEngine()
+        engine = get_engine()
+        
+        # Quick status
+        engine.status()
         
         # GPU info
         engine.gpu.info()
-        engine.gpu.bandwidth_test()
+        engine.gpu.bandwidth()
         
         # Analysis
         engine.analyze.bottlenecks()
@@ -1129,19 +1058,17 @@ class PerformanceEngine:
         
         # Optimization
         engine.optimize.recommend(model_size=70, gpus=8)
-        engine.optimize.stacking()
         
         # AI-powered
         engine.ai.ask("Why is my kernel slow?")
         engine.ai.explain("flash-attention")
-        
-        # Distributed
-        engine.distributed.plan(model_size=70, gpus=16, nodes=2)
-        engine.distributed.nccl()
     """
     
+    # Class-level domain specification for introspection
+    DOMAINS = DOMAINS
+    
     def __init__(self):
-        # Sub-engines (lazy initialized)
+        # Lazy-initialized domain instances
         self._gpu = None
         self._system = None
         self._profile = None
@@ -1149,144 +1076,115 @@ class PerformanceEngine:
         self._optimize = None
         self._distributed = None
         self._inference = None
-        self._training = None
-        self._batch = None
-        self._cost = None
-        self._cluster = None
+        self._benchmark = None
         self._ai = None
-        self._test = None
         self._export = None
-        self._history = None
-        self._hf = None
-        self._ncu = None
     
-    # Sub-engine properties
+    # -------------------------------------------------------------------------
+    # Domain Properties (10 clean domains)
+    # -------------------------------------------------------------------------
+    
     @property
-    def gpu(self) -> GPUEngine:
-        """GPU operations."""
+    def gpu(self) -> GPUDomain:
+        """GPU hardware info, topology, power, bandwidth."""
         if self._gpu is None:
-            self._gpu = GPUEngine(self)
+            self._gpu = GPUDomain(self)
         return self._gpu
     
     @property
-    def system(self) -> SystemEngine:
-        """System operations."""
+    def system(self) -> SystemDomain:
+        """Software stack, dependencies, capabilities."""
         if self._system is None:
-            self._system = SystemEngine(self)
+            self._system = SystemDomain(self)
         return self._system
     
     @property
-    def profile(self) -> ProfileEngine:
-        """Profiling operations."""
+    def profile(self) -> ProfileDomain:
+        """nsys/ncu profiling, flame graphs, HTA."""
         if self._profile is None:
-            self._profile = ProfileEngine(self)
+            self._profile = ProfileDomain(self)
         return self._profile
     
     @property
-    def analyze(self) -> AnalyzeEngine:
-        """Analysis operations."""
+    def analyze(self) -> AnalyzeDomain:
+        """Performance analysis and bottleneck detection."""
         if self._analyze is None:
-            self._analyze = AnalyzeEngine(self)
+            self._analyze = AnalyzeDomain(self)
         return self._analyze
     
     @property
-    def optimize(self) -> OptimizeEngine:
-        """Optimization operations."""
+    def optimize(self) -> OptimizeDomain:
+        """Optimization recommendations and techniques."""
         if self._optimize is None:
-            self._optimize = OptimizeEngine(self)
+            self._optimize = OptimizeDomain(self)
         return self._optimize
     
     @property
-    def distributed(self) -> DistributedEngine:
-        """Distributed training operations."""
+    def distributed(self) -> DistributedDomain:
+        """Distributed training: parallelism, NCCL, FSDP."""
         if self._distributed is None:
-            self._distributed = DistributedEngine(self)
+            self._distributed = DistributedDomain(self)
         return self._distributed
     
     @property
-    def inference(self) -> InferenceEngine:
-        """Inference optimization operations."""
+    def inference(self) -> InferenceDomain:
+        """Inference optimization: vLLM, quantization."""
         if self._inference is None:
-            self._inference = InferenceEngine(self)
+            self._inference = InferenceDomain(self)
         return self._inference
     
     @property
-    def training(self) -> TrainingEngine:
-        """Training operations."""
-        if self._training is None:
-            self._training = TrainingEngine(self)
-        return self._training
+    def benchmark(self) -> BenchmarkDomain:
+        """Run & track benchmarks, history, targets."""
+        if self._benchmark is None:
+            self._benchmark = BenchmarkDomain(self)
+        return self._benchmark
     
     @property
-    def batch(self) -> BatchEngine:
-        """Batch size operations."""
-        if self._batch is None:
-            self._batch = BatchEngine(self)
-        return self._batch
-    
-    @property
-    def cost(self) -> CostEngine:
-        """Cost operations."""
-        if self._cost is None:
-            self._cost = CostEngine(self)
-        return self._cost
-    
-    @property
-    def cluster(self) -> ClusterEngine:
-        """Cluster operations."""
-        if self._cluster is None:
-            self._cluster = ClusterEngine(self)
-        return self._cluster
-    
-    @property
-    def ai(self) -> AIEngine:
-        """AI/LLM operations."""
+    def ai(self) -> AIDomain:
+        """AI/LLM-powered analysis and questions."""
         if self._ai is None:
-            self._ai = AIEngine(self)
+            self._ai = AIDomain(self)
         return self._ai
     
     @property
-    def test(self) -> TestEngine:
-        """Test/benchmark operations."""
-        if self._test is None:
-            self._test = TestEngine(self)
-        return self._test
-    
-    @property
-    def export(self) -> ExportEngine:
-        """Export operations."""
+    def export(self) -> ExportDomain:
+        """Export reports in CSV, PDF, HTML formats."""
         if self._export is None:
-            self._export = ExportEngine(self)
+            self._export = ExportDomain(self)
         return self._export
     
-    @property
-    def history(self) -> HistoryEngine:
-        """History operations."""
-        if self._history is None:
-            self._history = HistoryEngine(self)
-        return self._history
+    # -------------------------------------------------------------------------
+    # Convenience Methods
+    # -------------------------------------------------------------------------
     
-    @property
-    def hf(self) -> HuggingFaceEngine:
-        """HuggingFace operations."""
-        if self._hf is None:
-            self._hf = HuggingFaceEngine(self)
-        return self._hf
-    
-    @property
-    def ncu(self) -> NCUEngine:
-        """NCU/Nsight operations."""
-        if self._ncu is None:
-            self._ncu = NCUEngine(self)
-        return self._ncu
-    
-    # Convenience methods
     def status(self) -> Dict[str, Any]:
-        """Quick system status."""
+        """
+        Quick system status check.
+        
+        Returns GPU info, software versions, and AI availability.
+        """
         return {
             "gpu": self.gpu.info(),
             "software": self.system.software(),
             "ai": self.ai.status(),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+    
+    def triage(self) -> Dict[str, Any]:
+        """
+        Quick triage: status + context summary.
+        
+        Use as a first call before other tools.
+        """
+        return {
+            "status": self.status(),
+            "context": self.system.context(),
+            "next_steps": [
+                "Use engine.analyze.bottlenecks() to identify issues",
+                "Use engine.optimize.recommend() for optimization tips",
+                "Use engine.ai.ask() for specific questions",
+            ],
         }
     
     def ask(self, question: str) -> Dict[str, Any]:
@@ -1296,6 +1194,14 @@ class PerformanceEngine:
     def recommend(self, model_size: float = 7, gpus: int = 1) -> Dict[str, Any]:
         """Quick recommendations (shortcut to engine.optimize.recommend)."""
         return self.optimize.recommend(model_size, gpus)
+    
+    def list_domains(self) -> Dict[str, Any]:
+        """List all available domains and their operations."""
+        return {
+            "domains": DOMAINS,
+            "count": len(DOMAINS),
+            "usage": "engine.<domain>.<operation>()",
+        }
 
 
 # =============================================================================
@@ -1304,9 +1210,35 @@ class PerformanceEngine:
 
 _engine_instance: Optional[PerformanceEngine] = None
 
+
 def get_engine() -> PerformanceEngine:
     """Get the singleton PerformanceEngine instance."""
     global _engine_instance
     if _engine_instance is None:
         _engine_instance = PerformanceEngine()
     return _engine_instance
+
+
+def reset_engine() -> None:
+    """Reset the singleton engine (useful for testing)."""
+    global _engine_instance, _handler_instance, _analyzer_instance
+    _engine_instance = None
+    _handler_instance = None
+    _analyzer_instance = None
+
+
+# =============================================================================
+# BACKWARDS COMPATIBILITY - Deprecated aliases
+# =============================================================================
+
+# These are kept for backwards compatibility but will be removed in future versions
+GPUEngine = GPUDomain
+SystemEngine = SystemDomain
+ProfileEngine = ProfileDomain
+AnalyzeEngine = AnalyzeDomain
+OptimizeEngine = OptimizeDomain
+DistributedEngine = DistributedDomain
+InferenceEngine = InferenceDomain
+TestEngine = BenchmarkDomain  # Renamed
+AIEngine = AIDomain
+ExportEngine = ExportDomain

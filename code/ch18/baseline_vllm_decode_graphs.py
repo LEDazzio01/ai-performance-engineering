@@ -24,10 +24,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
-from core.benchmark.smoke import is_smoke_mode
-
-if is_smoke_mode():
-    raise RuntimeError("SKIPPED: vllm_decode_graphs is disabled in smoke-test sweeps")
 
 # Defer decode_kernels import so the harness can load this module even if the
 # optional vLLM dependencies are absent. We still require CUDA; otherwise the

@@ -55,7 +55,7 @@ initializes, so every scenario automatically shares the same `ClusterSpec`/`Mode
 - `python -m cli.aisp bench run --targets labs/moe_parallelism --profile minimal` runs every planner pair and drops JSON/Markdown summaries.
 - `python labs/moe_parallelism/run_lab.py --scenario grouped` prints an actionable plan (experts/GPU, bandwidth needs) for the chosen scenario.
 - `python labs/moe_parallelism/optimized_memory_budget.py --validate` ensures optimized allocations meet the same correctness checks as the baseline.
-- `python labs/moe_parallelism/optimized_moe_vllm_env.py --fabric nvl72` prints tuned exports for dual-rail NVL72 plus small-message NCCL + vLLM smoke tests; swap `--fabric nvlink` for the single-node NVSwitch preset.
+- `python labs/moe_parallelism/optimized_moe_vllm_env.py --fabric nvl72` prints tuned exports for dual-rail NVL72 plus small-message NCCL + vLLM validation commands; swap `--fabric nvlink` for the single-node NVSwitch preset.
 - From the harness, pass flags via `--target-extra-arg labs/moe_parallelism:moe_vllm_env="--model gpt-oss-20b/original/ --tp 8 --pp 3 --max-seqs 4096"` when running `aisp bench`; the same map hits both baseline_ and optimized_ variants.
 
 ## Notes

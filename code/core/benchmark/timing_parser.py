@@ -2,7 +2,7 @@
 
 This module provides consistent timing extraction across:
 - core/benchmark/cuda_binary_benchmark.py (CudaBinaryBenchmark class)
-- core/harness/run_all_benchmarks.py (benchmark_cuda_executable function)
+- core/harness/run_benchmarks.py (benchmark_cuda_executable function)
 
 CUDA executables typically print timing like:
 - "Host-staged GEMM (baseline): 2.3074 ms"

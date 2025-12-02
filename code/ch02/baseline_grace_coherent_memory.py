@@ -11,7 +11,6 @@ from typing import Dict, Any, Optional
 import sys
 from pathlib import Path
 import os
-from core.benchmark.smoke import is_smoke_mode
 
 # Add common to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -112,10 +111,9 @@ class GraceCoherentMemoryBenchmark(BaseBenchmark):
 
     def __init__(self, size_mb: int = 256, iterations: int = 100):
         super().__init__()
-        fast = is_smoke_mode()
         self._impl = BaselineGraceCoherentMemory(
             size_mb=size_mb,
-            iterations=20 if fast else iterations,
+            iterations=iterations,
         )
         bytes_per_iter = size_mb * 1024 * 1024 * 2  # H2D + D2H
         self._workload = WorkloadMetadata(

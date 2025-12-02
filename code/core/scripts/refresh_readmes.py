@@ -162,7 +162,7 @@ ENTRIES["README.md"] = Entry(
         ("`ch01` - `ch20`", "One directory per chapter with baseline/optimized benchmarks, workload configs, and `compare.py` harness entrypoints."),
         ("`labs/`", "Deep-dive labs for matmul, routing, FlexAttention, MoE, persistent decode, distributed training, and more."),
         ("`core/benchmark/`, `profiling/`, `core/`, `optimization/`, `analysis/`", "Shared harness, logging, workload metadata, profiling, and optimization utilities used by every chapter."),
-        ("`cli/aisp.py bench`", "Typer-based CLI for running, profiling, and verifying targets with reproducible artifacts."),
+        ("`cli/aisp.py bench`", "Typer-based CLI for running and profiling targets with reproducible artifacts."),
         ("`docs/` + `core/scripts/`", "Operational guides, profiling workflows, and setup/reset helpers (`setup.sh`, `cleanup.py`, `reset-gpu.sh`)."),
     ],
     run=RunSection(
@@ -175,14 +175,13 @@ ENTRIES["README.md"] = Entry(
         ],
         notes=[
             "`setup.sh` installs system prerequisites (drivers, CUDA, Nsight) and should be rerun after driver upgrades.",
-            "Use `python core/harness/run_all_benchmarks.py --targets ch*` for automated regression suites.",
+            "Use `python core/harness/run_benchmarks.py --targets ch*` for automated regression suites.",
             "`python core/analysis/analyze_expectations.py --artifacts-dir artifacts` compares new runs to stored thresholds.",
         ],
     ),
     validation=[
         "`pytest tests/integration` succeeds to confirm harness discovery and CLI plumbing.",
         "`python core/benchmark/benchmark_peak.py` reports TFLOP/s, bandwidth, and NVLink numbers close to the published ceilings.",
-        "`python cli/aisp.py bench verify --targets all` completes without regressions before refreshing expectation files.",
     ],
     notes=[
         "`core/scripts/profile_all_workloads.sh` and `ncu_template.ini` capture Nsight traces with consistent metric sets.",
@@ -1143,7 +1142,7 @@ ENTRIES["labs/persistent_decode"] = lab_entry(
         "`python cli/aisp.py bench run --targets labs/persistent_decode --profile minimal` compares all persistent/TMA variants in one sweep.",
         "`python labs/persistent_decode/optimized_persistent_decode_graphs.py --iterations 50` shows lower launch overhead than `baseline_persistent_decode.py`.",
         "`python labs/persistent_decode/optimized_native_tma_prefill_decode.py --validate` matches the math reference while reporting achieved memory throughput.",
-        "`python labs/persistent_decode/kv_locality_microbench.py` surfaces H2D copy time deltas for pageable vs pinned slabs; add `QUICK=1` for a short smoke run.",
+        "`python labs/persistent_decode/kv_locality_microbench.py` surfaces H2D copy time deltas for pageable vs pinned slabs; add `QUICK=1` for a short run.",
     ],
     notes=[
         "Set `TORCH_COMPILE_MODE` or `TMA_TILE_SIZE` via env vars before invoking the harness to sweep tile sizes.",

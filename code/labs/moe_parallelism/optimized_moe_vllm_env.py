@@ -30,18 +30,6 @@ from labs.moe_parallelism.moe_env_presets import (  # noqa: E402
 from labs.moe_parallelism.plan import format_report  # noqa: E402
 
 
-def _optimized_smoke_test() -> str:
-    return (
-        "python -m vllm.entrypoints.openai.api_server "
-        "--model {model} "
-        "--tensor-parallel-size {tp} --pipeline-parallel-size {pp} "
-        '--pp-partition-method "type:prefill,decode" '
-        "--max-model-len {max_len} --max-num-seqs {max_seqs} "
-        '--enable-chunked-prefill --speculative-sampling "n=2,lookahead=4" '
-        "--gpu-memory-utilization {gpu_util} --disable-log-stats 0"
-    )
-
-
 def _default_run_args(fabric: str) -> Dict[str, object]:
     if fabric == "nvl72":
         return {
@@ -65,7 +53,6 @@ def _default_run_args(fabric: str) -> Dict[str, object]:
 
 
 def _optimized_presets() -> Dict[str, EnvPreset]:
-    smoke = _optimized_smoke_test()
     nvlink_env = EnvPreset(
         name="NVLink MoE (LL/LL128 + graphs)",
         fabric="nvlink",
@@ -106,7 +93,6 @@ def _optimized_presets() -> Dict[str, EnvPreset]:
             "mpirun -np {ngpu} --bind-to none all_reduce_perf -b 512 -e 64K -f 2 -g 1 -c 1 -n 200",
             "mpirun -np {ngpu} --bind-to none alltoall_perf  -b 512 -e 64K -f 2 -g 1 -c 1 -n 200",
         ],
-        smoke_test=smoke,
     )
 
     nvl72_env = EnvPreset(
@@ -153,7 +139,6 @@ def _optimized_presets() -> Dict[str, EnvPreset]:
             "mpirun -np {ngpu} --bind-to none alltoall_perf  -b 512 -e 64K -f 2 -g 1 -c 1 -n 200",
             "ENABLE_NVLINK=0 nvsysinfo || true",
         ],
-        smoke_test=smoke,
     )
     return {"nvlink": nvlink_env, "nvl72": nvl72_env}
 

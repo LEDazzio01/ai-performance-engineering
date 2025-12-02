@@ -43,7 +43,7 @@ python cli/aisp.py bench run --targets ch18 --profile minimal
 python cli/aisp.py bench run \
   --targets ch18:cudagraph_bucketing,ch18:cudagraph_bucketing_optimized \
   --target-extra-arg ch18:cudagraph_bucketing="--vllm-model gpt-oss-20b" \
-  --target-extra-arg ch18:cudagraph_bucketing_optimized="--vllm-model gpt-oss-20b --skip-compile-smoke"
+  --target-extra-arg ch18:cudagraph_bucketing_optimized="--vllm-model gpt-oss-20b"
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
 - Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.

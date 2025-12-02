@@ -14,8 +14,11 @@ __global__ void kv_prefetch_overlap(const float* __restrict__ keys,
     float* k_tile = smem;
     float* v_tile = smem + head_dim;
 
-    __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
-    auto pipe = cuda::make_pipeline(cg::this_thread_block(), &state);
+    // Use uninitialized storage to avoid dynamic initialization warning
+    using pipe_state = cuda::pipeline_shared_state<cuda::thread_scope_block, 2>;
+    __shared__ alignas(pipe_state) unsigned char state_storage[sizeof(pipe_state)];
+    auto* state = reinterpret_cast<pipe_state*>(state_storage);
+    auto pipe = cuda::make_pipeline(cg::this_thread_block(), state);
 
     for (int t = 0; t < seq_len; ++t) {
         int offset = t * head_dim;

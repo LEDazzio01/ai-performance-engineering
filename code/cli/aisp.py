@@ -1,9 +1,56 @@
 #!/usr/bin/env python3
 """
-🚀 aisp - AI System Performance CLI (Typer)
+🚀 aisp - AI Systems Performance CLI
 
-Single entry point that now uses Typer for all category/command routing.
-Defaults: no args → launch the benchmark TUI; `bench` is mounted as a subcommand.
+Single entry point for the AI Performance Engineering system.
+Defaults: no args → launch the benchmark TUI.
+
+ARCHITECTURE:
+    This CLI uses the unified PerformanceEngine (10 domains) as its backend.
+    Commands are organized to match the engine's domain model:
+
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │  CLI Command Groups       →  Engine Domains                          │
+    │──────────────────────────────────────────────────────────────────────│
+    │  aisp info [status|gpu|deps|features|network|topo]  → gpu, system    │
+    │  aisp hw [memory|pcie|tc|...]                       → benchmark      │
+    │  aisp profile [nsys|ncu|compare|flame|hta]          → profile        │
+    │  aisp optimize [recommend|roi|techniques]           → optimize       │
+    │  aisp distributed [plan|nccl|...]                   → distributed    │
+    │  aisp inference [vllm|quantize|...]                 → inference      │
+    │  aisp ai [ask|explain|troubleshoot]                 → ai             │
+    │  aisp report [export|history|roi]                   → export         │
+    │  aisp bench [run|targets|compare]                   → benchmark      │
+    └──────────────────────────────────────────────────────────────────────┘
+
+DOMAIN MODEL (10 domains in core/engine.py):
+    1. gpu        - Hardware info, topology, power, bandwidth
+    2. system     - Software stack, dependencies, capabilities
+    3. profile    - nsys/ncu profiling, flame graphs, HTA
+    4. analyze    - Bottlenecks, pareto, scaling, memory patterns
+    5. optimize   - Recommendations, ROI, techniques
+    6. distributed- Parallelism planning, NCCL, FSDP
+    7. inference  - vLLM config, quantization, deployment
+    8. benchmark  - Run & track benchmarks, history
+    9. ai         - Ask questions, explain concepts, LLM analysis
+   10. export     - CSV, PDF, HTML reports
+
+QUICK START:
+    aisp                    # Launch interactive TUI
+    aisp info status        # System status overview
+    aisp info gpu           # GPU information
+    aisp ai ask "Why slow?" # Ask AI about performance
+    aisp bench run -t ch07  # Run benchmarks
+    
+EXAMPLES:
+    # Get optimization recommendations for 70B model on 8 GPUs
+    aisp optimize recommend --model-size 70 --gpus 8
+    
+    # Profile with Nsight Systems
+    aisp profile nsys python train.py
+    
+    # Plan distributed training
+    aisp distributed plan --model-size 70 --gpus 16 --nodes 2
 """
 
 from __future__ import annotations
@@ -22,11 +69,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.plugins.loader import load_plugin_apps
-try:
-    from core.capabilities import has_capability
-except Exception:
-    def has_capability(name: str) -> bool:
-        return False
 
 try:
     import typer
@@ -161,27 +203,57 @@ def _rewrite_help_aliases(argv: List[str]) -> List[str]:
 if typer:
     app = typer.Typer(
         name="aisp",
-        help="AI Systems Performance CLI",
+        help="AI Systems Performance CLI - Unified 10-Domain API",
         add_completion=False,
         context_settings={"help_option_names": ["-h", "--help"]},
     )
 
-    # Core command groups
-    info_app = typer.Typer(help="System info, environment, GPU status, hardware features")
-    hw_app = typer.Typer(help="Hardware benchmarks (memory, PCIe, tensor cores, network)")
-    profile_app = typer.Typer(help="Profiling, analysis, comparisons, roofline")
-    monitoring_app = typer.Typer(help="Monitoring and diagnostics runners")
-
-    # Feature command groups
-    ai_app = typer.Typer(help="LLM-powered Q&A, explanations, troubleshooting")
-    optimize_app = typer.Typer(help="Optimization recommendations and playbooks")
-    distributed_app = typer.Typer(help="Parallelism planning, topology, NCCL tuning")
-    inference_app = typer.Typer(help="Inference configuration, quantization, deployment")
-    training_app = typer.Typer(help="Training helpers (RL, checkpoints, gradients)")
-    monitor_app = typer.Typer(help="Monitoring and regression detection")
-    report_app = typer.Typer(help="Reports, history, ROI, exports")
-    hf_app = typer.Typer(help="HuggingFace model search, config, download")
-    cluster_app = typer.Typer(help="Cluster scripts, cost, scaling, power")
+    # ==========================================================================
+    # 10-DOMAIN COMMAND GROUPS (matching engine.py domains)
+    # ==========================================================================
+    
+    # Domain 1: GPU - Hardware info, topology, power, bandwidth
+    gpu_app = typer.Typer(help="GPU hardware: info, topology, power, bandwidth")
+    
+    # Domain 2: System - Software stack, dependencies, capabilities
+    system_app = typer.Typer(help="System: software versions, dependencies, capabilities")
+    
+    # Domain 3: Profile - nsys/ncu profiling, flame graphs, HTA
+    profile_app = typer.Typer(help="Profiling: nsys, ncu, torch, flame graphs, HTA")
+    
+    # Domain 4: Analyze - Bottlenecks, pareto, scaling, what-if
+    analyze_app = typer.Typer(help="Analysis: bottlenecks, pareto, scaling, what-if")
+    
+    # Domain 5: Optimize - Recommendations, ROI, techniques
+    optimize_app = typer.Typer(help="Optimization: recommendations, ROI, techniques")
+    
+    # Domain 6: Distributed - Parallelism, NCCL, FSDP
+    distributed_app = typer.Typer(help="Distributed: parallelism planning, NCCL, FSDP")
+    
+    # Domain 7: Inference - vLLM, quantization, deployment
+    inference_app = typer.Typer(help="Inference: vLLM config, quantization, deployment")
+    
+    # Domain 8: Benchmark - Run benchmarks, targets, history
+    benchmark_app = typer.Typer(help="Benchmarks: run, targets, history, speed tests")
+    
+    # Domain 9: AI - Ask questions, explain concepts
+    ai_app = typer.Typer(help="AI: ask questions, explain concepts, suggest tools")
+    
+    # Domain 10: Export - CSV, PDF, HTML reports
+    export_app = typer.Typer(help="Export: CSV, PDF, HTML reports")
+    
+    # ==========================================================================
+    # LEGACY ALIASES (for backwards compatibility during transition)
+    # ==========================================================================
+    info_app = gpu_app  # Alias: aisp info → aisp gpu
+    hw_app = benchmark_app  # Alias: aisp hw → aisp benchmark  
+    report_app = export_app  # Alias: aisp report → aisp export
+    
+    # Additional legacy groups (will be phased out)
+    monitoring_app = typer.Typer(help="[Legacy] Monitoring and diagnostics")
+    training_app = typer.Typer(help="[Legacy] Training helpers")
+    hf_app = typer.Typer(help="[Legacy] HuggingFace model search")
+    cluster_app = typer.Typer(help="[Legacy] Cluster scripts - use 'distributed' instead")
 
 
 # =============================================================================
@@ -217,30 +289,176 @@ if typer:
 
 
 # =============================================================================
-# Category: info (was: system)
+# Domain 1: GPU - Hardware info, topology, power, bandwidth
 # =============================================================================
 
 if typer:
 
-    @info_app.command("status", help="Show comprehensive system status")
-    def info_status(ctx: typer.Context) -> None:
+    @gpu_app.command("info", help="GPU information: name, memory, temperature, utilization")
+    def gpu_info_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().gpu.info()
+        if ctx.obj and ctx.obj.get("json_output"):
+            typer.echo(json.dumps(result, indent=2))
+        else:
+            typer.echo(f"\n🖥️  GPU Info")
+            for i, gpu in enumerate(result.get("gpus", [result])):
+                name = gpu.get("name", "Unknown")
+                mem = gpu.get("memory_total_gb", 0)
+                temp = gpu.get("temperature_c", 0)
+                util = gpu.get("utilization_pct", 0)
+                typer.echo(f"  GPU {i}: {name}")
+                typer.echo(f"    Memory: {mem:.1f} GB, Temp: {temp}°C, Util: {util}%")
+        raise typer.Exit(0)
+
+    @gpu_app.command("topology", help="GPU topology: NVLink, PCIe, P2P matrix")
+    def gpu_topology_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().gpu.topology()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @gpu_app.command("power", help="Power draw, limits, thermal status")
+    def gpu_power_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().analyze.power()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @gpu_app.command("bandwidth", help="Run GPU memory bandwidth test")
+    def gpu_bandwidth_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        typer.echo("Running GPU bandwidth test...")
+        result = get_engine().gpu.bandwidth()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @gpu_app.command("status", help="[Alias] Comprehensive system status")
+    def gpu_status(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.system_status, ctx)
 
-    @info_app.command("gpu", help="GPU information and control")
-    def info_gpu(ctx: typer.Context) -> None:
-        from cli.commands import system as system_cmds
-        _run(system_cmds.gpu_info, ctx)
+    @gpu_app.command("features", help="Hardware features (TMA, tensor cores, FP8)")
+    def gpu_features(ctx: typer.Context) -> None:
+        """Display detailed hardware capabilities and features."""
+        from core.harness.hardware_capabilities import detect_capabilities
+        
+        cap = detect_capabilities()
+        if cap is None:
+            typer.echo("❌ CUDA not available on this system.")
+            raise typer.Exit(code=1)
+        
+        typer.echo(f"\n🖥️  GPU: {cap.device_name}")
+        typer.echo(f"   Architecture: {cap.name} (SM {cap.sm_version})")
+        typer.echo(f"   Compute Capability: {cap.compute_capability}")
+        typer.echo(f"   Memory: {cap.total_memory_gb:.1f} GB")
+        typer.echo(f"   SMs: {cap.num_sms}")
+        typer.echo()
+        
+        typer.echo("Features:")
+        typer.echo(f"  • Tensor Cores: {cap.tensor_cores or 'None'}")
+        typer.echo(f"  • TMA: {'✓' if cap.tma_supported else '✗'}")
+        typer.echo(f"  • FP8: {'✓' if 'FP8' in cap.features or cap.architecture.lower() in ['hopper', 'blackwell'] else '✗'}")
+        typer.echo(f"  • NVLink C2C: {'✓' if cap.nvlink_c2c else '✗'}")
+        raise typer.Exit(0)
 
-    @info_app.command("env", help="Environment variables and paths")
-    def info_env(ctx: typer.Context) -> None:
+# =============================================================================
+# Domain 2: System - Software stack, dependencies, capabilities  
+# =============================================================================
+
+if typer:
+
+    @system_app.command("software", help="Software versions: PyTorch, CUDA, Python")
+    def system_software_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().system.software()
+        if ctx.obj and ctx.obj.get("json_output"):
+            typer.echo(json.dumps(result, indent=2))
+        else:
+            typer.echo("\n📦 Software Stack")
+            for key, val in result.items():
+                typer.echo(f"  {key}: {val}")
+        raise typer.Exit(0)
+
+    @system_app.command("deps", help="Check dependency health")
+    def system_deps_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().system.dependencies()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @system_app.command("capabilities", help="Hardware capabilities (TMA, FP8, etc)")
+    def system_capabilities_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().system.capabilities()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @system_app.command("context", help="Full system context for AI analysis")
+    def system_context_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().system.context()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @system_app.command("env", help="Environment variables and paths")
+    def system_env_cmd(ctx: typer.Context) -> None:
         from cli.commands import system as system_cmds
         _run(system_cmds.show_env, ctx)
 
-    @info_app.command("deps", help="Check dependencies and versions")
-    def info_deps(ctx: typer.Context) -> None:
-        from cli.commands import system as system_cmds
-        _run(system_cmds.check_deps, ctx)
+# =============================================================================
+# Domain 4: Analyze - Bottlenecks, pareto, scaling, what-if
+# =============================================================================
+
+if typer:
+
+    @analyze_app.command("bottlenecks", help="Identify performance bottlenecks")
+    def analyze_bottlenecks_cmd(
+        ctx: typer.Context,
+        mode: BottleneckMode = typer.Option(BottleneckMode.both, "--mode", "-m", help="Analysis mode")
+    ) -> None:
+        from core.engine import get_engine
+        result = get_engine().analyze.bottlenecks(mode=mode.value)
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @analyze_app.command("pareto", help="Pareto frontier analysis")
+    def analyze_pareto_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().analyze.pareto()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @analyze_app.command("scaling", help="Scaling analysis with GPU count")
+    def analyze_scaling_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().analyze.scaling()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @analyze_app.command("whatif", help="What-if constraint analysis")
+    def analyze_whatif_cmd(
+        ctx: typer.Context,
+        max_vram: Optional[float] = typer.Option(None, "--max-vram", help="Max VRAM in GB"),
+        max_latency: Optional[float] = typer.Option(None, "--max-latency", help="Max latency in ms"),
+    ) -> None:
+        from core.engine import get_engine
+        result = get_engine().analyze.whatif(max_vram_gb=max_vram, max_latency_ms=max_latency)
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+    @analyze_app.command("stacking", help="Optimization stacking compatibility")
+    def analyze_stacking_cmd(ctx: typer.Context) -> None:
+        from core.engine import get_engine
+        result = get_engine().analyze.stacking()
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(0)
+
+# =============================================================================
+# Legacy: info (aliased to gpu)
+# =============================================================================
+
+if typer:
 
     @info_app.command("topo", help="Show GPU/NVLink/PCIe topology (nvidia-smi topo -m)")
     def info_topo(ctx: typer.Context) -> None:
@@ -252,7 +470,7 @@ if typer:
         from cli.commands import system as system_cmds
         _run(system_cmds.preflight, ctx)
 
-    @info_app.command("features", help="Hardware features (TMA, TMEM, tensor cores, FP8, NVLink)")
+    @info_app.command("features", help="Hardware features (TMA, TMEM/MMA, DSMEM, tensor cores, FP8, NVLink)")
     def info_features(ctx: typer.Context) -> None:
         """Display detailed hardware capabilities and features."""
         from core.harness.hardware_capabilities import detect_capabilities, format_capability_report
@@ -292,14 +510,18 @@ if typer:
             tma_status = "✗"
         typer.echo(f"│ TMA                 │ {tma_status:<34} │")
         
-        # TMEM/DSMEM (Clusters)
+        # TMEM (Tensor Memory for MMA accumulators - SM100+ Blackwell)
+        tmem_status = "✓" if cap.architecture.lower() in ["blackwell", "blackwell_ultra"] else "✗"
+        typer.echo(f"│ TMEM (MMA accum)    │ {tmem_status:<34} │")
+        
+        # DSMEM (Distributed Shared Memory - cluster feature)
         if cap.cluster.supports_clusters:
-            cluster_status = f"✓ (max cluster: {cap.cluster.max_cluster_size})"
+            dsmem_status = f"✓ (max cluster: {cap.cluster.max_cluster_size})"
             if cap.cluster.has_dsmem:
-                cluster_status = f"✓ DSMEM (cluster: {cap.cluster.max_cluster_size})"
+                dsmem_status = f"✓ (cluster: {cap.cluster.max_cluster_size})"
         else:
-            cluster_status = "✗"
-        typer.echo(f"│ TMEM/DSMEM          │ {cluster_status:<34} │")
+            dsmem_status = "✗"
+        typer.echo(f"│ DSMEM (clusters)    │ {dsmem_status:<34} │")
         
         # NVLink
         nvlink_status = "✓" if cap.nvlink_c2c else "✗"
@@ -1071,19 +1293,19 @@ if typer and training_app is not None:
 # Category: monitor
 # =============================================================================
 
-if typer and monitor_app is not None:
+if typer and monitoring_app is not None:
 
-    @monitor_app.command("live", help="Real-time GPU monitoring")
+    @monitoring_app.command("live", help="Real-time GPU monitoring")
     def monitor_live(ctx: typer.Context) -> None:
         from cli.commands import monitoring
         _run(monitoring.live_monitor, ctx)
 
-    @monitor_app.command("regression", help="Detect performance regressions")
+    @monitoring_app.command("regression", help="Detect performance regressions")
     def monitor_regression(ctx: typer.Context) -> None:
         from cli.commands import monitoring
         _run(monitoring.regression, ctx)
 
-    @monitor_app.command("metrics", help="Collect and display metrics")
+    @monitoring_app.command("metrics", help="Collect and display metrics")
     def monitor_metrics(ctx: typer.Context) -> None:
         from cli.commands import monitoring
         _run(monitoring.metrics, ctx)
@@ -1551,10 +1773,10 @@ if typer:
     plugin_apps = load_plugin_apps()
 
     if BENCH_APP:
-        app.add_typer(BENCH_APP, name="bench", help="Run, profile, and verify benchmarks")
+        app.add_typer(BENCH_APP, name="bench", help="Run and profile benchmarks")
     else:  # pragma: no cover - bench missing during docs builds
 
-        @app.command("bench", help="Run, profile, and verify benchmarks")
+        @app.command("bench", help="Run and profile benchmarks")
         def bench_stub() -> None:
             typer.echo("Bench CLI unavailable (typer not installed or import failed).")
             raise typer.Exit(code=1)
@@ -1629,23 +1851,32 @@ if typer:
 
 
 # =============================================================================
-# Attach sub-apps
+# Attach sub-apps (10 domains + legacy aliases)
 # =============================================================================
 
 if typer:
-    app.add_typer(info_app, name="info")
-    app.add_typer(hw_app, name="hw")
-    app.add_typer(profile_app, name="profile")
-    app.add_typer(monitoring_app, name="monitor")
-    # Feature sub-apps
-    app.add_typer(ai_app, name="ai")
-    app.add_typer(optimize_app, name="optimize")
-    app.add_typer(distributed_app, name="distributed")
-    app.add_typer(inference_app, name="inference")
-    app.add_typer(training_app, name="training")
-    app.add_typer(report_app, name="report")
-    app.add_typer(hf_app, name="hf")
-    app.add_typer(cluster_app, name="cluster")
+    # Primary domain apps (the 10-domain model)
+    app.add_typer(gpu_app, name="gpu", help="GPU: info, topology, power, bandwidth")
+    app.add_typer(system_app, name="system", help="System: software, deps, capabilities")
+    app.add_typer(profile_app, name="profile", help="Profile: nsys, ncu, flame, HTA")
+    app.add_typer(analyze_app, name="analyze", help="Analyze: bottlenecks, pareto, scaling")
+    app.add_typer(optimize_app, name="optimize", help="Optimize: recommend, ROI, techniques")
+    app.add_typer(distributed_app, name="distributed", help="Distributed: plan, NCCL, FSDP")
+    app.add_typer(inference_app, name="inference", help="Inference: vLLM, quantization")
+    app.add_typer(benchmark_app, name="benchmark", help="Benchmark: run, targets, history")
+    app.add_typer(ai_app, name="ai", help="AI: ask, explain, suggest")
+    app.add_typer(export_app, name="export", help="Export: CSV, PDF, HTML")
+    
+    # Legacy aliases (for backward compat, same underlying apps)
+    app.add_typer(gpu_app, name="info", help="[Alias for 'gpu']", hidden=True)
+    app.add_typer(benchmark_app, name="hw", help="[Alias for 'benchmark']", hidden=True)
+    app.add_typer(export_app, name="report", help="[Alias for 'export']", hidden=True)
+    
+    # Legacy apps (will be phased out)
+    app.add_typer(monitoring_app, name="monitor", hidden=True)
+    app.add_typer(training_app, name="training", hidden=True)
+    app.add_typer(hf_app, name="hf", hidden=True)
+    app.add_typer(cluster_app, name="cluster", hidden=True)
 
 
 # =============================================================================

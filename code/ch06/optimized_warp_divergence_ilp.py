@@ -4,13 +4,13 @@ Chapter 6: Occupancy and Instruction-Level Parallelism
 
 Demonstrates how to avoid warp divergence using branchless operations.
 The baseline (baseline_warp_divergence_ilp.py) uses conditional indexing
-which causes warp divergence. This optimized version uses torch.compile
-to convert branches into predicated/branchless operations.
+which causes warp divergence. This optimized version uses torch.where
+for branchless selection, compiled once with torch.compile on the full tensor.
 
-FORWARD REFERENCE: This file uses torch.compile (TorchInductor), which is
-covered in depth in Chapter 14. Here we use it to demonstrate the ILP
-benefits of eliminating warp divergence through compiler optimization.
-See ch14/*compile*.py for detailed torch.compile analysis.
+Key optimizations vs baseline:
+- torch.where instead of boolean indexing (no warp divergence)
+- Single compiled kernel on full tensor (no chunking overhead)
+- No per-iteration clones or concatenation
 """
 
 from __future__ import annotations
@@ -28,38 +28,38 @@ from core.optimization.inductor_guard import (
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch06.workload_config import WORKLOAD
 
-_MARK_CUDAGRAPH_STEP = getattr(torch.compiler, "cudagraph_mark_step_begin", None)
 
-
-def _mark_cudagraph_step() -> None:
-    if callable(_MARK_CUDAGRAPH_STEP):
-        _MARK_CUDAGRAPH_STEP()
-
-
-def _branchless_kernel(
+def _fused_branchless_kernel(
     result: torch.Tensor,
     mask_source: torch.Tensor,
     iterations: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Shared branchless transform used for eager + compiled paths."""
+    """Fully fused branchless transform - no warp divergence.
+    
+    Uses torch.where for predicated selection instead of boolean indexing.
+    All threads compute both branches; the result is selected via predicate.
+    """
     for iteration in range(iterations):
+        # Compute mask as float for branchless blending
         activations = torch.sigmoid(mask_source)
-        mask = torch.gt(activations, 0.5).to(result.dtype)
-        inv_mask = 1.0 - mask
-
+        mask = activations > 0.5  # Boolean mask for torch.where
+        
+        # Compute BOTH branches for all elements (branchless)
         positive = torch.tanh(result * 1.11 + 0.25)
         positive = positive * 1.003 + 0.0005 * positive * positive
-
+        
         negative = torch.sin(result * 0.77 - 0.35)
         negative = negative * 0.997 - 0.0004 * negative * negative
-
-        result = mask * positive + inv_mask * negative
+        
+        # Select result via predicate (no divergence - all threads do same work)
+        result = torch.where(mask, positive, negative)
         mask_source = 0.92 * mask_source + 0.08 * torch.roll(result, shifts=iteration + 1, dims=0)
+    
     return result, mask_source
 
 
 class OptimizedWarpDivergenceILPBenchmark(BaseBenchmark):
-    """Optimized: High ILP by avoiding warp divergence."""
+    """Optimized: High ILP by avoiding warp divergence with fused branchless kernel."""
 
     def __init__(self):
         super().__init__()
@@ -72,9 +72,7 @@ class OptimizedWarpDivergenceILPBenchmark(BaseBenchmark):
         self.routing_logits: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._checksum = 0.0
-        self.streams: list[torch.cuda.Stream] = []
-        self._compiled_step: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
-        self._branchless_fn: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
+        self._compiled_fn: Optional[Callable[[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor]]] = None
         self._inductor_state: Optional[InductorCudagraphState] = None
         token_count = self.N * self.branch_iterations
         self._workload = WorkloadMetadata(
@@ -87,54 +85,40 @@ class OptimizedWarpDivergenceILPBenchmark(BaseBenchmark):
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.routing_logits = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self.output = torch.empty_like(self.input)
-        props = torch.cuda.get_device_properties(self.device.index or 0)
-        stream_count = min(4, max(1, props.multi_processor_count // 8))
-        self.streams = [torch.cuda.Stream(priority=-1) for _ in range(stream_count)]
-
-        def branchless_fn(chunk: torch.Tensor, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-            return _branchless_kernel(chunk, logits, self.branch_iterations)
-
-        self._branchless_fn = branchless_fn
+        
+        # Capture iterations in closure for compilation
+        branch_iters = self.branch_iterations
+        
+        def fused_fn(data: torch.Tensor, logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+            return _fused_branchless_kernel(data, logits, branch_iters)
+        
+        # Disable CUDA graph features that conflict with compiled functions
         if self._inductor_state is None:
             self._inductor_state = disable_inductor_cudagraph_features()
-        self._compiled_step = compile_callable(
-            branchless_fn,
+        
+        # Compile once for the full tensor - no chunking
+        self._compiled_fn = compile_callable(
+            fused_fn,
             fullgraph=True,
             mode="reduce-overhead",
         )
+        
+        # Warmup the compiled function
+        _ = self._compiled_fn(self.input, self.routing_logits)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
         assert self.input is not None and self.routing_logits is not None
         with self._nvtx_range("optimized_warp_divergence_ilp"):
-            chunked_inputs = torch.chunk(self.input, len(self.streams))
-            chunked_logits = torch.chunk(self.routing_logits, len(self.streams))
-            updated_chunks: list[torch.Tensor] = [torch.empty(0, device=self.device)] * len(self.streams)
-            updated_logits: list[torch.Tensor] = [torch.empty(0, device=self.device)] * len(self.streams)
-            step_fn = self._compiled_step
-            assert step_fn is not None
-
-            for idx, (stream, chunk, logits) in enumerate(zip(self.streams, chunked_inputs, chunked_logits)):
-                with torch.cuda.stream(stream):
-                    chunk_contig = chunk.contiguous()
-                    logits_contig = logits.contiguous()
-                    _mark_cudagraph_step()
-                    out_chunk, out_logits = step_fn(chunk_contig, logits_contig)
-                    out_chunk = out_chunk.clone()
-                    out_logits = out_logits.clone()
-                    updated_chunks[idx] = out_chunk
-                    updated_logits[idx] = out_logits
-
-            self._synchronize()
-            self.output = torch.cat(updated_chunks, dim=0)
-            self.routing_logits = torch.cat(updated_logits, dim=0)
+            # Single compiled call on full tensor - no chunking, no concat
+            assert self._compiled_fn is not None
+            self.output, self.routing_logits = self._compiled_fn(self.input, self.routing_logits)
             self._checksum = float(self.output.sum().item())
 
     def teardown(self) -> None:
         self.input = None
         self.output = None
         self.routing_logits = None
-        self.streams = []
         restore_inductor_cudagraph_features(self._inductor_state)
         self._inductor_state = None
         torch.cuda.empty_cache()

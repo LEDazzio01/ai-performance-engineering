@@ -42,7 +42,6 @@ except ImportError:
     format_metrics = _baseline_module.format_metrics
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
-from core.benchmark.smoke import is_smoke_mode  # noqa: E402
 from ch18.decode_kernels import DEVICE, build_decode_kernel  # noqa: E402
 
 BUCKETS = (8, 16, 24, 32)
@@ -233,8 +232,6 @@ class OptimizedVLLMDecodeGraphsBenchmark(BaseBenchmark):
     """
 
     def __init__(self, steps: int = 32, hidden: int = 192, seed: int = 0) -> None:
-        if is_smoke_mode():
-            raise RuntimeError("SKIPPED: vllm_decode_graphs is disabled in smoke-test sweeps")
         super().__init__()
         self.steps = steps
         self.hidden = hidden

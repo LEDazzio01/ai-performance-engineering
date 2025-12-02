@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart,
   Bar,
@@ -25,6 +25,7 @@ import {
   startNsightComputeCapture,
   startTorchProfilerCapture,
   startHTACapture,
+  fetchJobStatus,
   fetchNsightJobStatus,
   fetchMcpJobStatus,
   getProfilerTorch,
@@ -71,9 +72,11 @@ export function ProfilerTab() {
   const [askQuestion, setAskQuestion] = useState('');
   const [askResult, setAskResult] = useState<string | null>(null);
   const [toolError, setToolError] = useState<string | null>(null);
+  // Single async toggle for all profiler operations
+  const [runAsync, setRunAsync] = useState(false);
+
   const [nsysCommand, setNsysCommand] = useState('python -c "print(123)"');
   const [nsysPreset, setNsysPreset] = useState<'light' | 'full'>('full');
-  const [nsysQueue, setNsysQueue] = useState(false);
   const [nsysFullTimeline, setNsysFullTimeline] = useState(false);
   const [nsysTimeout, setNsysTimeout] = useState<number | ''>('');
   const [nsysForceLineinfo, setNsysForceLineinfo] = useState(true);
@@ -82,7 +85,6 @@ export function ProfilerTab() {
 
   const [ncuCommand, setNcuCommand] = useState('python -c "print(456)"');
   const [ncuWorkload, setNcuWorkload] = useState('memory_bound');
-  const [ncuQueue, setNcuQueue] = useState(false);
   const [ncuTimeout, setNcuTimeout] = useState<number | ''>('');
   const [ncuForceLineinfo, setNcuForceLineinfo] = useState(true);
   const [ncuResult, setNcuResult] = useState<any>(null);
@@ -91,7 +93,6 @@ export function ProfilerTab() {
   const [torchScript, setTorchScript] = useState('ch01/baseline.py');
   const [torchArgs, setTorchArgs] = useState('');
   const [torchMode, setTorchMode] = useState('full');
-  const [torchQueue, setTorchQueue] = useState(false);
   const [torchForceLineinfo, setTorchForceLineinfo] = useState(true);
   const [torchUseNvtx, setTorchUseNvtx] = useState(true);
   const [torchNvtxLabel, setTorchNvtxLabel] = useState('aisp_torch_profile');
@@ -101,7 +102,6 @@ export function ProfilerTab() {
 
   const [htaCommand, setHtaCommand] = useState('python -c "print(789)"');
   const [htaPreset, setHtaPreset] = useState<'light' | 'full'>('full');
-  const [htaQueue, setHtaQueue] = useState(false);
   const [htaForceLineinfo, setHtaForceLineinfo] = useState(true);
   const [htaTimeout, setHtaTimeout] = useState<number | ''>('');
   const [htaResult, setHtaResult] = useState<any>(null);
@@ -109,6 +109,29 @@ export function ProfilerTab() {
 
   const [jobId, setJobId] = useState('');
   const [jobStatus, setJobStatus] = useState<any>(null);
+  const [isPolling, setIsPolling] = useState(false);
+
+  // Auto-poll for job status when a job is running (uses UNIFIED endpoint)
+  useEffect(() => {
+    if (!jobId || !isPolling) return;
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        const status = await fetchJobStatus(jobId); // Uses unified endpoint
+        setJobStatus(status);
+        
+        // Stop polling if job completed or errored
+        if (status.status === 'completed' || status.status === 'error' || status.status === 'not_found') {
+          setIsPolling(false);
+        }
+      } catch (e: any) {
+        setJobStatus({ error: e.message });
+        setIsPolling(false);
+      }
+    }, 3000); // Poll every 3 seconds
+    
+    return () => clearInterval(pollInterval);
+  }, [jobId, isPolling]);
 
   const profilerQuery = useApiQuery<ProfilerDataset>('profiler/summary', async () => {
     const [kernelsRes, flameRes, bottlenecksRes, scoreRes, timelineRes] = await Promise.allSettled([
@@ -479,6 +502,16 @@ export function ProfilerTab() {
         <div className="card-header flex items-center gap-2">
           <Rocket className="w-4 h-4 text-accent-primary" />
           <h3 className="font-medium text-white">Nsight Capture (nsys/ncu)</h3>
+          <label className="flex items-center gap-2 text-sm">
+            <input 
+              type="checkbox" 
+              className="accent-accent-info" 
+              checked={runAsync} 
+              onChange={(e) => setRunAsync(e.target.checked)} 
+            />
+            <span className="text-accent-info">Run Async</span>
+            <span className="text-white/40 text-xs">(background, poll for status)</span>
+          </label>
         </div>
         <div className="card-body space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -504,10 +537,6 @@ export function ProfilerTab() {
                 <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={nsysFullTimeline} onChange={(e) => setNsysFullTimeline(e.target.checked)} />
                   Full timeline
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" className="accent-accent-secondary" checked={nsysQueue} onChange={(e) => setNsysQueue(e.target.checked)} />
-                  Queue only
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={nsysForceLineinfo} onChange={(e) => setNsysForceLineinfo(e.target.checked)} />
@@ -537,12 +566,16 @@ export function ProfilerTab() {
                       command: nsysCommand,
                       preset: nsysPreset,
                       full_timeline: nsysFullTimeline,
-                      queue_only: nsysQueue,
+                      async: runAsync,
                       force_lineinfo: nsysForceLineinfo,
                       timeout_seconds: nsysTimeout === '' ? undefined : Number(nsysTimeout),
                     });
                     setNsysResult(res);
-                    if (res.job_id) setJobId(res.job_id);
+                    if (res.job_id) {
+                      setJobId(res.job_id);
+                      setJobStatus({ status: 'running', job_id: res.job_id });
+                      if (runAsync) setIsPolling(true); // Start auto-polling
+                    }
                   } catch (e: any) {
                     setNsysResult({ error: e.message });
                   } finally {
@@ -578,10 +611,6 @@ export function ProfilerTab() {
                   </select>
                 </label>
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" className="accent-accent-secondary" checked={ncuQueue} onChange={(e) => setNcuQueue(e.target.checked)} />
-                  Queue only
-                </label>
-                <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={ncuForceLineinfo} onChange={(e) => setNcuForceLineinfo(e.target.checked)} />
                   Force lineinfo
                 </label>
@@ -608,12 +637,16 @@ export function ProfilerTab() {
                     const res = await startNsightComputeCapture({
                       command: ncuCommand,
                       workload_type: ncuWorkload,
-                      queue_only: ncuQueue,
+                      async: runAsync,
                       force_lineinfo: ncuForceLineinfo,
                       timeout_seconds: ncuTimeout === '' ? undefined : Number(ncuTimeout),
                     });
                     setNcuResult(res);
-                    if (res.job_id) setJobId(res.job_id);
+                    if (res.job_id) {
+                      setJobId(res.job_id);
+                      setJobStatus({ status: 'running', job_id: res.job_id });
+                      if (runAsync) setIsPolling(true); // Start auto-polling
+                    }
                   } catch (e: any) {
                     setNcuResult({ error: e.message });
                   } finally {
@@ -670,10 +703,6 @@ export function ProfilerTab() {
                   </select>
                 </label>
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" className="accent-accent-secondary" checked={torchQueue} onChange={(e) => setTorchQueue(e.target.checked)} />
-                  Queue only
-                </label>
-                <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={torchForceLineinfo} onChange={(e) => setTorchForceLineinfo(e.target.checked)} />
                   Force lineinfo
                 </label>
@@ -704,7 +733,7 @@ export function ProfilerTab() {
                     const res = await startTorchProfilerCapture({
                       script: torchScript,
                       mode: torchMode,
-                      queue_only: torchQueue,
+                      async: runAsync,
                       nvtx_label: torchNvtxLabel,
                       force_lineinfo: torchForceLineinfo,
                       use_nvtx: torchUseNvtx,
@@ -745,10 +774,6 @@ export function ProfilerTab() {
                   </select>
                 </label>
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" className="accent-accent-secondary" checked={htaQueue} onChange={(e) => setHtaQueue(e.target.checked)} />
-                  Queue only
-                </label>
-                <label className="flex items-center gap-2">
                   <input type="checkbox" className="accent-accent-primary" checked={htaForceLineinfo} onChange={(e) => setHtaForceLineinfo(e.target.checked)} />
                   Force lineinfo
                 </label>
@@ -775,7 +800,7 @@ export function ProfilerTab() {
                     const res = await startHTACapture({
                       command: htaCommand,
                       preset: htaPreset,
-                      queue_only: htaQueue,
+                      async: runAsync,
                       force_lineinfo: htaForceLineinfo,
                       timeout_seconds: htaTimeout === '' ? undefined : Number(htaTimeout),
                     });
@@ -829,8 +854,24 @@ export function ProfilerTab() {
             >
               Check MCP Job
             </button>
+            {isPolling && (
+              <span className="text-xs text-accent-info animate-pulse">
+                ⏳ Auto-polling every 3s...
+              </span>
+            )}
           </div>
-          <ResultPanel title="Job Status" content={jobStatus} />
+          <ResultPanel 
+            title={`Job Status${isPolling ? ' (polling...)' : ''}`} 
+            content={jobStatus}
+          />
+          {jobStatus?.status === 'completed' && (
+            <div className="mt-2 p-3 bg-accent-success/10 border border-accent-success/30 rounded-lg">
+              <div className="text-sm text-accent-success font-medium">✅ Job completed!</div>
+              <div className="text-xs text-white/60 mt-1">
+                Use the result or run <code className="bg-white/10 px-1 rounded">aisp bench triage</code> for recommendations.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -257,10 +257,10 @@ class OptimizedCUDAGraphBucketing(BaselineCUDAGraphBucketing):
             sim.prewarm(self.prewarm_shapes)
         return sim
 
-    def run_compile_smoke(self) -> dict[str, int]:
+    def run_compile_validation(self) -> dict[str, int]:
         """
         Wrap a toy decode step in torch.compile(dynamic=True) and execute
-        padded bucket shapes to confirm low recompile counts.
+        padded bucket shapes to confirm compile stability and rebuild counts.
         """
         capture_bins = capture_bins_from_vllm_config(self._vllm_config) if self._vllm_config else DEFAULT_CAPTURE_BATCH_SIZES
         pad_fn = pad_fn_from_vllm_config(self._vllm_config) if self._vllm_config else None
@@ -321,11 +321,6 @@ def _build_parser(add_help: bool = True) -> argparse.ArgumentParser:
         default=None,
         help="If set, starts a Prometheus HTTP exporter on this port and publishes graph stats",
     )
-    parser.add_argument(
-        "--skip-compile-smoke",
-        action="store_true",
-        help="Skip the torch.compile dynamic-shape smoke test",
-    )
     return parser
 
 
@@ -344,9 +339,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     sim = optimized.run()
     print(sim.format_summary())
 
-    if not args.skip_compile_smoke:
-        compile_stats = optimized.run_compile_smoke()
-        print(f"[compile] torch.compile(dynamic=True) recompiles: {compile_stats['compiles']}")
+    compile_stats = optimized.run_compile_validation()
+    print(f"[compile] torch.compile(dynamic=True) recompiles: {compile_stats['compiles']}")
 
     export_stats_to_prometheus(
         sim.stats,
@@ -370,7 +364,6 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
         self.use_vllm_bins = True
         self.region = "local"
         self.model_label = "gpt-oss-20b"
-        self.skip_compile_smoke = False
         self._last_sim: Optional[GraphTreeSimulator] = None
         self._compile_stats: Optional[dict] = None
         self._graph_bucketing: Optional[CUDAGraphBucketing] = None
@@ -397,7 +390,6 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
             self.use_vllm_bins = not args.no_vllm_bins
             self.region = args.region
             self.model_label = args.model_label
-            self.skip_compile_smoke = bool(args.skip_compile_smoke)
         except SystemExit:
             pass
 
@@ -433,8 +425,7 @@ class OptimizedCUDAGraphBucketingBenchmark(BaseBenchmark):
         sim = optimized.run()
         self._last_sim = sim
         
-        if not self.skip_compile_smoke:
-            self._compile_stats = optimized.run_compile_smoke()
+        self._compile_stats = optimized.run_compile_validation()
         
         # Part 2: Exercise actual CUDA graph bucketing
         if self._graph_bucketing is not None and torch.cuda.is_available():

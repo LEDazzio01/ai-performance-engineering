@@ -273,7 +273,7 @@ class FlexAttentionBenchmark:
             "sparsity_pct": 0.0,
         }
     
-    def run_all_benchmarks(self) -> list:
+    def run_benchmarks(self) -> list:
         """Run benchmarks for all patterns."""
         results = []
         
@@ -424,7 +424,7 @@ if __name__ == "__main__":
           f"D={benchmark.head_dim}, S={benchmark.seq_len}")
     print()
     
-    results = benchmark.run_all_benchmarks()
+    results = benchmark.run_benchmarks()
     
     # Print results
     print(f"{'Pattern':<30} {'Time (ms)':<12} {'TFLOPS':<10} {'Sparsity':<10}")
@@ -520,4 +520,3 @@ class FlexAttentionSparseDemoBenchmark(BaseBenchmark):
 def get_benchmark() -> BaseBenchmark:
     """Factory function for benchmark discovery."""
     return FlexAttentionSparseDemoBenchmark()
-

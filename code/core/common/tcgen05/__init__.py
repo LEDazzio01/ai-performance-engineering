@@ -303,20 +303,12 @@ def _load_extension(name: str, sources: Sequence[Path]):
 @lru_cache(None)
 def load_matmul_tcgen05_module():
     """Compile (if needed) and return the Chapter 10 tcgen05 matmul extension."""
-    import os
-    from core.benchmark.smoke import is_smoke_mode
-    if is_smoke_mode():
-        raise RuntimeError("SKIPPED: tcgen05 extension disabled in low-memory mode")
     return _load_extension("ch10_matmul_tcgen05_ext", [_REPO_ROOT / "ch10" / "matmul_tcgen05.cu"])
 
 
 @lru_cache(None)
 def load_tiling_tcgen05_module():
     """Compile (if needed) and return the Chapter 8 tcgen05 tiling extension."""
-    import os
-    from core.benchmark.smoke import is_smoke_mode
-    if is_smoke_mode():
-        raise RuntimeError("SKIPPED: tcgen05 extension disabled in low-memory mode")
     return _load_extension("ch08_tiling_tcgen05_ext", [_REPO_ROOT / "ch08" / "tiling_kernels_tcgen05.cu"])
 
 

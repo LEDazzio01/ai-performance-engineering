@@ -22,6 +22,16 @@
 
 struct Token { int id; };
 
+// CUDA kernel must be defined outside class (global functions cannot be member functions)
+__global__ void simple_model_dummy_kernel(const float* weights,
+                                          float* cache,
+                                          int dim) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < dim) {
+    cache[idx] = weights[idx] + cache[idx] * 0.99f;
+  }
+}
+
 class SimpleModel {
  public:
   explicit SimpleModel(int dim = 2048) : dim_(dim) {
@@ -68,19 +78,10 @@ class SimpleModel {
     nvtxRangePushEx(&attr);
     dim3 block(256);
     dim3 grid((dim_ + block.x - 1) / block.x);
-    dummy_kernel<<<grid, block>>>(weights_, cache_, dim_);
+    simple_model_dummy_kernel<<<grid, block>>>(weights_, cache_, dim_);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
     nvtxRangePop();
-  }
-
-  static __global__ void dummy_kernel(const float* weights,
-                                      float* cache,
-                                      int dim) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < dim) {
-      cache[idx] = weights[idx] + cache[idx] * 0.99f;
-    }
   }
 
   int dim_;

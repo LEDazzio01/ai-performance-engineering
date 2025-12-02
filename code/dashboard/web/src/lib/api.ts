@@ -234,7 +234,7 @@ export async function startNsightSystemsCapture(payload: {
   command: string;
   preset?: 'light' | 'full';
   full_timeline?: boolean;
-  queue_only?: boolean;
+  async?: boolean;
   timeout_seconds?: number;
 }) {
   return fetchAPI('/nsight/profile/nsys', {
@@ -246,7 +246,7 @@ export async function startNsightSystemsCapture(payload: {
 export async function startNsightComputeCapture(payload: {
   command: string;
   workload_type?: string;
-  queue_only?: boolean;
+  async?: boolean;
   timeout_seconds?: number;
 }) {
   return fetchAPI('/nsight/profile/ncu', {
@@ -263,7 +263,7 @@ export async function startTorchProfilerCapture(payload: {
   nvtx_label?: string;
   force_lineinfo?: boolean;
   use_nvtx?: boolean;
-  queue_only?: boolean;
+  async?: boolean;
   timeout_seconds?: number;
   script_args?: string[];
 }) {
@@ -279,7 +279,7 @@ export async function startHTACapture(payload: {
   output_name?: string;
   output_dir?: string;
   force_lineinfo?: boolean;
-  queue_only?: boolean;
+  async?: boolean;
   timeout_seconds?: number;
 }) {
   return fetchAPI('/profiler/hta-capture', {
@@ -288,15 +288,27 @@ export async function startHTACapture(payload: {
   });
 }
 
+// UNIFIED job status - checks both Dashboard AND MCP job stores
+export async function fetchJobStatus(job_id: string) {
+  const search = new URLSearchParams({ job_id });
+  return fetchAPI(`/job-status?${search.toString()}`);
+}
+
+// Legacy: Dashboard profile jobs only (nsys, ncu, torch, hta started via Dashboard UI)
 export async function fetchNsightJobStatus(job_id: string) {
   const search = new URLSearchParams({ job_id });
   return fetchAPI(`/nsight/job-status?${search.toString()}`);
 }
 
-// MCP job status convenience (aisp_job_status)
+// MCP job status only (jobs started via MCP tools)
 export async function fetchMcpJobStatus(job_id: string) {
   const search = new URLSearchParams({ job_id });
   return fetchAPI(`/mcp/job-status?${search.toString()}`);
+}
+
+// Benchmark triage - post-benchmark analysis and recommendations
+export async function getBenchmarkTriage() {
+  return fetchAPI('/benchmark/triage');
 }
 
 export async function runAIQuery(question: string, context?: string) {

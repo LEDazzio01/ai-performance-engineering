@@ -15,16 +15,6 @@ DEFAULT_VALIDATION: List[str] = [
     "mpirun -np {ngpu} --bind-to none alltoall_perf  -b 512 -e 64K -f 2 -g 1 -c 1 -n 100",
 ]
 
-DEFAULT_SMOKE_TEST = (
-    "python -m vllm.entrypoints.openai.api_server "
-    "--model {model} "
-    "--tensor-parallel-size {tp} --pipeline-parallel-size {pp} "
-    '--pp-partition-method "type:prefill,decode" '
-    "--max-model-len {max_len} --max-num-seqs {max_seqs} "
-    '--enable-chunked-prefill --speculative-sampling "n=2,lookahead=4" '
-    "--gpu-memory-utilization {gpu_util}"
-)
-
 
 @dataclass(frozen=True)
 class EnvPreset:
@@ -35,7 +25,6 @@ class EnvPreset:
     env: Dict[str, str]
     notes: List[str]
     validation: List[str]
-    smoke_test: str
     flag_prefix: str = "--env"
 
 
@@ -93,7 +82,6 @@ def render_summary(
     formatted_validation = [
         line.format(**format_kwargs) for line in (preset.validation or DEFAULT_VALIDATION)
     ]
-    formatted_smoke = preset.smoke_test.format(**format_kwargs)
     flag_block = render_flag_block(preset.env, preset.flag_prefix)
     payload_gb = payload_bytes / (1024 ** 3)
     lines: List[str] = [
@@ -117,8 +105,6 @@ def render_summary(
         [
             "  Validation checks:",
             indent("\n".join(formatted_validation), "    "),
-            "  Smoke test:",
-            indent(formatted_smoke, "    "),
         ]
     )
     if preset.notes:

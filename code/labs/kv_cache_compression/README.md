@@ -15,7 +15,7 @@ Benchmarks a KV-cache heavy attention block using Transformer Engine 2.10 (CUDA 
 | `baseline_kv_cache.py` | MXFP8 baseline benchmark. |
 | `optimized_kv_cache_nvfp4.py` | NVFP4 path with FP8 calibration and automatic fallback. |
 | `kv_cache_common.py` | Shared shapes/utilities for both paths. |
-| `tmem_cache_extension.py`, `tmem_cache_ext.cu` | Optional extension wiring for TMEM-style kernels. |
+| `tma_prefetch_extension.py`, `tma_prefetch_ext.cu` | TMA async prefetch demo for KV cache tiles. |
 | `expectations_gb10.json`, `__init__.py` | Regression thresholds and harness target exports. |
 
 ## Running the Benchmarks

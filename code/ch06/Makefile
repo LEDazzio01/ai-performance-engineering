@@ -6,12 +6,9 @@ NVCC_FLAGS = $(CUDA_NVCC_ARCH_FLAGS) -lineinfo -Xptxas=-v $(CUDA_NVTX_CFLAGS)
 NVCC_LIBS = -lcuda $(CUDA_NVTX_LDFLAGS)
 SUFFIX = $(TARGET_SUFFIX)
 
-# Explicit list of CUDA examples
-BASE_TARGETS = baseline_add optimized_add_parallel baseline_add_tensors optimized_add_tensors \
-               baseline_bank_conflicts optimized_bank_conflicts \
-               optimized_ilp optimized_ilp_low_occupancy_vec4 optimized_ilp_extreme_low_occupancy_vec4 \
-               baseline_launch_bounds optimized_launch_bounds \
-               cuda13_demo_runner
+# Build all CUDA sources in this directory
+CUDA_SOURCES = $(wildcard *.cu)
+BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 
 $(TARGETS): $(CUDA_NVTX_DEPS)
@@ -23,50 +20,9 @@ all: $(TARGETS)
 	@echo "✓ Targeting $(ARCH_NAME)"
 	@echo "✓ Built $(words $(BASE_TARGETS)) CUDA examples"
 
-# Explicit build rules for each example
-baseline_add$(SUFFIX): baseline_add.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_add_parallel$(SUFFIX): optimized_add_parallel.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-baseline_add_tensors$(SUFFIX): baseline_add_tensors.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_add_tensors$(SUFFIX): optimized_add_tensors.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-baseline_coalescing_uncoalesced$(SUFFIX): baseline_coalescing_uncoalesced.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_coalescing$(SUFFIX): optimized_coalescing.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-baseline_bank_conflicts$(SUFFIX): baseline_bank_conflicts.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_bank_conflicts$(SUFFIX): optimized_bank_conflicts.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-baseline_ilp$(SUFFIX): baseline_ilp.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_ilp$(SUFFIX): optimized_ilp.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_ilp_low_occupancy_vec4$(SUFFIX): optimized_ilp_low_occupancy_vec4.cu optimized_ilp_low_occupancy_vec4_impl.cuh
-	$(NVCC) $(NVCC_FLAGS) -o $@ optimized_ilp_low_occupancy_vec4.cu $(NVCC_LIBS)
-
-optimized_ilp_extreme_low_occupancy_vec4$(SUFFIX): optimized_ilp_extreme_low_occupancy_vec4.cu optimized_ilp_low_occupancy_vec4_impl.cuh
-	$(NVCC) $(NVCC_FLAGS) -o $@ optimized_ilp_extreme_low_occupancy_vec4.cu $(NVCC_LIBS)
-
-baseline_launch_bounds$(SUFFIX): baseline_launch_bounds_gmem.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-optimized_launch_bounds$(SUFFIX): optimized_launch_bounds_gmem.cu
-	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
-
-cuda13_demo_runner$(SUFFIX): cuda13_demo_runner.cu
+# Pattern rule for all CUDA files
+$(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu
+	@echo "Building $@..."
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
 test: all
@@ -140,6 +96,5 @@ profile-all: all
 	done
 
 clean:
-	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
+	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm103,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*
-	rm -f test_bank test_baseline test_opt

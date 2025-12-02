@@ -25,11 +25,12 @@ class BaselineDockerBenchmark(BaseBenchmark):
     def __init__(self):
         super().__init__()
         low_mem = is_smoke_mode()
-        self.input_dim = 512 if low_mem else 2048
-        self.hidden_dim = 1024 if low_mem else 4096
-        self.output_dim = 256 if low_mem else 1024
-        self.batch_size = 64 if low_mem else 256
-        self.num_batches = 2 if low_mem else 4
+        # Match optimized workload for fair comparison
+        self.input_dim = 2048 if low_mem else 4096
+        self.hidden_dim = 2048 if low_mem else 4096
+        self.output_dim = 1024 if low_mem else 2048
+        self.batch_size = 512 if low_mem else 1024  # Large batch = significant H2D
+        self.num_batches = 4 if low_mem else 8
         self.model: Optional[nn.Module] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.host_batches: List[torch.Tensor] = []

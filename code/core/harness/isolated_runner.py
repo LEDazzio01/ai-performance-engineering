@@ -163,21 +163,38 @@ def run_benchmark(input_data: Dict[str, Any]) -> Dict[str, Any]:
                 import torch
                 torch.cuda.synchronize()
         
-        # Timed runs
-        for _ in range(iterations):
-            if cuda_available:
-                import torch
-                torch.cuda.synchronize()
+        # Check if benchmark reports its own timing (e.g., CudaBinaryBenchmark parses kernel time from output)
+        use_reported_time = bool(getattr(benchmark, "use_reported_time", False))
+        
+        # Timed runs - use CUDA events for GPU (accurate), perf_counter for CPU only
+        if cuda_available:
+            import torch
+            # GPU: use CUDA Events for accurate GPU timing
+            start_event = torch.cuda.Event(enable_timing=True)
+            end_event = torch.cuda.Event(enable_timing=True)
+            torch.cuda.synchronize()  # sync once before timing loop
             
-            start = time.perf_counter()
-            benchmark.benchmark_fn()
-            
-            if cuda_available:
-                import torch
-                torch.cuda.synchronize()
-            
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            times_ms.append(elapsed_ms)
+            for _ in range(iterations):
+                start_event.record()
+                benchmark.benchmark_fn()
+                end_event.record()
+                end_event.synchronize()
+                elapsed_ms = start_event.elapsed_time(end_event)
+                
+                # Use benchmark-reported time if available (e.g., parsed from CUDA binary output)
+                if use_reported_time:
+                    reported = getattr(benchmark, "last_time_ms", None)
+                    if reported is not None:
+                        elapsed_ms = reported
+                
+                times_ms.append(elapsed_ms)
+        else:
+            # CPU: use perf_counter (only valid for CPU-only benchmarks)
+            for _ in range(iterations):
+                start = time.perf_counter()
+                benchmark.benchmark_fn()
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                times_ms.append(elapsed_ms)
         
         # Memory tracking
         if enable_memory_tracking and cuda_available:

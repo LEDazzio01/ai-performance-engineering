@@ -137,24 +137,6 @@ class BenchmarkDefaults:
         This method now simply returns default values for backward compatibility.
         """
         return cls()
-
-    @classmethod
-    def for_smoke(cls, smoke: bool) -> BenchmarkDefaults:
-        """Return defaults optionally tuned for smoke-test mode.
-        
-        Note: Even in smoke mode, warmup is kept at minimum (5) to ensure
-        JIT/compile overhead is excluded from measurements. This is critical
-        for accurate results even in quick validation runs.
-        """
-        defaults = cls()
-        if smoke:
-            defaults.use_subprocess = False  # avoid doubling RSS with isolation
-            defaults.execution_mode = "thread"
-            defaults.iterations = 10
-            defaults.warmup = MINIMUM_WARMUP_ITERATIONS  # Never go below minimum!
-            defaults.min_run_time_ms = 10.0
-            defaults.timeout_multiplier = 1.0
-        return defaults
     
     def to_dict(self) -> dict:
         """Convert defaults to dictionary."""

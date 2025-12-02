@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from core.benchmark.smoke import is_smoke_mode
 from typing import Sequence, Tuple
 
 import torch
@@ -40,16 +39,4 @@ class KVCacheWorkload:
 
 def get_workload() -> KVCacheWorkload:
     """Return the canonical workload settings."""
-    if is_smoke_mode():
-        # Leaner workload for quick, low-memory sweeps.
-        return KVCacheWorkload(
-            batch_size=1,
-            num_layers=2,
-            num_heads=8,
-            head_dim=64,
-            sequence_lengths=(256, 384, 512),
-            dtype=torch.float16,
-            page_size=128,
-            block_size=64,
-        )
     return KVCacheWorkload()

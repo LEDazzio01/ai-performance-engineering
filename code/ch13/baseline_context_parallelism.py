@@ -7,7 +7,6 @@ to what fits in a single GPU's memory.
 """
 
 import os
-from core.benchmark.smoke import is_smoke_mode
 import sys
 from pathlib import Path
 import math

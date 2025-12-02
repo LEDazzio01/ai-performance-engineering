@@ -155,14 +155,6 @@ class TestWarmupEnforcement:
             assert len(warmup_warnings) == 0, \
                 "Should not warn when warmup is above minimum"
     
-    def test_smoke_mode_respects_minimum_warmup(self):
-        """Test that smoke mode doesn't set warmup below minimum."""
-        from core.benchmark.defaults import BenchmarkDefaults, MINIMUM_WARMUP_ITERATIONS
-        
-        smoke_defaults = BenchmarkDefaults.for_smoke(smoke=True)
-        assert smoke_defaults.warmup >= MINIMUM_WARMUP_ITERATIONS, \
-            f"Smoke mode warmup ({smoke_defaults.warmup}) must be >= minimum ({MINIMUM_WARMUP_ITERATIONS})"
-    
     def test_validate_warmup_function(self):
         """Test the validate_warmup helper function directly."""
         import warnings

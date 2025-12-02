@@ -65,14 +65,15 @@ class OptimizedDockerBenchmark(BaseBenchmark):
         self.host_batches: List[torch.Tensor] = []
         self.targets: List[torch.Tensor] = []
         self.prefetcher: Optional[Prefetcher] = None
-        # Align workload with baseline (smoke-aware) for input verification
+        # Larger transfers to make H2D optimization measurable on high-bandwidth GPUs
+        # The prefetcher benefit is proportional to (H2D time / compute time)
         from core.benchmark.smoke import is_smoke_mode
         low_mem = is_smoke_mode()
-        self.input_dim = 512 if low_mem else 2048
-        self.hidden_dim = 1024 if low_mem else 4096
-        self.output_dim = 256 if low_mem else 1024
-        self.batch_size = 64 if low_mem else 256
-        self.num_batches = 2 if low_mem else 4
+        self.input_dim = 2048 if low_mem else 4096
+        self.hidden_dim = 2048 if low_mem else 4096  
+        self.output_dim = 1024 if low_mem else 2048
+        self.batch_size = 512 if low_mem else 1024  # Large batch = significant H2D
+        self.num_batches = 4 if low_mem else 8
 
     def setup(self) -> None:
         torch.manual_seed(101)

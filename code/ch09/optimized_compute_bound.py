@@ -8,7 +8,6 @@ Implements BaseBenchmark for harness integration.
 from __future__ import annotations
 
 import os
-from core.benchmark.smoke import is_smoke_mode
 import sys
 from pathlib import Path
 
@@ -105,12 +104,11 @@ class OptimizedComputeBoundBenchmark(BaseBenchmark):
     def _validate_kernel_correctness(self) -> None:
         assert self.data is not None
         assert self.output is not None
-        low_mem = is_smoke_mode()
-        single_tol = 5e-4 if not low_mem else 2e-3
+        single_tol = 5e-4
         # Repeated application accumulates small FP differences on SM100; allow
         # a slightly looser tolerance to avoid spurious failures while still
         # catching real drift.
-        repeat_tol = 1e-2 if not low_mem else 1.5e-2
+        repeat_tol = 1e-2
         # Validate single-step correctness
         reference_input = self.data.clone()
         self._launch_kernel(reference_input, self.output)

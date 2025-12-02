@@ -32,7 +32,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--block-k", type=int, default=None, help="Override BLOCK_K (defaults depend on tier)")
     p.add_argument("--num-programs", type=int, default=None, help="Override number of Triton programs")
-    p.add_argument("--smoke-test", action="store_true", help="Enable smoke-test mode (shrinks shapes)")
     p.add_argument(
         "--backend",
         choices=["triton", "graphs"],
@@ -60,7 +59,6 @@ set_decode_options(
     DecodeOptions(
         tier=_CLI_ARGS.tier,
         quantization=_CLI_ARGS.quantization,
-        quick=_CLI_ARGS.smoke_test,
         block_k=_CLI_ARGS.block_k,
         num_programs=_CLI_ARGS.num_programs,
     )

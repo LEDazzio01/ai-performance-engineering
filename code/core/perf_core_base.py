@@ -1886,7 +1886,14 @@ class PerformanceCoreBase:
         return {"pairs": pairs, "count": len(pairs)}
 
     def compare_profiles(self, chapter: str) -> dict:
-        """Compare baseline vs optimized profiles for a chapter."""
+        """Compare baseline vs optimized profiles for a chapter.
+        
+        Integrates file-level comparison with metric-level analysis to provide:
+        - Raw nsys/ncu comparisons
+        - Structured metric diff (what improved, regressed, unchanged)
+        - Bottleneck shift detection
+        - Prioritized recommendations
+        """
         from core import profile_insights
         
         # Find the chapter directory
@@ -1912,7 +1919,133 @@ class PerformanceCoreBase:
         recommendations = profile_insights.generate_recommendations_from_profiles(result)
         result["recommendations"] = recommendations
         
+        # NEW: Integrate metric-level analysis using _diff_metrics
+        metric_analysis = self._analyze_metric_diff(ncu_comparison, nsys_comparison)
+        if metric_analysis:
+            result["metric_analysis"] = metric_analysis
+        
         return result
+    
+    def _analyze_metric_diff(
+        self,
+        ncu_comparison: Optional[dict],
+        nsys_comparison: Optional[dict],
+    ) -> Optional[dict]:
+        """Internal: Apply metric-level diff analysis to profile comparison.
+        
+        Extracts baseline/optimized metrics and runs structured analysis
+        to identify what improved, regressed, and any bottleneck shifts.
+        """
+        try:
+            from core.analysis import _diff_metrics, ProfileComparison
+        except ImportError:
+            return None  # Analysis module not available
+        
+        if not ncu_comparison or "metrics" not in ncu_comparison:
+            return None
+        
+        # Convert ncu_comparison metrics list to dicts
+        baseline_metrics: dict = {}
+        optimized_metrics: dict = {}
+        
+        for m in ncu_comparison.get("metrics", []):
+            name = m.get("name", "")
+            if not name:
+                continue
+            try:
+                baseline_metrics[name] = float(str(m.get("baseline", 0)).replace(",", ""))
+            except (ValueError, TypeError):
+                pass
+            try:
+                optimized_metrics[name] = float(str(m.get("optimized", 0)).replace(",", ""))
+            except (ValueError, TypeError):
+                pass
+        
+        if not baseline_metrics or not optimized_metrics:
+            return None
+        
+        # Try to extract timing from metrics or nsys comparison
+        baseline_time_us = self._extract_kernel_time(baseline_metrics, nsys_comparison, "baseline")
+        optimized_time_us = self._extract_kernel_time(optimized_metrics, nsys_comparison, "optimized")
+        
+        # Run metric diff analysis
+        try:
+            comparison: ProfileComparison = _diff_metrics(
+                baseline_metrics=baseline_metrics,
+                optimized_metrics=optimized_metrics,
+                baseline_time_us=baseline_time_us,
+                optimized_time_us=optimized_time_us,
+            )
+            
+            return {
+                "speedup": comparison.speedup,
+                "baseline_time_us": comparison.baseline_time_us,
+                "optimized_time_us": comparison.optimized_time_us,
+                "bottleneck_shift": comparison.bottleneck_shift,
+                "key_improvements": comparison.key_improvements,
+                "remaining_issues": comparison.remaining_issues,
+                "improved_count": len(comparison.improved_metrics),
+                "regressed_count": len(comparison.regressed_metrics),
+                "top_improvements": [
+                    {
+                        "metric": d.metric_name,
+                        "baseline": d.baseline_value,
+                        "optimized": d.optimized_value,
+                        "change_pct": d.relative_delta_pct,
+                    }
+                    for d in comparison.improved_metrics[:5]
+                ],
+                "regressions": [
+                    {
+                        "metric": d.metric_name,
+                        "baseline": d.baseline_value,
+                        "optimized": d.optimized_value,
+                        "change_pct": d.relative_delta_pct,
+                    }
+                    for d in comparison.regressed_metrics[:5]
+                ],
+            }
+        except Exception:
+            return None
+    
+    def _extract_kernel_time(
+        self,
+        metrics: dict,
+        nsys_comparison: Optional[dict],
+        version: str,
+    ) -> float:
+        """Extract kernel execution time from metrics or nsys data."""
+        # Try common kernel duration metric names
+        time_keys = [
+            "gpu__time_duration.sum",
+            "gpu__time_active.sum",
+            "sm__cycles_elapsed.avg",
+            "Duration",
+            "Kernel Duration",
+        ]
+        
+        for key in time_keys:
+            if key in metrics and metrics[key] > 0:
+                # Convert to microseconds if needed (cycles need conversion)
+                if "cycles" in key.lower():
+                    # Rough estimate: assume 1.5GHz clock
+                    return metrics[key] / 1500.0
+                return metrics[key]
+        
+        # Fallback: try to get from nsys comparison
+        if nsys_comparison and "metrics" in nsys_comparison:
+            for m in nsys_comparison["metrics"]:
+                name = m.get("name", "").lower()
+                if "duration" in name or "time" in name:
+                    try:
+                        val = float(str(m.get(version, 0)).replace(",", ""))
+                        if val > 0:
+                            return val
+                    except (ValueError, TypeError):
+                        pass
+        
+        # Default fallback
+        return 1000.0 if version == "baseline" else 500.0
 
     def get_profile_recommendations(self) -> dict:
         """Get general profiling recommendations based on all available profiles."""

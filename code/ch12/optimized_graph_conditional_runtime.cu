@@ -192,9 +192,8 @@ int main() {
     // CUDA 13.0 API: cudaGraphAddNode(pNode, graph, deps, dependencyData, numDeps, nodeParams)
     CUDA_CHECK(cudaGraphAddNode(&cond_node, graph, deps_cond, nullptr, 1, &cond_node_params));
     
-    // Get the body graphs populated by the conditional node creation
-    // phGraph_out points to CUDA-owned array of conditional body graphs
-    cudaGraph_t* body_graphs = cond_node_params.conditional.phGraph_out;
+    // Note: cond_node_params.conditional.phGraph_out contains body graphs
+    // but we rebuild the graph below with a simpler approach
     
     // Build IF branch body (expensive kernel)
     cudaGraph_t if_body;
@@ -255,9 +254,8 @@ int main() {
     CUDA_CHECK(cudaGraphAddKernelNode(&expensive_node, while_body, nullptr, 0, &expensive_params));
     
     // Add kernel to set handle to 0 after one iteration (makes it a conditional IF)
-    cudaGraphNode_t clear_handle_node;
-    // Use a simple approach: the expensive kernel itself can clear the handle
-    // Or we just rely on the fact that WHILE with initial value 1 runs once if we don't loop
+    // Note: Using simple approach where expensive kernel clears handle, or
+    // WHILE with initial value 1 runs once if we don't loop
     
     // For IF semantics: set handle to 0 after body executes
     // This requires another kernel in the body
