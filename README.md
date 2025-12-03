@@ -8,7 +8,9 @@ _If so, fill out this [**form**](https://docs.google.com/forms/d/e/1FAIpQLSf4TMD
 
 AI Systems Performance Engineering code, tooling, and resources for the O'Reilly book covering GPU optimization, distributed training, inference scaling, and full-stack performance tuning for modern AI workloads.
 
-_**Update:** [**Chat**](https://chatgpt.com/g/g-691a6b188d808191b16cdd2b7732cf11-ai-systems-performance-engineering) with this book directly!_
+[**Chat**](https://chatgpt.com/g/g-691a6b188d808191b16cdd2b7732cf11-ai-systems-performance-engineering) with this book directly!
+
+Just take me to the [**code**](code/).
 
 [![O'Reilly Book](img/ai_sys_perf_engg_cover_cheetah_sm.png)](https://www.amazon.com/Systems-Performance-Engineering-Optimizing-Algorithms/dp/B0F47689K8/)
 
