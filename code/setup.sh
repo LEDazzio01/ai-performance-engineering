@@ -6,8 +6,8 @@
 # This script installs EVERYTHING you need:
 #   1. NVIDIA Driver 580.105.08 (auto-upgrades if needed; open kernel modules for B200)
 #   2. Python 3.12 (PyTorch 2.10-dev compatible)
-#   3. CUDA 13.0.1 toolkit + cuBLAS 13.0.2.14 (Update 2) repository
-#   4. Environment for PyTorch 2.10-dev source build with CUDA 13.0.1
+#   3. CUDA 13.0.2 toolkit + cuBLAS 13.1.0.3 (Update 2) repository
+#   4. Environment for PyTorch 2.10-dev source build with CUDA 13.0.2
 #   5. NVIDIA Nsight Systems 2025.3.2 (for timeline profiling)
 #   6. NVIDIA Nsight Compute 2025.3.1 (for kernel metrics)
 #   7. All Python dependencies from requirements_latest.txt
@@ -60,7 +60,7 @@ echo "=========================================="
 echo "This script will install:"
 echo "  • NVIDIA Driver 580.105.08 (auto-upgrade if needed)"
 echo "  • Python 3.12 (PyTorch 2.10-dev compatible)"
-echo "  • CUDA 13.0.1 toolkit + cuBLAS 13.0.2.14 (Update 2) repository"
+echo "  • CUDA 13.0.2 toolkit + cuBLAS 13.1.0.3 (Update 2) repository"
 echo "  • Environment configured for PyTorch 2.10-dev source build"
 echo "  • NVIDIA Nsight Systems 2025.3.2 (latest)"
 echo "  • NVIDIA Nsight Compute 2025.3.1 (latest)"
@@ -79,8 +79,8 @@ PYTHON_TARGET_BIN="python${PYTHON_TARGET_VERSION}"
 PYTHON_ABI_TAG="cp${PYTHON_TARGET_MAJOR}${PYTHON_TARGET_MINOR}"
 PYTHON_DIST_PACKAGES="/usr/local/lib/python${PYTHON_TARGET_VERSION}/dist-packages"
 CUDA_SHORT_VERSION="13.0"
-CUDA_FULL_VERSION="13.0.1.000"
-# cuBLAS is pinned to 13.0.2.14 (Update 2) via cuda-libraries; cuDNN latest in repo
+CUDA_FULL_VERSION="13.0.2"
+# cuBLAS is pinned to 13.1.0.3 (Update 2) via cuda-libraries; cuDNN latest in repo
 CUDNN_VERSION="9.16.0.29"
 NCCL_SHORT_VERSION="2.28.7"
 CUDA_HOME_DIR="/usr/local/cuda-${CUDA_SHORT_VERSION}"
@@ -199,33 +199,6 @@ else
    exit 1
 fi
 
-# Lock GPU clocks (best-effort) to reduce perf variance; safe to skip if unsupported.
-lock_gpu_clocks_if_supported
-
-pip_cmd() {
-    if [ -z "${PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES:-}" ]; then
-        if python3 -m pip --help 2>&1 | grep -q -- '--break-system-packages'; then
-            PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES=1
-        else
-            PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES=0
-        fi
-    fi
-
-    if [ "${PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES}" -eq 1 ]; then
-        python3 -m pip --break-system-packages "$@"
-    else
-        PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip "$@"
-    fi
-}
-
-pip_install() {
-    pip_cmd install "$@"
-}
-
-pip_uninstall() {
-    pip_cmd uninstall "$@"
-}
-
 lock_gpu_clocks_if_supported() {
     # Best-effort: lock SM clocks to the max supported value to reduce run-to-run noise.
     # Skips silently if not supported or if nvidia-smi is unavailable.
@@ -252,10 +225,41 @@ lock_gpu_clocks_if_supported() {
     if [ -n "${mem_max}" ]; then
         if nvidia-smi --lock-memory-clocks="${mem_max},${mem_max}" >/dev/null 2>&1; then
             echo "  Locked memory clocks to ${mem_max} MHz."
+        elif nvidia-smi --lock-memory-clocks="${mem_max}" >/dev/null 2>&1; then
+            echo "  Locked memory clocks to ${mem_max} MHz (single-value interface)."
+        elif nvidia-smi --lock-memory-clocks-deferred="${mem_max}" >/dev/null 2>&1; then
+            echo "  Deferred lock of memory clocks to ${mem_max} MHz (takes effect after driver reload)."
         else
             echo "  Memory clock lock not supported here; continuing without lock."
         fi
     fi
+}
+
+# Lock GPU clocks (best-effort) to reduce perf variance; safe to skip if unsupported.
+lock_gpu_clocks_if_supported
+
+pip_cmd() {
+    if [ -z "${PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES:-}" ]; then
+        if python3 -m pip --help 2>&1 | grep -q -- '--break-system-packages'; then
+            PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES=1
+        else
+            PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES=0
+        fi
+    fi
+
+    if [ "${PIP_SUPPORTS_BREAK_SYSTEM_PACKAGES}" -eq 1 ]; then
+        python3 -m pip --break-system-packages "$@"
+    else
+        PIP_BREAK_SYSTEM_PACKAGES=1 python3 -m pip "$@"
+    fi
+}
+
+pip_install() {
+    pip_cmd install "$@"
+}
+
+pip_uninstall() {
+    pip_cmd uninstall "$@"
 }
 
 pip_wheel() {
