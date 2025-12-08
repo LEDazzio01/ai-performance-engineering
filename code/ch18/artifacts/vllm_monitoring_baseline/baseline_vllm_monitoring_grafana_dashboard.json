@@ -1,0 +1,142 @@
+{
+  "title": "vLLM Baseline \u2013 TTFT and KV cache",
+  "uid": "vllm-baseline-health",
+  "schemaVersion": 38,
+  "version": 1,
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "TTFT p90",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vllm:ttft_seconds:p90{instance=~\"$instance\"}",
+          "legendFormat": "p90 {{instance}}"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Prefill / decode p90",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vllm:prefill_seconds:p90{instance=~\"$instance\"}",
+          "legendFormat": "prefill p90 {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "vllm:decode_seconds:p90{instance=~\"$instance\"}",
+          "legendFormat": "decode p90 {{instance}}"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "KV cache usage (%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vllm:kv_cache_usage_percent{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 90.0
+              },
+              {
+                "color": "red",
+                "value": 98.0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Finished / active ratio (instant)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vllm:finished_to_active_ratio{instance=~\"$instance\"}",
+          "instant": true,
+          "legendFormat": "ratio {{instance}}"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PROM_DS_UID"
+        },
+        "query": "label_values(vllm:gpu_cache_usage_perc, instance)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  }
+}

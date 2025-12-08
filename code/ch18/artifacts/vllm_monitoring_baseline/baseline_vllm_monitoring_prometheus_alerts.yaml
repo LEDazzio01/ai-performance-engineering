@@ -1,0 +1,47 @@
+groups:
+  - name: vllm-baseline-alerts
+    rules:
+      - alert: VLLMHighTTFTP90
+        expr: vllm:ttft_seconds:p90 > 0.6
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TTFT p90 high on { $labels.instance }"
+          description: |
+            Time to first token p90 is { $value }s.
+            Check prefill batch sizing, scheduler load, or KV cache pressure.
+
+      - alert: VLLMHighPrefillLatency
+        expr: vllm:prefill_seconds:p90 > 2.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prefill latency p90 high on { $labels.instance }"
+          description: |
+            Prefill p90 exceeds 2.0s, typically due to large prompts or oversized batches.
+
+      - alert: VLLMHighKVCacheUsage
+        expr: vllm:kv_cache_usage_percent > 95.0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "KV cache nearly full on { $labels.instance }"
+          description: |
+            KV cache usage above { $value }%. Expect stalled requests or allocation failures.
+
+      - alert: VLLMStalledQueue
+        expr: |
+          (sum by (instance) (vllm:num_requests_running) > 0)
+          and
+          (sum by (instance) (rate(vllm:request_success_total[3m])) < 0.05)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Active requests but almost no completions on { $labels.instance }"
+          description: |
+            Requests are running but completions are near zero.
+            Indicates scheduler blockage, cache exhaustion, or CUDA stalls.

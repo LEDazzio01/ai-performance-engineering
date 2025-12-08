@@ -1,0 +1,42 @@
+groups:
+  - name: vllm-baseline-recording
+    interval: 15s
+    rules:
+      - record: vllm:ttft_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance) (rate(vllm:time_to_first_token_seconds_bucket[5m]))
+          )
+
+      - record: vllm:prefill_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance) (rate(vllm:request_prefill_time_seconds_bucket[5m]))
+          )
+
+      - record: vllm:decode_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance) (rate(vllm:request_decode_time_seconds_bucket[5m]))
+          )
+
+      - record: vllm:req_rate:rps
+        expr: |
+          sum by (instance) (rate(vllm:request_success_total[1m]))
+
+      - record: vllm:kv_cache_usage_percent
+        expr: |
+          100 * avg by (instance) (vllm:gpu_cache_usage_perc)
+
+      - record: vllm:finished_to_active_ratio
+        expr: |
+          (
+            sum by (instance) (rate(vllm:request_success_total[1m]))
+          )
+          /
+          (
+            sum by (instance) (vllm:num_requests_running) + 1
+          )

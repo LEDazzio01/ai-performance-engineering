@@ -1,0 +1,109 @@
+groups:
+  - name: vllm-v1-alerts
+    rules:
+      - alert: VLLMHighTTFTP90
+        expr: vllm:ttft_seconds:p90 > 0.6
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TTFT p90 high ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Time to first token p90 is { $value }s.
+            Check scheduler load, prefill batch sizes, and KV cache usage.
+
+      - alert: VLLMHighTTFTP99
+        expr: vllm:ttft_seconds:p99 > 1.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "TTFT p99 degraded ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            TTFT p99 > 1.5s. Often caused by GPU saturation, long prompts, or cache fragmentation.
+
+      - alert: VLLMHighPrefillLatency
+        expr: vllm:prefill_seconds:p90 > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prefill latency p90 elevated ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Prefill p90 exceeds 1.5s. Prompts may be too long or batches oversized.
+
+      - alert: VLLMHighDecodeLatency
+        expr: vllm:decode_seconds:p90 > 10.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Decode latency p90 elevated ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Decode p90 above 10.0s suggests slow token throughput at current concurrency.
+
+      - alert: VLLMHighInterTokenLatency
+        expr: vllm:time_per_output_token_seconds:p90 > 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Inter-token latency p90 high ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Time per output token p90 exceeds 0.15s. Check GPU utilization, batching, or attention backend.
+
+      - alert: VLLMHighKVCacheUsageWarning
+        expr: vllm:kv_cache_usage_percent > 90.0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KV cache usage > 90.0% ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            KV cache sustained above 90.0%. Expect elevated TTFT and possible stalls soon.
+
+      - alert: VLLMHighKVCacheUsageCritical
+        expr: vllm:kv_cache_usage_percent > 98.0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "KV cache nearly full ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            KV cache above 98.0%. New requests may hang or fail. Shed load or lower max concurrency.
+
+      - alert: VLLMStalledRequestQueue
+        expr: |
+          (vllm:active_requests > 0)
+          and
+          (vllm:finished_requests_rate < 0.05)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Active requests but almost no completions ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Active work with almost zero completions suggests deadlocks, cache starvation, or CUDA stalls.
+
+      - alert: VLLMLowFinishedToActiveRatio
+        expr: |
+          vllm:finished_to_active_ratio < 0.05
+          and vllm:active_requests > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Queue draining slowly ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Finished/active ratio is very low with many active requests.
+            Scheduler may be overloaded or batch policy misconfigured.
+
+      - alert: VLLMCUDAGraphModeChanged
+        expr: vllm:cuda_graph_mode{mode!="FULL_AND_PIECEWISE"} == 1
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "CUDA graph mode changed ({ $labels.model_name } @ { $labels.instance })"
+          description: |
+            Mode deviated from FULL_AND_PIECEWISE. Could indicate config drift or eager fallback.

@@ -1,0 +1,9 @@
+scrape_configs:
+  - job_name: vllm
+    metrics_path: /metrics
+    scrape_interval: 5s
+    static_configs:
+      - targets: ['localhost:8001']
+        labels:
+          service: vllm
+          cluster: dev

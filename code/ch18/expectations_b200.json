@@ -2468,10 +2468,10 @@
       "metadata": {
         "best_optimization": "graphs",
         "best_optimization_file": "optimized_flexdecoding_graphs.py",
-        "best_optimization_speedup": 3.563339329090939,
-        "best_optimization_time_ms": 7.388584017753601,
-        "git_commit": "d72c274a660dcd9f17e7eafa91e5e804afb3789f",
-        "updated_at": "2025-12-04T19:33:52.577027"
+        "best_optimization_speedup": 3.32773593552591,
+        "best_optimization_time_ms": 8.386240005493164,
+        "git_commit": "8d71f612a15cde22023a40df70615ffdfcb29b1d",
+        "updated_at": "2025-12-07T11:40:34.371946"
       },
       "metrics": {
         "baseline_p75_ms": 35.102272033691406,
@@ -2480,12 +2480,12 @@
         "baseline_throughput.tokens_per_s": 43755.64414639542,
         "baseline_time_ms": 26.32803201675415,
         "best_optimized_p75_ms": 7.333248138427734,
-        "best_optimized_speedup": 4.670760134722474,
+        "best_optimized_speedup": 3.32773593552591,
         "best_optimized_throughput.latency_ms": 7.32856011390686,
         "best_optimized_throughput.requests_per_s": 136.45245238588885,
         "best_optimized_throughput.tokens_per_s": 157193.22514854395,
         "best_optimized_time_ms": 7.32856011390686,
-        "best_speedup": 4.670760134722474
+        "best_speedup": 3.32773593552591
       },
       "type": "python"
     },
@@ -2751,10 +2751,10 @@
       "metadata": {
         "best_optimization": "optimized_vllm_monitoring",
         "best_optimization_file": "optimized_vllm_monitoring.py",
-        "best_optimization_speedup": 0.8695651947373726,
-        "best_optimization_time_ms": 0.012512000277638435,
-        "git_commit": "d72c274a660dcd9f17e7eafa91e5e804afb3789f",
-        "updated_at": "2025-12-04T19:35:34.124456"
+        "best_optimization_speedup": 1.0883116822248693,
+        "best_optimization_time_ms": 0.012319999746978283,
+        "git_commit": "8d71f612a15cde22023a40df70615ffdfcb29b1d",
+        "updated_at": "2025-12-07T17:36:33.613841"
       },
       "metrics": {
         "baseline_p75_ms": 0.01158399973064661,
@@ -2762,7 +2762,7 @@
         "baseline_throughput.requests_per_s": 86325.9688580967,
         "baseline_time_ms": 0.01158399973064661,
         "best_optimized_p75_ms": 0.012000000104308128,
-        "best_optimized_speedup": 0.8695651947373726,
+        "best_optimized_speedup": 1.0883116822248693,
         "best_optimized_throughput.latency_ms": 0.012000000104308128,
         "best_optimized_throughput.requests_per_s": 83333.33260897134,
         "best_optimized_time_ms": 0.012000000104308128,

@@ -1,0 +1,433 @@
+{
+  "title": "vLLM v1 \u2013 Inference Health (optimized)",
+  "uid": "vllm-v1-health",
+  "schemaVersion": 38,
+  "version": 1,
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Latency",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "TTFT p50 / p90 / p99",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:ttft_seconds:p50{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p50 {{instance}} {{model_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vllm:ttft_seconds:p90{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p90 {{instance}} {{model_name}}",
+          "refId": "B"
+        },
+        {
+          "expr": "vllm:ttft_seconds:p99{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p99 {{instance}} {{model_name}}",
+          "refId": "C"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Prefill latency p50 / p90",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:prefill_seconds:p50{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p50 {{instance}} {{model_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vllm:prefill_seconds:p90{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p90 {{instance}} {{model_name}}",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Decode latency p50 / p90",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:decode_seconds:p50{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p50 {{instance}} {{model_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vllm:decode_seconds:p90{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "p90 {{instance}} {{model_name}}",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "Throughput & Queue",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "panels": []
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Request rate (RPS)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:req_rate:rps{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "rps {{instance}} {{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Active / waiting / finished rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:active_requests{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "active {{instance}} {{model_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "vllm:waiting_requests{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "waiting {{instance}} {{model_name}}",
+          "refId": "B"
+        },
+        {
+          "expr": "vllm:finished_requests_rate{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "finished/s {{instance}} {{model_name}}",
+          "refId": "C"
+        }
+      ],
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Finished / active ratio",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:finished_to_active_ratio{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "ratio {{instance}} {{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      }
+    },
+    {
+      "type": "row",
+      "title": "KV cache & CUDA graphs",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "panels": []
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "KV cache usage (%)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "vllm:kv_cache_usage_percent{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "{{instance}} {{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 90.0
+              },
+              {
+                "color": "red",
+                "value": 98.0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Current CUDA graph mode",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "max by (mode) (vllm:cuda_graph_mode{model_name=~\"$model\",instance=~\"$instance\"})",
+          "legendFormat": "{{mode}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      }
+    },
+    {
+      "type": "row",
+      "title": "Error hooks (fill if you export counters)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "EngineCore errors (per min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, model_name, error_type) (rate(vllm_enginecore_errors_total{model_name=~\\\"$model\\\",instance=~\\\"$instance\\\"}[1m]))",
+          "legendFormat": "{{error_type}} {{instance}} {{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Scheduler errors (per min)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "targets": [
+        {
+          "expr": "sum by (instance, model_name, error_type) (rate(vllm_scheduler_errors_total{model_name=~\\\"$model\\\",instance=~\\\"$instance\\\"}[1m]))",
+          "legendFormat": "{{error_type}} {{instance}} {{model_name}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      }
+    },
+    {
+      "type": "row",
+      "title": "Hotspots",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "scatter",
+      "title": "TTFT p90 vs KV cache usage",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PROM_DS_UID"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vllm:ttft_seconds:p90{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "ttft_p90 {{instance}} {{model_name}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "vllm:kv_cache_usage_percent{model_name=~\"$model\",instance=~\"$instance\"}",
+          "legendFormat": "kv_cache {{instance}} {{model_name}}",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "instance",
+            "mode": "inner"
+          }
+        }
+      ],
+      "options": {
+        "xAxis": {
+          "displayName": "KV cache usage (%)",
+          "show": true
+        },
+        "yAxis": {
+          "displayName": "TTFT p90 (s)",
+          "show": true
+        },
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list"
+        }
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PROM_DS_UID"
+        },
+        "query": "label_values(vllm:gpu_cache_usage_perc, instance)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true
+      },
+      {
+        "name": "model",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PROM_DS_UID"
+        },
+        "query": "label_values(vllm:gpu_cache_usage_perc, model_name)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  }
+}

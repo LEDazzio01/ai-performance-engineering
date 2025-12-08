@@ -1,0 +1,120 @@
+groups:
+  - name: vllm-v1-recording-rules
+    interval: 15s
+    rules:
+      # Latency histograms (TTFT, prefill, decode, end-to-end, inter-token)
+      - record: vllm:ttft_seconds:p50
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum by (le, instance, model_name) (
+              rate(vllm:time_to_first_token_seconds_bucket[5m])
+            )
+          )
+      - record: vllm:ttft_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance, model_name) (
+              rate(vllm:time_to_first_token_seconds_bucket[5m])
+            )
+          )
+      - record: vllm:ttft_seconds:p99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, instance, model_name) (
+              rate(vllm:time_to_first_token_seconds_bucket[5m])
+            )
+          )
+
+      - record: vllm:prefill_seconds:p50
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum by (le, instance, model_name) (
+              rate(vllm:request_prefill_time_seconds_bucket[5m])
+            )
+          )
+      - record: vllm:prefill_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance, model_name) (
+              rate(vllm:request_prefill_time_seconds_bucket[5m])
+            )
+          )
+
+      - record: vllm:decode_seconds:p50
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum by (le, instance, model_name) (
+              rate(vllm:request_decode_time_seconds_bucket[5m])
+            )
+          )
+      - record: vllm:decode_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance, model_name) (
+              rate(vllm:request_decode_time_seconds_bucket[5m])
+            )
+          )
+
+      - record: vllm:e2e_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance, model_name) (
+              rate(vllm:e2e_request_latency_seconds_bucket[5m])
+            )
+          )
+
+      - record: vllm:time_per_output_token_seconds:p90
+        expr: |
+          histogram_quantile(
+            0.90,
+            sum by (le, instance, model_name) (
+              rate(vllm:time_per_output_token_seconds_bucket[5m])
+            )
+          )
+
+      # Throughput and queue health
+      - record: vllm:req_rate:rps
+        expr: |
+          sum by (instance, model_name) (
+            rate(vllm:request_success_total[1m])
+          )
+
+      - record: vllm:active_requests
+        expr: |
+          sum by (instance, model_name) (vllm:num_requests_running)
+
+      - record: vllm:waiting_requests
+        expr: |
+          sum by (instance, model_name) (vllm:num_requests_waiting)
+
+      - record: vllm:finished_requests_rate
+        expr: |
+          sum by (instance, model_name) (
+            rate(vllm:request_success_total[1m])
+          )
+
+      - record: vllm:finished_to_active_ratio
+        expr: |
+          vllm:finished_requests_rate
+          /
+          (vllm:active_requests + 1)
+
+      # KV cache occupancy (0..1 exposer converted to percent)
+      - record: vllm:kv_cache_usage_percent
+        expr: |
+          100 * avg by (instance, model_name) (
+            vllm:gpu_cache_usage_perc
+          )
+
+      # CUDA graph mode info (if exported)
+      - record: vllm:cuda_graph_mode
+        expr: |
+          max by (instance, model_name, mode) (vllm:cudagraph_mode_info)
