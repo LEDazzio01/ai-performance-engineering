@@ -26,6 +26,12 @@ class BaselineKVCacheManagementBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
+        self.output = None
+        self.jitter_exemption_reason = "KV cache benchmark: fixed dimensions for cache comparison"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch_size),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Initialize model without KV cache management."""
@@ -85,6 +91,20 @@ class BaselineKVCacheManagementBenchmark(BaseBenchmark):
         if self.inputs is None:
             return "Inputs not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        """Return workload signature for input verification."""
+        return {"batch_size": self.batch_size, "steps": self.steps, "hidden_dim": self.hidden_dim}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

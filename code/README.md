@@ -590,26 +590,26 @@ This table documents known issues that can cause benchmark results to be mislead
 | **Timing** | Warmup Bleed | Real work happens during warmup | `isolate_warmup_cache` | ✅ | |
 | **Timing** | Clock Drift | System clock changes during measurement | Monotonic clock usage | ✅ | |
 | **Timing** | Profiler Overhead | Profiling tools add latency | Profile-free timing path | ✅ | |
-| **Output** | Constant Output | Same result regardless of input | Jitter check | |
-| **Output** | Stale Cache | Same result across different seeds | Fresh-input check | |
-| **Output** | Approximation Drift | Rough estimate instead of full compute | Output tolerance validation | |
-| **Output** | Invalid Values (NaN) | NaN in output | `validate_result()` NaN check | |
-| **Output** | Invalid Values (Inf) | Inf in output | `validate_result()` Inf check | |
-| **Output** | Invalid Ground Truth | Labels/expected values wrong | Golden output validation | **ImageNet Labels 2021** ([arXiv:2103.14749](https://arxiv.org/abs/2103.14749)), **MMLU Errors 2025** ([PromptEng](https://promptengineering.org/challenges-and-innovations-in-language-model-benchmarking-and-generalization/)) |
-| **Output** | Shape Mismatch | Output shape differs from expected | Shape validation | |
-| **Output** | Dtype Mismatch | Output dtype differs from expected | Dtype validation | |
-| **Output** | Denormalized Values | Subnormal floats cause slowdowns | Denormal check | |
-| **Output** | Uninitialized Memory | Output contains garbage | Memory initialization check | |
-| **Workload** | Precision Mismatch | Claims FP32 but uses FP16 | Dtype verification | |
-| **Workload** | Undeclared Shortcuts | Skips elements without declaring | Workload invariant check | **AI Agent Shortcuts 2024** ([VentureBeat](https://venturebeat.com/ai/ai-agent-benchmarks-are-misleading-study-warns)) |
-| **Workload** | Early Exit | Stops iteration loops early | Iteration count enforcement | |
-| **Workload** | Batch Shrinking | Processes fewer samples | Input signature matching | |
-| **Workload** | Sequence Truncation | Processes shorter sequences | Input signature matching | |
-| **Workload** | Hidden Downsampling | Silently reduces resolution | Dimension validation | |
-| **Workload** | Sparsity Mismatch | Different sparsity patterns | Sparsity ratio check | |
-| **Workload** | Attention Mask Mismatch | Different masking applied | Mask equivalence check | |
-| **Workload** | KV Cache Size Mismatch | Different cache sizes | Cache dimension check | |
-| **Workload** | Train/Test Overlap | Model tested on training data | Dataset isolation | **Computational Biology 2019** ([Nat Commun](https://www.nature.com/articles/s41467-019-09406-4)) |
+| **Output** | Constant Output | Same result regardless of input | Jitter check | ✅ | |
+| **Output** | Stale Cache | Same result across different seeds | Fresh-input check | ✅ | |
+| **Output** | Approximation Drift | Rough estimate instead of full compute | Output tolerance validation | ✅ | |
+| **Output** | Invalid Values (NaN) | NaN in output | `validate_result()` NaN check | ✅ | |
+| **Output** | Invalid Values (Inf) | Inf in output | `validate_result()` Inf check | ✅ | |
+| **Output** | Invalid Ground Truth | Labels/expected values wrong | `GoldenOutputCache` | ✅ | **ImageNet Labels 2021** ([arXiv:2103.14749](https://arxiv.org/abs/2103.14749)), **MMLU Errors 2025** ([PromptEng](https://promptengineering.org/challenges-and-innovations-in-language-model-benchmarking-and-generalization/)) |
+| **Output** | Shape Mismatch | Output shape differs from expected | Shape validation | ✅ | |
+| **Output** | Dtype Mismatch | Output dtype differs from expected | `ToleranceSpec` dtype check | ✅ | |
+| **Output** | Denormalized Values | Subnormal floats cause slowdowns | Denormal check | ✅ | |
+| **Output** | Uninitialized Memory | Output contains garbage | Memory initialization check | ✅ | |
+| **Workload** | Precision Mismatch | Claims FP32 but uses FP16 | `InputSignature` dtype verification | ✅ | |
+| **Workload** | Undeclared Shortcuts | Skips elements without declaring | Workload invariant check | ✅ | **AI Agent Shortcuts 2024** ([VentureBeat](https://venturebeat.com/ai/ai-agent-benchmarks-are-misleading-study-warns)) |
+| **Workload** | Early Exit | Stops iteration loops early | Config immutability | ✅ | |
+| **Workload** | Batch Shrinking | Processes fewer samples | `InputSignature` matching | ✅ | |
+| **Workload** | Sequence Truncation | Processes shorter sequences | `InputSignature` matching | ✅ | |
+| **Workload** | Hidden Downsampling | Silently reduces resolution | Dimension validation | ✅ | |
+| **Workload** | Sparsity Mismatch | Different sparsity patterns | Sparsity ratio check | ✅ | |
+| **Workload** | Attention Mask Mismatch | Different masking applied | Mask equivalence check | ✅ | |
+| **Workload** | KV Cache Size Mismatch | Different cache sizes | Cache dimension check | ✅ | |
+| **Workload** | Train/Test Overlap | Model tested on training data | Dataset isolation | ✅ | **Computational Biology 2019** ([Nat Commun](https://www.nature.com/articles/s41467-019-09406-4)) |
 | **Location** | CPU Spillover | Work offloaded to CPU | GPU kernel time validation | |
 | **Location** | Setup Pre-computation | Work done in `setup()` | Input mutation check | |
 | **Location** | Graph Capture Cheat | Pre-compute during graph capture | Graph-aware verification | |
