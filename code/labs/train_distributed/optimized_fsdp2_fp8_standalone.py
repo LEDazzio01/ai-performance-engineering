@@ -208,6 +208,18 @@ class OptimizedFSDP2FP8(BaseBenchmark):
         del self.model, self.optimizer, self.input
         super().teardown()
 
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "seq_length": self.seq_length}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
+
 
 def run_benchmark(
     batch_size: int = 8,
@@ -248,18 +260,6 @@ def run_benchmark(
         "loss": metrics.get("loss"),
         "precision": "fp8" if benchmark.use_fp8 else "bf16",
     }
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"batch_size": self.batch_size, "seq_length": self.seq_length}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
