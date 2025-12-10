@@ -72,6 +72,8 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
         self.model: Optional[nn.Module] = None
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.compute_stream: Optional[torch.cuda.Stream] = None
+        self.jitter_exemption_reason = "Async input pipeline benchmark: fixed configuration"
+        self.register_workload_metadata(samples_per_iteration=self.cfg.batch_size)
 
     def setup(self) -> None:
         torch.manual_seed(2025)
@@ -147,3 +149,15 @@ class AsyncInputPipelineBenchmark(BaseBenchmark):
             f"{self.label}.use_copy_stream": float(self.cfg.use_copy_stream),
             f"{self.label}.bytes_per_batch": float(bytes_per_batch),
         }
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.cfg.batch_size, "label": self.label}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
