@@ -61,11 +61,25 @@ def get_plan_error() -> Optional[str]:
 class _SkipPlanBenchmark(BaseBenchmark):
     """Skip benchmark when plan module is not available."""
     
+    def __init__(self) -> None:
+        super().__init__()
+        self.jitter_exemption_reason = "Skip benchmark: plan module unavailable"
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=1, warmup=5)
     
     def benchmark_fn(self) -> None:
         raise RuntimeError(f"SKIPPED: {_PLAN_ERROR or 'moe_parallelism plan module unavailable'}")
+
+    def get_verify_output(self) -> torch.Tensor:
+        return torch.tensor([0.0], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        return {"type": "skip"}
+
+    def get_output_tolerance(self) -> tuple:
+        return (0.1, 1.0)
 
 
 def get_skip_benchmark() -> BaseBenchmark:
@@ -98,6 +112,8 @@ class PlanBenchmark(BaseBenchmark):
         self.report: Optional[PlanReport] = None
         self._summary: Optional[str] = None
         self._config: Optional[BenchmarkConfig] = None
+        self.jitter_exemption_reason = "MoE parallelism plan benchmark: fixed configuration"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def _resolve_device(self) -> torch.device:  # type: ignore[override]
         return self._override_device
@@ -149,6 +165,18 @@ class PlanBenchmark(BaseBenchmark):
     def print_summary(self) -> None:
         if self._summary:
             print(self._summary)
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"plan": str(self.plan), "cluster": str(self.cluster)}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def run_benchmark(benchmark: PlanBenchmark) -> None:

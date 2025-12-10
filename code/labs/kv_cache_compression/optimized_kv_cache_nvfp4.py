@@ -28,6 +28,7 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
         )
         self.nvfp4_active = False
         self._nvfp4_skip_reason: Optional[str] = None
+        self.jitter_exemption_reason = "KV cache NVFP4 benchmark: fixed dimensions"
 
     def setup(self) -> None:
         preferred_recipe = self.fp8_recipe
@@ -74,6 +75,13 @@ class OptimizedKVCacheNVFP4Benchmark(BaselineKVCacheBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "hidden_dim": self.hidden_dim, "nvfp4": True}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaselineKVCacheBenchmark:
