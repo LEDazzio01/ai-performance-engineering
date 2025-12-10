@@ -79,6 +79,11 @@ class BaselineTorchcommsBenchmark(BaseBenchmark):
             tokens_per_iteration=float(tokens),
         )
         self._bytes_transferred = 0
+        self.jitter_exemption_reason = "Torchcomms benchmark: multi-GPU"
+        self.register_workload_metadata(
+            requests_per_iteration=float(self.batch),
+            tokens_per_iteration=float(tokens),
+        )
     
     def setup(self) -> None:
         """Setup: Initialize model and communication."""
@@ -174,6 +179,13 @@ class BaselineTorchcommsBenchmark(BaseBenchmark):
             raise RuntimeError("Output not available - run benchmark first")
         return self.output
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "hidden": self.hidden}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
