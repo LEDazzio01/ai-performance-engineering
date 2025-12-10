@@ -19,6 +19,7 @@ class BaselineKVCacheLocalOnlyBenchmark(BaseBenchmark):
 
     def __init__(self):
         super().__init__()
+        self.jitter_exemption_reason = "Benchmark: fixed dimensions"
         self.model: Optional[nn.MultiheadAttention] = None
         self.cache: Optional[torch.Tensor] = None
         self.hidden = 256

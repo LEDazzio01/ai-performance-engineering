@@ -146,3 +146,4 @@ See `.kiro/specs/benchmark-verification-enforcement/design.md` for:
 - Tolerance specifications by dtype
 - Anti-hacking checks (fresh-input, jitter)
 - Quarantine system design
+

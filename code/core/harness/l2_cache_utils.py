@@ -301,3 +301,4 @@ __all__ = [
     "format_l2_cache_report",
 ]
 
+

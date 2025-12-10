@@ -24,6 +24,7 @@ from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E40
 class BaselineOverlapMoE(nn.Module):
     def __init__(self, hidden_dim: int = 1024, num_experts: int = 4):
         super().__init__()
+        self.jitter_exemption_reason = "Benchmark: fixed dimensions"
         self.gate = nn.Linear(hidden_dim, num_experts, bias=False)
         self.experts = nn.ModuleList(
             [nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.GELU()) for _ in range(num_experts)]
@@ -44,6 +45,7 @@ class BaselineOverlapMoE(nn.Module):
 class BaselineMoeOverlapBenchmark(BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
+        self.jitter_exemption_reason = "Benchmark: fixed dimensions"
         self.model: Optional[BaselineOverlapMoE] = None
         self.inputs: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(tokens_per_iteration=1024.0)

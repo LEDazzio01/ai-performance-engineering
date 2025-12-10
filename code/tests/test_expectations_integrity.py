@@ -1599,3 +1599,4 @@ class TestEdgeCases:
         stored_meta = store._data["examples"]["test_entry"]["metadata"]
         assert abs(stored_meta["best_optimization_speedup"] - 4.0) < SPEEDUP_TOLERANCE
 
+
