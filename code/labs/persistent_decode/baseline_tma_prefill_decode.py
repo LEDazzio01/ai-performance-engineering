@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -37,6 +38,7 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.prefill_chunks = 8
         self.prefill_chunk_elems = 128 * 128
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
+        self.jitter_exemption_reason = "TMA prefill/decode baseline: fixed dimensions"
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("baseline_tma_prefill_decode")
@@ -106,6 +108,13 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

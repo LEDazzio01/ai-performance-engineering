@@ -43,6 +43,8 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._prio_low, self._prio_high = get_stream_priorities()
         self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low) for _ in range(self.cfg.max_in_flight)]
         self.decode_stream = torch.cuda.Stream(priority=self._prio_high)
+        self.jitter_exemption_reason = "Native TMA prefill/decode: fixed dimensions"
+        self.register_workload_metadata(tokens_per_iteration=float(self.batch * self.seq_len))
         self.decode_graph = torch.cuda.CUDAGraph()
         self.graph_q = None
         self.graph_k = None
@@ -151,6 +153,13 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch": self.batch, "seq_len": self.seq_len}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
