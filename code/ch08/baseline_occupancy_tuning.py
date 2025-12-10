@@ -54,6 +54,15 @@ class OccupancyBinaryBenchmark(CudaBinaryBenchmark):
             time_regex=r"avg_kernel_ms=([0-9]+\.?[0-9]*)",  # Parse kernel time from binary output.
         )
         self.build_env = build_env or {}
+        self.register_workload_metadata(requests_per_iteration=1.0)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "occupancy_tuning", "friendly_name": self.friendly_name}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
     def _build_binary(self) -> None:
         """Compile the executable with optional env overrides (e.g., MAXRREGCOUNT)."""
