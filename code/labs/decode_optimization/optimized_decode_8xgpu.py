@@ -73,6 +73,18 @@ class MultiGPUDecodeBenchmark(BaseBenchmark):
             },
         )
 
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification comparison."""
+        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "decode_8xgpu"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
+
 
 def _run_worker(iters: int, warmup: int) -> None:
     import torch.distributed as dist
@@ -129,18 +141,6 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=1)
     args = parser.parse_args()
     _run_worker(args.iters, args.warmup)
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {"type": "decode_8xgpu"}
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
