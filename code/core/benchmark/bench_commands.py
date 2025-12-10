@@ -547,15 +547,13 @@ if TYPER_AVAILABLE:
                 typer.echo(f"🗑️  Cleared golden output cache: {golden_cache}")
         
         verify_config = VerifyConfig(
-            run_jitter_check=not skip_jitter,
-            run_fresh_input_check=not skip_fresh_input,
-            run_workload_check=not skip_workload,
+            skip_jitter_check=skip_jitter,
+            skip_fresh_input_check=skip_fresh_input,
             seed=42,
         )
         verify_runner = VerifyRunner(
             cache_dir=cache_dir / "golden_outputs",
-            quarantine_mgr=quarantine_mgr,
-            config=verify_config,
+            quarantine_manager=quarantine_mgr,
         )
         
         # Resolve targets
@@ -642,7 +640,7 @@ if TYPER_AVAILABLE:
                         optimized.setup()
                         
                         # Run verification
-                        result = verify_runner.verify_pair(baseline, optimized)
+                        result = verify_runner.verify_pair(baseline, optimized, config=verify_config)
                         
                         baseline.teardown()
                         optimized.teardown()

@@ -73,7 +73,7 @@ class OptimizedGuidedDecodingBenchmark(BaseBenchmark):
         # Use fewer layers for faster execution while demonstrating the concept
         self.model = nn.TransformerDecoder(
             nn.TransformerDecoderLayer(d_model=hidden_dim, nhead=8, batch_first=True),
-            num_layers=1  # Single layer for faster execution
+            num_layers=2,  # Same as baseline for verification
         ).to(self.device).eval()
         
         # Optimization: Schema for guided decoding
