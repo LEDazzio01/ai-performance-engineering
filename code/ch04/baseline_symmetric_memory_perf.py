@@ -53,6 +53,8 @@ class BaselineSymmetricMemoryPerfBenchmark(BaseBenchmark):
         self._last_avg_ms = 0.0
         self._last_gbps = 0.0
         self._bytes_transferred = 0.0
+        self.jitter_exemption_reason = "Symmetric memory perf benchmark: multi-GPU"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         """Initialize distributed and allocate tensor."""
@@ -124,6 +126,13 @@ class BaselineSymmetricMemoryPerfBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"size_mb": self.size_mb}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
