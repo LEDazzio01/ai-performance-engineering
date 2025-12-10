@@ -25,6 +25,13 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
             tokens_per_iteration=float(num_elements),
             bytes_per_iteration=float(bytes_per_iter),
         )
+        self.output = None
+        self.jitter_exemption_reason = "Memory benchmark: fixed dimensions for comparison"
+        self.register_workload_metadata(
+            requests_per_iteration=1.0,
+            tokens_per_iteration=float(num_elements),
+            bytes_per_iteration=float(bytes_per_iter),
+        )
     
     def setup(self) -> None:
         torch.manual_seed(42)
@@ -38,6 +45,7 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
             self.result = self.data * 2.0 + 1.0
             if self.result is not None:
                 self.result += 0.1
+            self.output = self.result
             self._synchronize()
     
     def teardown(self) -> None:
@@ -70,6 +78,20 @@ class BaselineMemoryStandardBenchmark(BaseBenchmark):
         if self.data is None:
             return "Data not initialized"
         return None
+
+    def get_verify_output(self) -> torch.Tensor:
+        """Return output tensor for verification."""
+        if self.output is None:
+            raise RuntimeError("Output not available - run benchmark first")
+        return self.output
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"size_mb": self.size_mb, "num_elements": self.num_elements}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
