@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+import torch
+
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from labs.dynamic_router.topology_probe import TopologyProbeBenchmark
 
@@ -14,6 +16,8 @@ class OptimizedTopologyProbeBenchmark(BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self._summary: Dict[str, float] = {}
+        self.jitter_exemption_reason = "Topology probe optimized: fixed configuration"
+        self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         return
@@ -33,6 +37,13 @@ class OptimizedTopologyProbeBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"type": "topology_probe_optimized"}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:

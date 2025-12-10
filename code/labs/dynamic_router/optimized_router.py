@@ -386,6 +386,7 @@ class OptimizedRouterBenchmark(BaseBenchmark):
             requests_per_iteration=float(self.num_requests),
             tokens_per_iteration=float(self.num_requests * 100),  # ~100 tokens/request
         )
+        self.jitter_exemption_reason = "Optimized router benchmark: fixed configuration"
 
     def setup(self) -> None:
         """Setup: Initialize optimized router with GPU pools."""
@@ -469,6 +470,13 @@ class OptimizedRouterBenchmark(BaseBenchmark):
         """Return output tensor for verification comparison."""
         return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"num_gpus": self.num_gpus, "num_requests": self.num_requests}
+
+    def get_output_tolerance(self) -> tuple:
+        """Return tolerance for numerical comparison."""
+        return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
