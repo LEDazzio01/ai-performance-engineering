@@ -35,6 +35,7 @@ class BaselineDockerBenchmark(BaseBenchmark):
         self.output_dim = 1024 if low_mem else 2048
         self.batch_size = 512 if low_mem else 1024  # Large batch = significant H2D
         self.num_batches = 4 if low_mem else 8
+        self.jitter_exemption_reason = "Docker benchmark: fixed batch size for comparison"
         self.model: Optional[nn.Module] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self.host_batches: List[torch.Tensor] = []
@@ -127,6 +128,10 @@ class BaselineDockerBenchmark(BaseBenchmark):
         Training with SGD has some non-determinism due to CUDA operations.
         """
         return (1e-3, 1e-3)
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"batch_size": self.batch_size, "num_batches": self.num_batches}
 
 
 def get_benchmark() -> BaseBenchmark:

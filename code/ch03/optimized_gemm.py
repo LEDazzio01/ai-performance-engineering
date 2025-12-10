@@ -35,6 +35,7 @@ class OptimizedGemmBenchmark(BaseBenchmark):
         self.m = 2048
         self.n = 2048
         self.k = 2048
+        self.jitter_exemption_reason = "GEMM benchmark: fixed matrix dimensions"
         
         self.left: Optional[torch.Tensor] = None
         self.right: Optional[torch.Tensor] = None
@@ -129,6 +130,10 @@ class OptimizedGemmBenchmark(BaseBenchmark):
             Tuple of (rtol, atol)
         """
         return (1e-4, 1e-3)  # Single fused matmul has different FP accumulation order
+
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"m": self.m, "n": self.n, "k": self.k}
 
 
 def get_benchmark() -> BaseBenchmark:

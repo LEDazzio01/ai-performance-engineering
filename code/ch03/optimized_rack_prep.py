@@ -52,6 +52,7 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         super().__init__()
         self.seq_len = 4096
         self.hidden_size = 4096
+        self.jitter_exemption_reason = "Rack prep benchmark: fixed dimensions"
         self.reserve_cores = 2
         self.apply_affinity = False
         self.preferred_nics: List[str] = []
@@ -179,6 +180,9 @@ class OptimizedRackPrepBenchmark(BaseBenchmark):
         """Return custom tolerance for LayerNorm output comparison."""
         return (1e-4, 1e-4)
 
+    def get_input_signature(self) -> dict:
+        """Return input signature for verification."""
+        return {"seq_len": self.seq_len, "hidden_size": self.hidden_size}
 
 
 def get_benchmark() -> BaseBenchmark:
