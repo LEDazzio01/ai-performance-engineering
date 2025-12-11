@@ -48,7 +48,8 @@ class OptimizedMatmulTCGen05Benchmark(BaseBenchmark):
     def setup(self) -> None:
         if not self._tcgen05_available:
             raise RuntimeError(self._skip_reason)
-        torch.manual_seed(0)
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.A = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
         self.B = torch.randn(self.size, self.size, device=self.device, dtype=self.dtype)
         self._synchronize()
@@ -59,7 +60,8 @@ class OptimizedMatmulTCGen05Benchmark(BaseBenchmark):
         assert self.A is not None and self.B is not None
         with self._nvtx_range("optimized_matmul_tcgen05_cublas"):
             with torch.no_grad():
-                self.output = torch.matmul(self.A, self.B)
+                # Match baseline math: baseline kernel treats B as (N, K) and computes A @ B^T
+                self.output = torch.matmul(self.A, self.B.transpose(0, 1))
         self._synchronize()
 
     def teardown(self) -> None:
@@ -89,7 +91,7 @@ class OptimizedMatmulTCGen05Benchmark(BaseBenchmark):
         """Return output tensor for verification."""
         if self.output is None:
             raise RuntimeError("Output not available - run benchmark first")
-        return self.output.float()
+        return self.output.detach().float()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

@@ -59,11 +59,11 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
         self.batch_size = 4096
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(self.batch_size * self.hidden_size),
         )
-        self.jitter_exemption_reason = "MoE router benchmark: fixed dimensions"
 
     def setup(self) -> None:
         if not torch.cuda.is_available():
@@ -114,6 +114,7 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
             dtype=torch.float32,
         ).to(self.device)
         torch.cuda.synchronize(self.device)
+        self.output = None
 
     def benchmark_fn(self) -> None:
         if self.model is None or self.inputs is None:
@@ -122,7 +123,8 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_dense_router", enable=enable_nvtx):
             with torch.inference_mode():
-                _ = self.model(self.inputs)
+                out = self.model(self.inputs)
+                self.output = out.detach().float().clone()
         torch.cuda.synchronize(self.device)
 
     def teardown(self) -> None:
@@ -130,6 +132,7 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
             torch.cuda.empty_cache()
         self.model = None
         self.inputs = None
+        self.output = None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=10, warmup=5)  # Min warmup for CUDA
@@ -161,11 +164,22 @@ class BaselineRouterDenseBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"num_experts": self.num_experts, "batch_size": self.batch_size}
+        return {
+            "num_experts": self.num_experts,
+            "batch_size": self.batch_size,
+            "hidden_size": self.hidden_size,
+            "shapes": {
+                "input": (self.batch_size, self.hidden_size),
+                "output": (self.batch_size, self.hidden_size),
+            },
+            "dtypes": {"input": "float32"},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

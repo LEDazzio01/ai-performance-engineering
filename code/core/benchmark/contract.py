@@ -39,12 +39,12 @@ class BenchmarkContract:
         "get_input_signature",  # Returns workload description dict
         "validate_result",  # Returns error message or None
         "get_verify_output",  # Returns output tensor(s) for comparison
+        "get_output_tolerance",  # Returns ToleranceSpec for custom tolerances
     }
     
     # Optional methods that enhance verification but have sensible defaults
     RECOMMENDED_METHODS: Set[str] = {
         "get_config",
-        "get_output_tolerance",  # Returns ToleranceSpec for custom tolerances
         "get_equivalence_fn",  # Returns custom comparator function
         "get_workload_metadata",  # Returns WorkloadMetadata for invariant checking
         "get_verify_inputs",  # Returns input tensor(s) for aliasing detection
@@ -88,7 +88,7 @@ class BenchmarkContract:
         # Check verification required methods (warn in AST mode since we don't know enforcement phase)
         for method_name in BenchmarkContract.VERIFICATION_REQUIRED_METHODS:
             if method_name not in method_names:
-                warnings.append(f"Missing verification method: {method_name}()")
+                errors.append(f"Missing verification method: {method_name}()")
         
         # Check recommended methods
         for method_name in BenchmarkContract.RECOMMENDED_METHODS:
@@ -155,6 +155,16 @@ class BenchmarkContract:
                 if not (has_var_args or has_var_kwargs):
                     errors.append(f"{method_name}() should take no arguments (except self)")
         
+        # Check verification-required methods
+        for method_name in BenchmarkContract.VERIFICATION_REQUIRED_METHODS:
+            if not hasattr(cls, method_name):
+                errors.append(f"Missing verification method: {method_name}()")
+                continue
+            method = getattr(cls, method_name)
+            if not callable(method):
+                errors.append(f"{method_name} is not callable")
+                continue
+        
         # Check recommended methods (warn, don't fail)
         warnings = []
         for method_name in BenchmarkContract.RECOMMENDED_METHODS:
@@ -194,6 +204,15 @@ class BenchmarkContract:
                 errors.append(f"Missing required method: {method_name}()")
                 continue
             
+            method = getattr(benchmark, method_name)
+            if not callable(method):
+                errors.append(f"{method_name} is not callable")
+        
+        # Verification-required methods must also be present
+        for method_name in BenchmarkContract.VERIFICATION_REQUIRED_METHODS:
+            if not hasattr(benchmark, method_name):
+                errors.append(f"Missing verification method: {method_name}()")
+                continue
             method = getattr(benchmark, method_name)
             if not callable(method):
                 errors.append(f"{method_name} is not callable")
@@ -455,4 +474,3 @@ def check_benchmark_file(file_path: Path, run_setup: bool = False) -> Tuple[bool
         errors.append(f"Failed to load module: {type(e).__name__}: {e}")
     
     return len(errors) == 0, errors, warnings
-

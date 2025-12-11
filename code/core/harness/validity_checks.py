@@ -646,6 +646,8 @@ class StreamAuditor:
         self._default_stream_id: Optional[int] = None
         self._observed_streams: Set[int] = set()
         self._sync_count: int = 0
+        self._orig_stream_cls = None
+        self._orig_synchronize = None
     
     def start(self) -> None:
         """Start stream auditing."""
@@ -662,6 +664,33 @@ class StreamAuditor:
         default_stream = torch.cuda.current_stream(self.device)
         self._default_stream_id = default_stream.cuda_stream
         self._observed_streams.add(self._default_stream_id)
+        
+        # Monkeypatch torch.cuda.Stream to record new stream creation
+        try:
+            self._orig_stream_cls = torch.cuda.Stream
+            auditor = self
+            
+            class _AuditedStream(torch.cuda.Stream):  # type: ignore[misc]
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    auditor.record_stream_event(self, operation="stream_create")
+            
+            torch.cuda.Stream = _AuditedStream  # type: ignore[assignment]
+        except Exception:
+            self._orig_stream_cls = None
+        
+        # Monkeypatch synchronize to capture syncs
+        try:
+            self._orig_synchronize = torch.cuda.synchronize
+            auditor = self
+            
+            def _audited_synchronize(*args, **kwargs):
+                auditor.record_sync("device")
+                return auditor._orig_synchronize(*args, **kwargs)
+            
+            torch.cuda.synchronize = _audited_synchronize  # type: ignore[assignment]
+        except Exception:
+            self._orig_synchronize = None
     
     def record_stream_event(self, stream: Any, operation: str = "kernel") -> None:
         """Record a stream event for auditing.
@@ -696,7 +725,18 @@ class StreamAuditor:
     
     def stop(self) -> None:
         """Stop stream auditing."""
-        pass  # No cleanup needed
+        if torch is None or not torch.cuda.is_available():
+            return
+        if self._orig_stream_cls is not None:
+            try:
+                torch.cuda.Stream = self._orig_stream_cls  # type: ignore[assignment]
+            except Exception:
+                pass
+        if self._orig_synchronize is not None:
+            try:
+                torch.cuda.synchronize = self._orig_synchronize  # type: ignore[assignment]
+            except Exception:
+                pass
     
     def get_info(self) -> StreamUsageInfo:
         """Get stream usage information."""
@@ -1282,4 +1322,3 @@ __all__ = [
     "detect_graph_capture_cheat",
     "check_graph_capture_integrity",
 ]
-

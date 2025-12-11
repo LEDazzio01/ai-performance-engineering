@@ -172,18 +172,23 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
         - Clocks are automatically reset when context exits
         - Raises RuntimeError if nvidia-smi fails
     """
+    if not torch.cuda.is_available():
+        raise RuntimeError("lock_gpu_clocks requires CUDA")
+    props = torch.cuda.get_device_properties(device)
     try:
         # Enable persistence mode
         subprocess.check_output(["nvidia-smi", "-i", str(device), "-pm", "1"], stderr=subprocess.STDOUT)
         
         # Get max clocks if not specified
         if sm_clock_mhz is None or mem_clock_mhz is None:
-            # Query supported clock rates
             cmd = ["nvidia-smi", "-i", str(device), "--query-gpu=clocks.max.sm,clocks.max.memory", "--format=csv,noheader,nounits"]
             out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
             max_sm, max_mem = [int(x.strip()) for x in out.decode().split(',')]
             sm_clock_mhz = sm_clock_mhz or max_sm
             mem_clock_mhz = mem_clock_mhz or max_mem
+        
+        if sm_clock_mhz is None or mem_clock_mhz is None:
+            raise RuntimeError("Unable to determine target SM/memory clocks for lock_gpu_clocks")
         
         # Lock GPU clocks
         subprocess.check_output([
@@ -202,46 +207,36 @@ def lock_gpu_clocks(device: int = 0, sm_clock_mhz: Optional[int] = None, mem_clo
         out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
         cur_sm, cur_mem = [int(x.strip()) for x in out.decode().split(',')]
         
-        if abs(cur_sm - sm_clock_mhz) > 50:  # Allow some tolerance
-            logger.warning(f"SM clock not locked: requested {sm_clock_mhz}MHz, got {cur_sm}MHz")
-        if abs(cur_mem - mem_clock_mhz) > 50:
-            logger.warning(f"Memory clock not locked: requested {mem_clock_mhz}MHz, got {cur_mem}MHz")
+        if abs(cur_sm - sm_clock_mhz) > 50 or abs(cur_mem - mem_clock_mhz) > 50:
+            raise RuntimeError(
+                f"GPU clock lock failed: requested SM={sm_clock_mhz}MHz Mem={mem_clock_mhz}MHz, "
+                f"observed SM={cur_sm}MHz Mem={cur_mem}MHz"
+            )
         
-        # Calculate theoretical performance at these clocks
-        # Get number of SMs
-        cmd = ["nvidia-smi", "-i", str(device), "--query-gpu=gpu_name", "--format=csv,noheader"]
-        gpu_name = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
-        
-        # Rough SM count estimation (could be improved with actual device query)
-        sm_count = 108  # Default A100 count
-        if "H100" in gpu_name or "H200" in gpu_name:
-            sm_count = 132
-        elif "A100" in gpu_name:
-            sm_count = 108
-        elif "4090" in gpu_name:
-            sm_count = 128
-        elif "3090" in gpu_name:
-            sm_count = 82
-        
-        # Theoretical FP16 tensor core TFLOPS: SMs * 4 subcores * 256 ops/clock * clock_rate
+        # Calculate theoretical performance at these clocks using device properties
+        sm_count = props.multi_processor_count
+        # memory_clock_rate is reported in kHz, memory_bus_width in bits
+        mem_clock_hz = getattr(props, "memory_clock_rate", 0) * 1000
+        bus_width_bits = getattr(props, "memory_bus_width", 0)
         theoretical_tflops = 1e-6 * 2 * sm_count * 4 * 256 * sm_clock_mhz
-        
-        # Theoretical memory bandwidth GB/s (HBM2e/HBM3: 512-bit bus, double data rate)
-        theoretical_gbps = 640 * 2 * mem_clock_mhz * 1e-3  # Rough estimate
+        theoretical_gbps = 0.0
+        if mem_clock_hz > 0 and bus_width_bits > 0:
+            # DDR: multiply by 2
+            theoretical_gbps = mem_clock_hz * (bus_width_bits / 8) * 2 / 1e9
         
         logger.info(f"GPU clocks locked: SM={sm_clock_mhz}MHz, Mem={mem_clock_mhz}MHz")
-        logger.info(f"Theoretical peak: {theoretical_tflops:.1f} TFLOPS (FP16), {theoretical_gbps:.0f} GB/s")
+        if theoretical_tflops > 0:
+            logger.info(
+                "Theoretical peak: %.1f TFLOPS (FP16), %.0f GB/s (bus=%dbit)",
+                theoretical_tflops,
+                theoretical_gbps,
+                bus_width_bits,
+            )
         
         yield theoretical_tflops, theoretical_gbps
         
-    except subprocess.CalledProcessError as e:
-        logger.warning(f"Failed to lock GPU clocks: {e}. Continuing without clock locking.")
-        yield None, None
-        
-    except FileNotFoundError:
-        logger.warning("nvidia-smi not found. Continuing without clock locking.")
-        yield None, None
-        
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise RuntimeError(f"Failed to lock GPU clocks: {e}")
     finally:
         # Reset clocks
         try:
@@ -779,6 +774,8 @@ class BaseBenchmark:
                     _ = self.model(self.data)
     """
     
+    allow_cpu: bool = False
+
     def __init__(self):
         """Initialize benchmark with device resolution.
         
@@ -797,9 +794,11 @@ class BaseBenchmark:
         Raises:
             RuntimeError: If CUDA is not available (NVIDIA GPU required)
         """
-        if not torch.cuda.is_available():
-            raise RuntimeError("CUDA required - NVIDIA GPU and tools must be available")
-        return torch.device("cuda")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if getattr(self, "allow_cpu", False):
+            return torch.device("cpu")
+        raise RuntimeError("CUDA required - NVIDIA GPU and tools must be available")
     
     def setup(self) -> None:
         """Setup phase: initialize models, data, etc.
@@ -1670,6 +1669,8 @@ class BenchmarkHarness:
             
             class _CallableBenchmark(BaseBenchmark):  # type: ignore[misc]
                 def __init__(self, wrapped_fn: Callable[[], Any], bench_name: Optional[str]):
+                    # Callable benchmarks should not force CUDA; allow CPU for lightweight examples/docs.
+                    self.allow_cpu = True
                     super().__init__()
                     self._fn = wrapped_fn
                     self.name = bench_name or "callable_benchmark"

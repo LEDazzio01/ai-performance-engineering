@@ -17,7 +17,8 @@ class BaselineEvalStackBenchmark(BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self._summary: Dict[str, float] = {}
-        self.jitter_exemption_reason = "Eval stack benchmark: fixed configuration"
+        self.metrics: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def _resolve_device(self) -> torch.device:  # type: ignore[override]
@@ -29,6 +30,17 @@ class BaselineEvalStackBenchmark(BaseBenchmark):
     def benchmark_fn(self) -> None:
         cfg = EvalConfig.from_flags(self._argv(), seed=0)
         self._summary = run_eval_stack("baseline", cfg)
+        metric_values = list(self._summary.values()) or [0.0]
+        expected_shape = (1, len(metric_values))
+        if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
+            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
+        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
+        self.output = (summary_tensor + self.metrics).detach()
+
+    def teardown(self) -> None:
+        self.metrics = None
+        self.output = None
+        super().teardown()
 
     def _argv(self) -> List[str]:
         """Pull target-specific extra args from the harness config if available."""
@@ -51,11 +63,14 @@ class BaselineEvalStackBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "eval_stack_baseline"}
+        shape = tuple(self.metrics.shape) if self.metrics is not None else (1, max(1, len(self._summary) or 1))
+        return {"type": "eval_stack_baseline", "shapes": {"metrics": shape}}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

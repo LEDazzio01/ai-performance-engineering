@@ -34,11 +34,11 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         super().__init__()
         self.device = resolve_device()
         self.inputs = None
+        self.output: Optional[torch.Tensor] = None
         self.batch, self.seq_len, self.head_dim = resolve_shapes()
         self.prefill_chunks = 8
         self.prefill_chunk_elems = 128 * 128
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
-        self.jitter_exemption_reason = "TMA prefill/decode baseline: fixed dimensions"
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("baseline_tma_prefill_decode")
@@ -75,10 +75,13 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
         with self._nvtx_range("decode_baseline"):
             self._decode_host_loop()
         self._synchronize()
+        if self.inputs is not None:
+            self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
         self.inputs = None
+        self.output = None
 
     def get_config(self) -> BenchmarkConfig:
         # Keep short; this is primarily for profiling with --profile / nsys
@@ -106,11 +109,27 @@ class BaselineTmaPrefillDecodeBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len}
+        return {
+            "batch": self.batch,
+            "seq_len": self.seq_len,
+            "head_dim": self.head_dim,
+            "prefill_chunks": self.prefill_chunks,
+            "prefill_chunk_elems": self.prefill_chunk_elems,
+            "shapes": {
+                "prefill_src": (self.prefill_chunks, self.prefill_chunk_elems),
+                "prefill_dst": (self.prefill_chunks, self.prefill_chunk_elems),
+                "q": (self.batch, self.seq_len, self.head_dim),
+                "k": (self.batch, self.seq_len, self.head_dim),
+                "v": (self.batch, self.seq_len, self.head_dim),
+                "out": (self.batch, self.seq_len, self.head_dim),
+            },
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

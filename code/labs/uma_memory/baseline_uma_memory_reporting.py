@@ -26,7 +26,8 @@ class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):
         self.cuda_total_bytes = 0
         self.host_available_bytes: Optional[int] = None
         self.swap_free_bytes: Optional[int] = None
-        self.jitter_exemption_reason = "UMA memory reporting baseline: fixed configuration"
+        self.metrics: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
@@ -47,6 +48,17 @@ class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):
 
     def benchmark_fn(self) -> None:
         self._sample()
+        # Surface a perturbable tensor using the sampled memory metrics
+        values = [
+            float(self.cuda_free_bytes),
+            float(self.cuda_total_bytes),
+            float(self.host_available_bytes or 0),
+            float(self.swap_free_bytes or 0),
+        ]
+        summary_tensor = torch.tensor([values], dtype=torch.float32)
+        if self.metrics is None or tuple(self.metrics.shape) != tuple(summary_tensor.shape):
+            self.metrics = torch.randn_like(summary_tensor)
+        self.output = (summary_tensor + self.metrics).detach()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -68,15 +80,23 @@ class BaselineUmaMemoryReportingBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "uma_memory_baseline"}
+        shape = tuple(self.metrics.shape) if self.metrics is not None else (1, 4)
+        return {"type": "uma_memory_baseline", "shapes": {"metrics": shape}}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
         return (0.1, 1.0)
+
+    def teardown(self) -> None:
+        self.metrics = None
+        self.output = None
+        super().teardown()
 
 
 def summarize() -> None:

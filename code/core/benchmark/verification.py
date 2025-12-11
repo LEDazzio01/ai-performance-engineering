@@ -313,6 +313,9 @@ class QuarantineReason(Enum):
     MISSING_INPUT_SIGNATURE = "missing_input_signature"
     MISSING_VALIDATE_RESULT = "missing_validate_result"
     MISSING_WORKLOAD_METADATA = "workload_metadata_missing"
+    MISSING_VERIFY_OUTPUT = "missing_verify_output"
+    MISSING_OUTPUT_TOLERANCE = "missing_output_tolerance"
+    MISSING_VERIFY_INPUTS = "missing_verify_inputs"
     MISSING_TOLERANCE_FOR_NONDETERMINISTIC = "missing_tolerance_for_nondeterministic"
     
     # Signature/workload errors
@@ -903,29 +906,32 @@ def get_output_tolerance(benchmark: Any) -> Optional[ToleranceSpec]:
     Returns:
         ToleranceSpec if benchmark provides custom tolerance, None otherwise
     """
-    if hasattr(benchmark, "get_output_tolerance"):
-        try:
-            result = benchmark.get_output_tolerance()
-            if result is not None:
-                if isinstance(result, ToleranceSpec):
-                    return result
-                # Handle dict format
-                if isinstance(result, dict):
-                    return ToleranceSpec(
-                        rtol=result.get("rtol", 1e-5),
-                        atol=result.get("atol", 1e-8),
-                        justification=result.get("justification"),
-                    )
-                # Handle tuple format (rtol, atol)
-                if isinstance(result, tuple) and len(result) >= 2:
-                    return ToleranceSpec(
-                        rtol=result[0],
-                        atol=result[1],
-                        justification=None,
-                    )
-        except Exception:
-            pass
-    return None
+    if not hasattr(benchmark, "get_output_tolerance") or not callable(getattr(benchmark, "get_output_tolerance")):
+        raise NotImplementedError(
+            f"{benchmark.__class__.__name__} must implement get_output_tolerance()"
+        )
+    
+    result = benchmark.get_output_tolerance()
+    if result is None:
+        raise ValueError(f"{benchmark.__class__.__name__}.get_output_tolerance() returned None")
+    
+    if isinstance(result, ToleranceSpec):
+        return result
+    if isinstance(result, dict):
+        return ToleranceSpec(
+            rtol=result["rtol"],
+            atol=result["atol"],
+            justification=result.get("justification"),
+        )
+    if isinstance(result, tuple) and len(result) >= 2:
+        return ToleranceSpec(
+            rtol=result[0],
+            atol=result[1],
+            justification=None,
+        )
+    raise TypeError(
+        f"{benchmark.__class__.__name__}.get_output_tolerance() must return ToleranceSpec, dict, or (rtol, atol) tuple"
+    )
 
 
 def get_equivalence_fn(benchmark: Any) -> Optional[Callable[[torch.Tensor, torch.Tensor], bool]]:
@@ -962,19 +968,17 @@ def get_verify_output(benchmark: Any) -> Optional[torch.Tensor]:
     Returns:
         Output tensor if available, None otherwise
     """
-    if hasattr(benchmark, "get_verify_output"):
-        try:
-            output = benchmark.get_verify_output()
-            if isinstance(output, torch.Tensor):
-                return output
-        except Exception:
-            pass
+    if not hasattr(benchmark, "get_verify_output") or not callable(getattr(benchmark, "get_verify_output")):
+        raise NotImplementedError(
+            f"{benchmark.__class__.__name__} must implement get_verify_output()"
+        )
     
-    # Fallback to common output attributes
-    if hasattr(benchmark, "output") and isinstance(benchmark.output, torch.Tensor):
-        return benchmark.output
-    
-    return None
+    output = benchmark.get_verify_output()
+    if not isinstance(output, torch.Tensor):
+        raise TypeError(
+            f"{benchmark.__class__.__name__}.get_verify_output() must return a torch.Tensor"
+        )
+    return output
 
 
 def get_jitter_exemption_reason(benchmark: Any) -> Optional[str]:
@@ -1019,4 +1023,3 @@ def get_workload_ratio_expected(benchmark: Any) -> Optional[Tuple[float, str]]:
         if ratio is not None:
             return (float(ratio), str(justification))
     return None
-

@@ -85,12 +85,12 @@ class VectorizedRouterBenchmark(BaseBenchmark):
         self.inputs: Optional[torch.Tensor] = None
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.static_output: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         tokens = self.batch_size * self.top_k
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
             tokens_per_iteration=float(tokens),
         )
-        self.jitter_exemption_reason = "Vectorized router benchmark: fixed dimensions"
 
     def setup(self) -> None:
         import gc
@@ -147,10 +147,12 @@ class VectorizedRouterBenchmark(BaseBenchmark):
             torch.cuda.synchronize(self.device)
             with torch.cuda.graph(self.graph):
                 assert self.model is not None and self.inputs is not None
-                self.static_output = self.model(self.inputs)
+            self.static_output = self.model(self.inputs)
+            self.output = self.static_output.detach().float().clone()
         except Exception:
             self.graph = None
             self.static_output = None
+            self.output = None
         finally:
             torch.cuda.synchronize(self.device)
 
@@ -164,7 +166,7 @@ class VectorizedRouterBenchmark(BaseBenchmark):
                 self.graph.replay()
             else:
                 with torch.autocast("cuda", dtype=torch.bfloat16), torch.inference_mode():
-                    _ = self.model(self.inputs)
+                    self.output = self.model(self.inputs).detach().float().clone()
         torch.cuda.synchronize(self.device)
 
     def teardown(self) -> None:
@@ -172,6 +174,7 @@ class VectorizedRouterBenchmark(BaseBenchmark):
         self.inputs = None
         self.graph = None
         self.static_output = None
+        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -204,11 +207,23 @@ class VectorizedRouterBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"num_experts": self.num_experts, "batch_size": self.batch_size}
+        return {
+            "num_experts": self.num_experts,
+            "batch_size": self.batch_size,
+            "top_k": self.top_k,
+            "hidden_size": self.hidden_size,
+            "shapes": {
+                "input": (self.batch_size, self.hidden_size),
+                "output": (self.batch_size, self.hidden_size),
+            },
+            "dtypes": {"input": "bfloat16"},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

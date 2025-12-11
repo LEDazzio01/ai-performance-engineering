@@ -37,7 +37,7 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
         self.copy_stream: Optional[torch.cuda.Stream] = None
         self.next_start: int = 0
         self._bytes_per_iteration: float = 0.0
-        self.jitter_exemption_reason = "NVLink offload benchmark: fixed dimensions"
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
@@ -97,12 +97,15 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
             target = self.cpu_cache[..., start:end, :]
             target.copy_(self.gpu_cache[..., :slice_len, :].to("cpu", non_blocking=self.cfg.non_blocking))
 
+        # Capture a representative slice for verification (GPU slice to avoid host sync patterns)
+        self.output = self.gpu_cache[..., : min(1, self.cfg.max_seq_len), : min(8, self.cfg.head_dim)].detach().float().clone()
         self.next_start = 0 if end >= self.cfg.max_seq_len else end
 
     def teardown(self) -> None:
         self.cpu_cache = None
         self.gpu_cache = None
         self.copy_stream = None
+        self.output = None
         super().teardown()
 
     def get_config(self) -> Optional[BenchmarkConfig]:
@@ -128,11 +131,42 @@ class NvlinkOffloadBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"label": self.label, "batch_size": self.cfg.batch_size}
+        return {
+            "label": self.label,
+            "batch_size": self.cfg.batch_size,
+            "num_layers": self.cfg.num_layers,
+            "num_heads": self.cfg.num_heads,
+            "head_dim": self.cfg.head_dim,
+            "max_seq_len": self.cfg.max_seq_len,
+            "chunk_tokens": self.cfg.chunk_tokens,
+            "use_pinned": self.cfg.use_pinned,
+            "use_copy_stream": self.cfg.use_copy_stream,
+            "shapes": {
+                "cpu_cache": (
+                    self.cfg.num_layers,
+                    2,
+                    self.cfg.batch_size,
+                    self.cfg.num_heads,
+                    self.cfg.max_seq_len,
+                    self.cfg.head_dim,
+                ),
+                "gpu_cache": (
+                    self.cfg.num_layers,
+                    2,
+                    self.cfg.batch_size,
+                    self.cfg.num_heads,
+                    self.cfg.max_seq_len,
+                    self.cfg.head_dim,
+                ),
+            },
+            "dtypes": {"cache": str(self.cfg.dtype)},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

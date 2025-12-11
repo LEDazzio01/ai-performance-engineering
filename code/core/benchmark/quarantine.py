@@ -302,6 +302,36 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
         except Exception:
             issues.append(QuarantineReason.MISSING_INPUT_SIGNATURE)
     
+    if not hasattr(benchmark, "get_verify_output") or not callable(getattr(benchmark, "get_verify_output")):
+        issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
+    else:
+        try:
+            output = benchmark.get_verify_output()
+            if output is None:
+                issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
+        except Exception:
+            issues.append(QuarantineReason.MISSING_VERIFY_OUTPUT)
+    
+    if not hasattr(benchmark, "get_output_tolerance") or not callable(getattr(benchmark, "get_output_tolerance")):
+        issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
+    else:
+        try:
+            tol = benchmark.get_output_tolerance()
+            if tol is None:
+                issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
+        except Exception:
+            issues.append(QuarantineReason.MISSING_OUTPUT_TOLERANCE)
+    
+    if not hasattr(benchmark, "get_verify_inputs") or not callable(getattr(benchmark, "get_verify_inputs")):
+        issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
+    else:
+        try:
+            inputs = benchmark.get_verify_inputs()
+            if inputs is None:
+                issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
+        except Exception:
+            issues.append(QuarantineReason.MISSING_VERIFY_INPUTS)
+    
     if not hasattr(benchmark, "validate_result") or not callable(getattr(benchmark, "validate_result")):
         issues.append(QuarantineReason.MISSING_VALIDATE_RESULT)
     
@@ -317,4 +347,3 @@ def check_benchmark_compliance(benchmark: Any) -> List[QuarantineReason]:
         issues.append(QuarantineReason.MISSING_WORKLOAD_METADATA)
     
     return issues
-

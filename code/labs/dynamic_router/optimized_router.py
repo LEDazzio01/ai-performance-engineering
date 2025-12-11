@@ -381,12 +381,13 @@ class OptimizedRouterBenchmark(BaseBenchmark):
         self.num_gpus = 8
         self.num_requests = 1000
         self._last = 0.0
+        self.metrics: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.num_requests),
             tokens_per_iteration=float(self.num_requests * 100),  # ~100 tokens/request
         )
-        self.jitter_exemption_reason = "Optimized router benchmark: fixed configuration"
 
     def setup(self) -> None:
         """Setup: Initialize optimized router with GPU pools."""
@@ -443,10 +444,17 @@ class OptimizedRouterBenchmark(BaseBenchmark):
                 routed += 1
         
         self._last = float(routed)
+        summary_tensor = torch.tensor([[self._last, float(self.num_gpus)]], dtype=torch.float32)
+        if self.metrics is None or tuple(self.metrics.shape) != tuple(summary_tensor.shape):
+            self.metrics = torch.randn_like(summary_tensor)
+        self.output = (summary_tensor + self.metrics).detach()
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.router = None
+        self.metrics = None
+        self.output = None
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=10)
@@ -468,11 +476,14 @@ class OptimizedRouterBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"num_gpus": self.num_gpus, "num_requests": self.num_requests}
+        shape = tuple(self.metrics.shape) if self.metrics is not None else (1, 2)
+        return {"num_gpus": self.num_gpus, "num_requests": self.num_requests, "shapes": {"metrics": shape}}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

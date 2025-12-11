@@ -66,6 +66,7 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
         )
         self.v = torch.randn_like(self.k)
         torch.cuda.synchronize(self.device)
+        self.output = None
 
     def benchmark_fn(self) -> Dict[str, List[float]]:
         if any(t is None for t in (self.module, self.q, self.k, self.v)):
@@ -75,9 +76,10 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
         with nvtx_range("moe_cuda_decode_naive", enable=enable_nvtx):
             with torch.inference_mode():
                 start = self._record_start()
-                _ = self.module(self.q, self.k, self.v)
+                attn_out, _ = self.module(self.q, self.k, self.v)
                 torch.cuda.synchronize(self.device)
                 self._history["latency_ms"].append(self._record_stop(start))
+                self.output = attn_out.detach().float().clone()
         return {"decode_ms": self._history["latency_ms"]}
 
     def teardown(self) -> None:
@@ -86,6 +88,7 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
         self.q = None
         self.k = None
         self.v = None
+        self.output = None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=8, warmup=5)
@@ -107,11 +110,25 @@ class BaselineDecodeAttentionBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "kv_seq": self.kv_seq}
+        return {
+            "batch": self.batch,
+            "kv_seq": self.kv_seq,
+            "num_heads": self.num_heads,
+            "head_dim": self.head_dim,
+            "shapes": {
+                "q": (self.batch, 1, self.num_heads * self.head_dim),
+                "k": (self.batch, self.kv_seq, self.num_heads * self.head_dim),
+                "v": (self.batch, self.kv_seq, self.num_heads * self.head_dim),
+                "out": (self.batch, 1, self.num_heads * self.head_dim),
+            },
+            "dtypes": {"q": "float32"},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

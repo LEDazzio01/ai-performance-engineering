@@ -80,21 +80,54 @@ class BaselinePersistentMatmulTMABenchmark(BaseBenchmark):
         self.N = N
         self.K = K
         self.result = None
+        self.A = None
+        self.B = None
+        self.C = None
+        self.block = 128
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(M * N),
         )
 
     def setup(self) -> None:
+        torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         torch.cuda.empty_cache()
+        self.A = torch.randn((self.M, self.K), device=self.device, dtype=torch.float16)
+        self.B = torch.randn((self.K, self.N), device=self.device, dtype=torch.float16)
+        self.C = torch.empty((self.M, self.N), device=self.device, dtype=torch.float16)
+        grid = lambda META: (triton.cdiv(self.M, META["BLOCK_M"]) * triton.cdiv(self.N, META["BLOCK_N"]),)
+        # One warmup to JIT the kernel and populate C
+        baseline_matmul_kernel[grid](
+            self.A, self.B, self.C,
+            self.M, self.N, self.K,
+            self.A.stride(0), self.A.stride(1),
+            self.B.stride(0), self.B.stride(1),
+            self.C.stride(0), self.C.stride(1),
+            self.block, self.block, self.block,
+        )
+        self._synchronize()
 
     def benchmark_fn(self) -> None:
-        self.result = run_baseline(self.M, self.N, self.K)
+        assert self.A is not None and self.B is not None and self.C is not None
+        grid = lambda META: (triton.cdiv(self.M, META["BLOCK_M"]) * triton.cdiv(self.N, META["BLOCK_N"]),)
+        baseline_matmul_kernel[grid](
+            self.A, self.B, self.C,
+            self.M, self.N, self.K,
+            self.A.stride(0), self.A.stride(1),
+            self.B.stride(0), self.B.stride(1),
+            self.C.stride(0), self.C.stride(1),
+            self.block, self.block, self.block,
+        )
+        self.result = self.C
         self._synchronize()
         self.output = self.result
 
     def teardown(self) -> None:
         self.result = None
+        self.A = None
+        self.B = None
+        self.C = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

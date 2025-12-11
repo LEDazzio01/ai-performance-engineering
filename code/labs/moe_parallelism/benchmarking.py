@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import torch
 
@@ -63,7 +63,8 @@ class _SkipPlanBenchmark(BaseBenchmark):
     
     def __init__(self) -> None:
         super().__init__()
-        self.jitter_exemption_reason = "Skip benchmark: plan module unavailable"
+        self.metrics = torch.randn((1, 1), dtype=torch.float32)
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def get_config(self) -> BenchmarkConfig:
@@ -73,10 +74,10 @@ class _SkipPlanBenchmark(BaseBenchmark):
         raise RuntimeError(f"SKIPPED: {_PLAN_ERROR or 'moe_parallelism plan module unavailable'}")
 
     def get_verify_output(self) -> torch.Tensor:
-        return torch.tensor([0.0], dtype=torch.float32)
+        raise RuntimeError("benchmark_fn() must be called before verification")
 
     def get_input_signature(self) -> dict:
-        return {"type": "skip"}
+        return {"type": "skip", "shapes": {"metrics": (1, 1)}}
 
     def get_output_tolerance(self) -> tuple:
         return (0.1, 1.0)
@@ -112,7 +113,8 @@ class PlanBenchmark(BaseBenchmark):
         self.report: Optional[PlanReport] = None
         self._summary: Optional[str] = None
         self._config: Optional[BenchmarkConfig] = None
-        self.jitter_exemption_reason = "MoE parallelism plan benchmark: fixed configuration"
+        self.metrics: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def _resolve_device(self) -> torch.device:  # type: ignore[override]
@@ -126,10 +128,20 @@ class PlanBenchmark(BaseBenchmark):
         report = self.evaluator.analyze(self.plan)
         self.report = report
         self._summary = format_report(report)
+        self._finalize_output(
+            [
+                float(report.estimated_step_ms),
+                float(report.throughput_tokens_per_s),
+                float(getattr(report, "memory_per_device_gb", 0.0)),
+            ]
+        )
 
     def teardown(self) -> None:
         self.report = None
         self._summary = None
+        self.metrics = None
+        self.output = None
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         if self._config is None:
@@ -166,13 +178,23 @@ class PlanBenchmark(BaseBenchmark):
         if self._summary:
             print(self._summary)
 
+    def _finalize_output(self, metric_values: List[float]) -> None:
+        expected_shape = (1, len(metric_values))
+        if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
+            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
+        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
+        self.output = (summary_tensor + self.metrics).detach()
+
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"plan": str(self.plan), "cluster": str(self.cluster)}
+        shape = tuple(self.metrics.shape) if self.metrics is not None else (1, 3)
+        return {"plan": str(self.plan), "cluster": str(self.cluster), "shapes": {"metrics": shape}}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

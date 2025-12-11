@@ -311,6 +311,7 @@ class OptimizedFlashAttention3Benchmark(BaseBenchmark):
             enable_tf32()
         
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Determine if FP8 should be used
         use_fp8 = False
@@ -351,7 +352,7 @@ class OptimizedFlashAttention3Benchmark(BaseBenchmark):
         """Benchmark FA3-optimized attention."""
         with self._nvtx_range("optimized_fa3_attention"):
             with torch.no_grad():
-                _output = self.compiled_model(self.input, is_causal=self.use_causal)
+                self.output = self.compiled_model(self.input, is_causal=self.use_causal).detach()
         self._synchronize()
     
     def teardown(self) -> None:

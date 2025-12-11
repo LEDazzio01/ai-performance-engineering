@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+import subprocess
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -64,6 +65,24 @@ from core.harness.validity_checks import (
 DEFAULT_CACHE_DIR = Path("artifacts/verify_cache/golden_outputs")
 
 
+def _detect_git_cache_salt() -> str:
+    """Generate a cache salt tied to the current repo state.
+    
+    Using the git HEAD hash prevents stale golden outputs from being reused
+    across code changes while keeping cache keys stable within a commit.
+    """
+    try:
+        import subprocess
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        if head:
+            return head[:12]
+    except Exception:
+        pass
+    return "nogit"
+
+
 @dataclass
 class GoldenOutput:
     """Cached baseline output for verification comparison.
@@ -96,22 +115,24 @@ class GoldenOutputCache:
     verifying that optimized benchmarks produce equivalent results.
     """
     
-    def __init__(self, cache_dir: Optional[Union[Path, str]] = None):
+    def __init__(self, cache_dir: Optional[Union[Path, str]] = None, cache_salt: Optional[str] = None):
         """Initialize the golden output cache.
         
         Args:
             cache_dir: Directory for storing cached outputs.
                       Defaults to artifacts/verify_cache/golden_outputs
+            cache_salt: Optional salt to incorporate into cache keys (defaults to git HEAD)
         """
         if cache_dir is None:
             self.cache_dir = DEFAULT_CACHE_DIR
         else:
             self.cache_dir = Path(cache_dir) if isinstance(cache_dir, str) else cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_salt = cache_salt or _detect_git_cache_salt()
     
     def _get_cache_path(self, signature_hash: str) -> Path:
         """Get the path to the cache file for a signature hash."""
-        return self.cache_dir / f"{signature_hash}.pkl"
+        return self.cache_dir / f"{signature_hash}-{self.cache_salt}.pkl"
     
     def has(self, signature_hash: str) -> bool:
         """Check if a golden output exists for the given signature."""
@@ -158,6 +179,7 @@ class GoldenOutputCache:
             "checksum": golden.checksum,
             "created_at": golden.created_at.isoformat(),
             "seed": golden.seed,
+            "cache_salt": self.cache_salt,
         }
         with open(path, "wb") as f:
             pickle.dump(data, f)
@@ -391,51 +413,32 @@ class VerifyRunner:
     def _extract_inputs(self, benchmark: Any) -> Dict[str, torch.Tensor]:
         """Extract input tensors from a benchmark.
         
-        Supports two modes:
-        1. Explicit get_verify_inputs() method (recommended)
-        2. Auto-detection from common input attribute names
-        
-        Args:
-            benchmark: The benchmark instance
-            
-        Returns:
-            Dict mapping input names to tensors
+        Requires benchmarks to implement get_verify_inputs() explicitly to
+        avoid auto-detected fallbacks.
         """
+        if not hasattr(benchmark, "get_verify_inputs") or not callable(getattr(benchmark, "get_verify_inputs")):
+            raise NotImplementedError(
+                f"{benchmark.__class__.__name__} must implement get_verify_inputs() for aliasing checks"
+            )
+        
+        inp = benchmark.get_verify_inputs()
+        if inp is None:
+            raise ValueError(f"{benchmark.__class__.__name__}.get_verify_inputs() returned None")
+        
         inputs: Dict[str, torch.Tensor] = {}
+        if isinstance(inp, torch.Tensor):
+            inputs["input"] = inp
+        elif isinstance(inp, dict):
+            for k, v in inp.items():
+                if isinstance(v, torch.Tensor):
+                    inputs[k] = v
+        else:
+            raise TypeError(
+                f"{benchmark.__class__.__name__}.get_verify_inputs() must return Tensor or Dict[str, Tensor], got {type(inp)}"
+            )
         
-        # Mode 1: Use get_verify_inputs() if available (recommended)
-        if hasattr(benchmark, "get_verify_inputs") and callable(benchmark.get_verify_inputs):
-            try:
-                inp = benchmark.get_verify_inputs()
-                if inp is not None:
-                    if isinstance(inp, torch.Tensor):
-                        inputs["input"] = inp
-                    elif isinstance(inp, dict):
-                        for k, v in inp.items():
-                            if isinstance(v, torch.Tensor):
-                                inputs[k] = v
-                    return inputs
-            except Exception:
-                pass  # Fall through to auto-detection
-        
-        # Mode 2: Auto-detect common input attributes
-        # This is a fallback for benchmarks that haven't implemented get_verify_inputs()
-        common_input_attrs = [
-            # Matrix/tensor inputs (common in GEMM benchmarks)
-            "A", "B", "x", "y", "input", "inputs", "X", "Y",
-            # Weight/model inputs
-            "weight", "weights", "W",
-            # Sequence inputs (LLM benchmarks)
-            "input_ids", "attention_mask", "hidden_states",
-            # Convolution inputs
-            "input_tensor", "kernel",
-        ]
-        
-        for attr in common_input_attrs:
-            if hasattr(benchmark, attr):
-                val = getattr(benchmark, attr)
-                if isinstance(val, torch.Tensor):
-                    inputs[attr] = val
+        if not inputs:
+            raise ValueError(f"{benchmark.__class__.__name__}.get_verify_inputs() returned no tensors")
         
         return inputs
     
@@ -454,17 +457,8 @@ class VerifyRunner:
         Returns:
             Tuple of (no_aliasing, error_message_if_aliasing)
         """
-        try:
-            inputs = self._extract_inputs(benchmark)
-            outputs = self._extract_output(benchmark)
-        except Exception as e:
-            # If we can't extract inputs/outputs, we can't check aliasing
-            # but this shouldn't block verification
-            return True, None
-        
-        if not inputs or not outputs:
-            # No tensors to compare
-            return True, None
+        inputs = self._extract_inputs(benchmark)
+        outputs = self._extract_output(benchmark)
         
         # Use the check from validity_checks module
         no_aliasing, error_msg = check_input_output_aliasing(inputs, outputs)
@@ -473,89 +467,68 @@ class VerifyRunner:
     def _extract_signature(self, benchmark: Any) -> Optional[InputSignature]:
         """Extract input signature from a benchmark.
         
-        Supports two modes:
-        1. Full InputSignature with shapes/dtypes (rigorous verification)
-        2. Simple parameter-based dict (workload parameter matching)
-        
-        For simple dicts, we create a minimal InputSignature that can be
-        hashed for caching but is validated in non-strict mode.
-        
         Args:
             benchmark: The benchmark instance
             
         Returns:
             InputSignature if extractable, None otherwise
         """
-        if not hasattr(benchmark, "get_input_signature"):
-            return None
-        
-        try:
-            sig_dict = benchmark.get_input_signature()
-            if sig_dict is None or not sig_dict:
-                return None
-            
-            # Convert dict to InputSignature
-            # Handle both old-style dict and new InputSignature
-            if isinstance(sig_dict, InputSignature):
-                return sig_dict
-            
-            # Build InputSignature from dict
-            shapes = {}
-            dtypes = {}
-            
-            # Extract shapes and dtypes from various formats
-            if "shapes" in sig_dict:
-                shapes = {k: tuple(v) if isinstance(v, list) else v 
-                         for k, v in sig_dict["shapes"].items()}
-            if "dtypes" in sig_dict:
-                dtypes = sig_dict["dtypes"]
-            
-            # Infer shapes from tensor_shape or similar keys
-            if not shapes:
-                for key in ["tensor_shape", "shape", "input_shape"]:
-                    if key in sig_dict:
-                        val = sig_dict[key]
-                        if isinstance(val, (list, tuple)):
-                            shapes["input"] = tuple(val)
-                            break
-            
-            # For simple parameter-based signatures, create a synthetic shape
-            # from the parameters to enable hashing and comparison
-            if not shapes:
-                # Store all numeric parameters as a synthetic shape for hashing
-                param_values = []
-                for key, val in sorted(sig_dict.items()):
-                    if key in ("batch_size", "parameter_count", "fp16", "bf16", "fp8", "tf32"):
-                        continue  # Skip known fields
-                    if isinstance(val, (int, float)):
-                        param_values.append(int(val))
-                    elif isinstance(val, (list, tuple)) and all(isinstance(x, (int, float)) for x in val):
-                        param_values.extend(int(x) for x in val)
-                if param_values:
-                    shapes["_params"] = tuple(param_values)
-            
-            # Infer batch_size
-            batch_size = sig_dict.get("batch_size", 0)
-            if not batch_size and shapes and "_params" not in shapes:
-                # Try to get from first dimension of any shape
-                first_shape = next(iter(shapes.values()), ())
-                if first_shape:
-                    batch_size = first_shape[0]
-            
-            return InputSignature(
-                shapes=shapes,
-                dtypes=dtypes,
-                batch_size=batch_size,
-                parameter_count=sig_dict.get("parameter_count", 0),
-                precision_flags=PrecisionFlags(
-                    fp16=sig_dict.get("fp16", False),
-                    bf16=sig_dict.get("bf16", False),
-                    fp8=sig_dict.get("fp8", False),
-                    tf32=sig_dict.get("tf32", True),
-                ),
+        if not hasattr(benchmark, "get_input_signature") or not callable(getattr(benchmark, "get_input_signature")):
+            raise NotImplementedError(
+                f"{benchmark.__class__.__name__} must implement get_input_signature()"
             )
-        except Exception:
-            return None
+        
+        sig_dict = benchmark.get_input_signature()
+        if sig_dict is None:
+            raise ValueError(f"{benchmark.__class__.__name__}.get_input_signature() returned None")
+        
+        if isinstance(sig_dict, InputSignature):
+            errors = sig_dict.validate(strict=True)
+            if errors:
+                raise ValueError(f"Invalid InputSignature: {errors[0]}")
+            return sig_dict
+        
+        if not isinstance(sig_dict, dict):
+            raise TypeError(
+                f"{benchmark.__class__.__name__}.get_input_signature() must return InputSignature or dict, got {type(sig_dict)}"
+            )
+        
+        if not sig_dict.get("shapes") or not sig_dict.get("dtypes"):
+            raise ValueError("Input signature must include non-empty 'shapes' and 'dtypes'")
+        if "batch_size" not in sig_dict or "parameter_count" not in sig_dict:
+            raise ValueError("Input signature must include 'batch_size' and 'parameter_count'")
+        
+        shapes = {k: tuple(v) if isinstance(v, list) else tuple(v) for k, v in sig_dict["shapes"].items()}
+        dtypes = sig_dict["dtypes"]
+        precision = PrecisionFlags(
+            fp16=bool(sig_dict.get("fp16", False)),
+            bf16=bool(sig_dict.get("bf16", False)),
+            fp8=bool(sig_dict.get("fp8", False)),
+            tf32=bool(sig_dict.get("tf32", True)),
+        )
+        
+        signature = InputSignature(
+            shapes=shapes,
+            dtypes=dtypes,
+            batch_size=int(sig_dict["batch_size"]),
+            parameter_count=int(sig_dict["parameter_count"]),
+            precision_flags=precision,
+            world_size=sig_dict.get("world_size"),
+            ranks=sig_dict.get("ranks"),
+            shards=sig_dict.get("shards"),
+            pipeline_stages=sig_dict.get("pipeline_stages"),
+            per_rank_batch_size=sig_dict.get("per_rank_batch_size"),
+            collective_type=sig_dict.get("collective_type"),
+            num_streams=sig_dict.get("num_streams"),
+            graph_capture_enabled=sig_dict.get("graph_capture_enabled"),
+            pruning_enabled=sig_dict.get("pruning_enabled"),
+            sparsity_ratio=sig_dict.get("sparsity_ratio"),
+            quantization_mode=sig_dict.get("quantization_mode"),
+        )
+        errors = signature.validate(strict=True)
+        if errors:
+            raise ValueError(f"Invalid InputSignature: {errors[0]}")
+        return signature
     
     def _extract_workload_metrics(self, benchmark: Any) -> Dict[str, float]:
         """Extract workload metrics from a benchmark.
@@ -932,9 +905,10 @@ class VerifyRunner:
             )
         
         # Extract input signature
-        signature = self._extract_signature(baseline)
-        if signature is None:
-            return VerifyResult.fail("Baseline has no valid input signature")
+        try:
+            signature = self._extract_signature(baseline)
+        except Exception as exc:
+            return VerifyResult.fail(f"Baseline input signature invalid: {exc}")
         
         errors = signature.validate(strict=False)  # Allow simple parameter-based signatures
         if errors:
@@ -1008,9 +982,10 @@ class VerifyRunner:
             )
         
         # Extract input signature
-        signature = self._extract_signature(optimized)
-        if signature is None:
-            return VerifyResult.fail("Optimized has no valid input signature")
+        try:
+            signature = self._extract_signature(optimized)
+        except Exception as exc:
+            return VerifyResult.fail(f"Optimized input signature invalid: {exc}")
         
         sig_hash = signature.hash()
         
@@ -1032,7 +1007,15 @@ class VerifyRunner:
             # Get tolerance - config override takes precedence, then benchmark, then dtype default
             tolerance = config.tolerance_override
             if tolerance is None:
-                tolerance = get_output_tolerance(optimized)
+                try:
+                    tolerance = get_output_tolerance(optimized)
+                except Exception as exc:
+                    return VerifyResult(
+                        passed=False,
+                        reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE.value,
+                        details={"error": str(exc)},
+                        timestamp=datetime.now(),
+                    )
             
             # Compare outputs
             comparison = self._compare_outputs(
@@ -1153,22 +1136,38 @@ class VerifyRunner:
         # Step 0.5: Check for input-output aliasing (pre-filled results detection)
         if not config.skip_output_validation:
             # Check baseline
-            baseline_no_alias, baseline_alias_error = self._check_input_output_aliasing(baseline)
-            if not baseline_no_alias:
+            try:
+                baseline_no_alias, baseline_alias_error = self._check_input_output_aliasing(baseline)
+                if not baseline_no_alias:
+                    return VerifyResult(
+                        passed=False,
+                        reason=QuarantineReason.INPUT_OUTPUT_ALIASING,
+                        details={"aliasing_error": baseline_alias_error, "benchmark": "baseline"},
+                        timestamp=datetime.now(),
+                    )
+            except Exception as exc:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.INPUT_OUTPUT_ALIASING,
-                    details={"aliasing_error": baseline_alias_error, "benchmark": "baseline"},
+                    reason=QuarantineReason.MISSING_VERIFY_INPUTS,
+                    details={"error": str(exc), "benchmark": "baseline"},
                     timestamp=datetime.now(),
                 )
             
             # Check optimized
-            optimized_no_alias, optimized_alias_error = self._check_input_output_aliasing(optimized)
-            if not optimized_no_alias:
+            try:
+                optimized_no_alias, optimized_alias_error = self._check_input_output_aliasing(optimized)
+                if not optimized_no_alias:
+                    return VerifyResult(
+                        passed=False,
+                        reason=QuarantineReason.INPUT_OUTPUT_ALIASING,
+                        details={"aliasing_error": optimized_alias_error, "benchmark": "optimized"},
+                        timestamp=datetime.now(),
+                    )
+            except Exception as exc:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.INPUT_OUTPUT_ALIASING,
-                    details={"aliasing_error": optimized_alias_error, "benchmark": "optimized"},
+                    reason=QuarantineReason.MISSING_VERIFY_INPUTS,
+                    details={"error": str(exc), "benchmark": "optimized"},
                     timestamp=datetime.now(),
                 )
         
@@ -1316,4 +1315,3 @@ class VerifyRunner:
             replay_times_ms,
             memory_during_capture_mb,
         )
-

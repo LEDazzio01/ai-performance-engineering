@@ -43,7 +43,6 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._prio_low, self._prio_high = get_stream_priorities()
         self.prefill_streams = [torch.cuda.Stream(priority=self._prio_low) for _ in range(self.cfg.max_in_flight)]
         self.decode_stream = torch.cuda.Stream(priority=self._prio_high)
-        self.jitter_exemption_reason = "Native TMA prefill/decode: fixed dimensions"
         self.register_workload_metadata(tokens_per_iteration=float(self.batch * self.seq_len))
         self.decode_graph = torch.cuda.CUDAGraph()
         self.graph_q = None
@@ -52,6 +51,7 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
         self.graph_out = None
         self._tma_ext = None
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
+        self.output: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         self.inputs = build_inputs(self.device)
@@ -121,10 +121,13 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
             for evt in pref_events:
                 evt.synchronize()
         self._synchronize()
+        if self.inputs is not None:
+            self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
         self.inputs = None
+        self.output = None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -151,11 +154,28 @@ class OptimizedNativeTmaPrefillDecodeBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len}
+        return {
+            "batch": self.batch,
+            "seq_len": self.seq_len,
+            "head_dim": self.head_dim,
+            "prefill_chunks": self.prefill_chunks,
+            "prefill_chunk_elems": self.prefill_chunk_elems,
+            "max_in_flight": self.cfg.max_in_flight,
+            "shapes": {
+                "prefill_src": (self.prefill_chunks, self.prefill_chunk_elems),
+                "prefill_dst": (self.prefill_chunks, self.prefill_chunk_elems),
+                "q": (self.batch, self.seq_len, self.head_dim),
+                "k": (self.batch, self.seq_len, self.head_dim),
+                "v": (self.batch, self.seq_len, self.head_dim),
+                "out": (self.batch, self.seq_len, self.head_dim),
+            },
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

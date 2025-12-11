@@ -31,10 +31,12 @@ class BaselinePersistentDecodeBenchmark(BaseBenchmark):
         batch, seq_len, _ = resolve_shapes()
         self.seq_len = seq_len
         self.batch = batch
+        self.head_dim = None
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
 
     def setup(self) -> None:
         self.inputs = build_inputs(self.device)
+        self.head_dim = self.inputs.q.shape[-1]
         self._synchronize()
 
     def _decode_step(self, t: int) -> None:
@@ -100,10 +102,10 @@ class BaselinePersistentDecodeBenchmark(BaseBenchmark):
             "batch": self.batch,
             "seq_len": self.seq_len,
             "shapes": {
-                "q": (self.batch, self.seq_len, self.head_dim if hasattr(self.inputs, 'q') else 1),
-                "k": (self.batch, self.seq_len, self.head_dim if hasattr(self.inputs, 'k') else 1),
-                "v": (self.batch, self.seq_len, self.head_dim if hasattr(self.inputs, 'v') else 1),
-                "out": (self.batch, self.head_dim if hasattr(self.inputs, 'out') else self.seq_len),
+                "q": (self.batch, self.seq_len, self.head_dim or 1),
+                "k": (self.batch, self.seq_len, self.head_dim or 1),
+                "v": (self.batch, self.seq_len, self.head_dim or 1),
+                "out": (self.batch, self.head_dim or self.seq_len),
             },
         }
 

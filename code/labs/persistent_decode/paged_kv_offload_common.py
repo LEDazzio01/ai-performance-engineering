@@ -135,7 +135,7 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
 
         self.page_cursor: int = 0
         self._bytes_per_iteration: float = 0.0
-        self.jitter_exemption_reason = "Paged KV offload benchmark: fixed dimensions"
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     # -------------------- Setup helpers --------------------
@@ -286,7 +286,7 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
         v = self.hot_v[..., :slice_len, :]
         ctx = prefer_sdpa_backends() if prefer_sdpa_backends is not None else nullcontext()
         with ctx:
-            _ = F.scaled_dot_product_attention(q, k, v)
+            attn_out = F.scaled_dot_product_attention(q, k, v)
 
         # Queue prefetch for the next page if requested.
         if self.cfg.prefetch_next_page and self.prefetch_staging is not None:
@@ -297,6 +297,8 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
             self.prefetched_range = None
 
         self.page_cursor = (start + self.cfg.page_tokens) % self.cfg.max_seq_len
+        # Capture a slice of attention output for verification
+        self.output = attn_out[:, :, :1, : min(8, attn_out.shape[-1])].detach().float().clone()
 
     # -------------------- Teardown --------------------
 
@@ -317,6 +319,7 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
             except OSError:
                 pass
         self._memmap_path = None
+        self.output = None
         super().teardown()
 
     # -------------------- Harness config --------------------
@@ -354,11 +357,45 @@ class PagedKVOffloadBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch_size": self.cfg.batch_size, "max_seq_len": self.cfg.max_seq_len}
+        return {
+            "batch_size": self.cfg.batch_size,
+            "num_heads": self.cfg.num_heads,
+            "head_dim": self.cfg.head_dim,
+            "max_seq_len": self.cfg.max_seq_len,
+            "page_tokens": self.cfg.page_tokens,
+            "decode_tokens": self.cfg.decode_tokens,
+            "use_pinned_stage": self.cfg.use_pinned_stage,
+            "use_async_stream": self.cfg.use_async_stream,
+            "use_memmap": self.cfg.use_memmap,
+            "shapes": {
+                "host_cache": (
+                    2,
+                    self.cfg.batch_size,
+                    self.cfg.num_heads,
+                    self.cfg.max_seq_len,
+                    self.cfg.head_dim,
+                ),
+                "hot_k": (
+                    self.cfg.batch_size,
+                    self.cfg.num_heads,
+                    self.cfg.page_tokens,
+                    self.cfg.head_dim,
+                ),
+                "hot_v": (
+                    self.cfg.batch_size,
+                    self.cfg.num_heads,
+                    self.cfg.page_tokens,
+                    self.cfg.head_dim,
+                ),
+            },
+            "dtypes": {"hot_cache": str(self.runtime_dtype)},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

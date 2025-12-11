@@ -299,7 +299,7 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._history: dict[str, list[float]] = {}
         self._tma_ext: object | None = None
         self.register_workload_metadata(tokens_per_iteration=tokens_per_iteration())
-        self.jitter_exemption_reason = "Optimized TMA prefill/decode: fixed dimensions"
+        self.output: torch.Tensor | None = None
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("optimized_tma_prefill_decode")
@@ -413,6 +413,8 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
             self._history.setdefault("decode_ms", []).append(total_ms)
             self._history.setdefault("per_token_ms", []).append(total_ms / max(1, self.seq_len))
             self._history.setdefault("graph_path", []).append("full_graph")
+            if self.inputs is not None:
+                self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
             return
 
         with self._nvtx_range("prefill_shaped_low_pri"):
@@ -441,11 +443,14 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
         self._history.setdefault("decode_ms", []).append(decode_ms)
         self._history.setdefault("per_token_ms", []).append(decode_ms / max(1, self.seq_len))
         self._history.setdefault("graph_path", []).append("piecewise_graph")
+        if self.inputs is not None:
+            self.output = self.inputs.out[:1, : min(8, self.inputs.out.shape[1])].detach().float().clone()
 
     def teardown(self) -> None:
         torch.cuda.empty_cache()
         self.inputs = None
         self.full_graph = None
+        self.output = None
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -472,11 +477,29 @@ class OptimizedTmaPrefillDecodeBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "seq_len": self.seq_len, "graph_mode": str(self.graph_mode)}
+        return {
+            "batch": self.batch,
+            "seq_len": self.seq_len,
+            "head_dim": self.head_dim,
+            "graph_mode": str(self.graph_mode),
+            "prefill_chunks": self.prefill_chunks,
+            "prefill_chunk_elems": self.prefill_chunk_elems,
+            "max_in_flight": self.cfg.max_in_flight,
+            "shapes": {
+                "prefill_src": (self.prefill_chunks, self.prefill_chunk_elems),
+                "prefill_dst": (self.prefill_chunks, self.prefill_chunk_elems),
+                "q": (self.batch, self.seq_len, self.head_dim),
+                "k": (self.batch, self.seq_len, self.head_dim),
+                "v": (self.batch, self.seq_len, self.head_dim),
+                "out": (self.batch, self.seq_len, self.head_dim),
+            },
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

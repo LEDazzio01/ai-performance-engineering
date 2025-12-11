@@ -207,6 +207,7 @@ class BaselineAllToAllEnvBenchmark(PlanBenchmark):
             self.effective_bw,
             base_bw,
         )
+        self._finalize_output([self.step_ms, self.throughput, self.payload_gb, self.effective_bw])
 
     def print_summary(self) -> None:
         if self._summary:
@@ -229,7 +230,7 @@ def _parse_args() -> argparse.Namespace:
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
 
 

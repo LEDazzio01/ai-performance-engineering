@@ -159,6 +159,7 @@ class BaselineFlashAttention3Benchmark(BaseBenchmark):
             enable_tf32()
         
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         self.model = BaselineFlashAttention3(
             hidden_dim=self.hidden_dim,
@@ -187,7 +188,7 @@ class BaselineFlashAttention3Benchmark(BaseBenchmark):
         """Benchmark baseline attention."""
         with self._nvtx_range("baseline_fa3_attention"):
             with torch.no_grad():
-                _output = self.model(self.input, is_causal=self.use_causal)
+                self.output = self.model(self.input, is_causal=self.use_causal).detach()
         self._synchronize()
     
     def teardown(self) -> None:

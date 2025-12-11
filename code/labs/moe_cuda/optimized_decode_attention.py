@@ -42,13 +42,13 @@ class OptimizedDecodeAttentionBenchmark(BaseBenchmark):
         self.q: Optional[torch.Tensor] = None
         self.k: Optional[torch.Tensor] = None
         self.v: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         tokens = self.batch * self.kv_seq
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch),
             tokens_per_iteration=float(tokens),
         )
         self._history: Dict[str, List[float]] = {"latency_ms": []}
-        self.jitter_exemption_reason = "Decode attention benchmark: fixed dimensions"
 
     def setup(self) -> None:
         if not torch.cuda.is_available():
@@ -84,6 +84,7 @@ class OptimizedDecodeAttentionBenchmark(BaseBenchmark):
         )
         self.v = torch.randn_like(self.k)
         torch.cuda.synchronize(self.device)
+        self.output = None
 
     def benchmark_fn(self) -> Dict[str, List[float]]:
         if any(t is None for t in (self.module, self.q, self.k, self.v)):
@@ -93,9 +94,10 @@ class OptimizedDecodeAttentionBenchmark(BaseBenchmark):
         with nvtx_range("moe_cuda_decode_optimized", enable=enable_nvtx):
             with torch.inference_mode():
                 start = self._record_start()
-                _ = self.module(self.q, self.k, self.v)
+                attn_out, _ = self.module(self.q, self.k, self.v)
                 torch.cuda.synchronize(self.device)
                 self._history["latency_ms"].append(self._record_stop(start))
+                self.output = attn_out.detach().float().clone()
         return {"decode_ms": self._history["latency_ms"]}
 
     def teardown(self) -> None:
@@ -103,6 +105,7 @@ class OptimizedDecodeAttentionBenchmark(BaseBenchmark):
         self.q = None
         self.k = None
         self.v = None
+        self.output = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
@@ -125,11 +128,25 @@ class OptimizedDecodeAttentionBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"batch": self.batch, "kv_seq": self.kv_seq}
+        return {
+            "batch": self.batch,
+            "kv_seq": self.kv_seq,
+            "num_heads": self.num_heads,
+            "head_dim": self.head_dim,
+            "shapes": {
+                "q": (self.batch, 1, self.num_heads * self.head_dim),
+                "k": (self.batch, self.kv_seq, self.num_heads * self.head_dim),
+                "v": (self.batch, self.kv_seq, self.num_heads * self.head_dim),
+                "out": (self.batch, 1, self.num_heads * self.head_dim),
+            },
+            "dtypes": {"q": "bfloat16"},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

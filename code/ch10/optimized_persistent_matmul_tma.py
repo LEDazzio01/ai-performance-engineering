@@ -202,15 +202,15 @@ def run_optimized(M=1024, N=1024, K=1024):
 class PersistentMatmulTMABenchmark(BaseBenchmark):
     """Benchmark harness wrapper for TMA persistent matmul."""
 
-    def __init__(self):
+    def __init__(self, M: int = 1024, N: int = 1024, K: int = 1024):
         super().__init__()
         self.a = None
         self.b = None
         self.c = None
-        # Larger matrices to show TMA benefits over simple load/store
-        self.M = 4096
-        self.N = 4096
-        self.K = 4096
+        # Match baseline dimensions for fair verification
+        self.M = M
+        self.N = N
+        self.K = K
         self._last = 0.0
         
         self._workload = WorkloadMetadata(
@@ -225,6 +225,7 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize matrices and warmup TMA kernel."""
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         
         # Initialize CUDA context first - CRITICAL: must happen before Triton allocator
         torch.cuda.init()
@@ -300,7 +301,7 @@ class PersistentMatmulTMABenchmark(BaseBenchmark):
         """Return output tensor for verification."""
         if self.c is None:
             raise RuntimeError("Output not available - run benchmark first")
-        return self.c.float()
+        return self.c.detach().float()
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""

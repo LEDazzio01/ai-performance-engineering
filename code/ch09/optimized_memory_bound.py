@@ -29,12 +29,13 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
         super().__init__()
         self.data = None
         self.N = 16_777_216  # Same size as baseline (~64 MB)
+        self.repeats = 64
         self.step_fn = None
         self._compiled = False
         # Memory-bound benchmark - fixed dimensions for roofline analysis
         self._workload = WorkloadMetadata(
-            requests_per_iteration=1.0,
-            tokens_per_iteration=float(self.N),
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
         )
     
     def setup(self) -> None:
@@ -45,10 +46,11 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
         self.data = torch.randn(self.N, dtype=torch.float32, device=self.device)
 
         def fused_step(x: torch.Tensor) -> torch.Tensor:
-            y = torch.add(x, 1.0)
-            y = torch.addcmul(y, x, x, value=0.5)
-            return y
+            # Match baseline math: t = t * 1.0001 + 0.0001
+            return x * 1.0001 + 0.0001
 
+        # Avoid torch.compile here because Inductor cudagraph capture can clash
+        # with repeated in-place style updates across iterations.
         self.step_fn = fused_step
         self._compiled = False
         self._synchronize()
@@ -61,8 +63,10 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
         """Benchmark: Fused operations (high AI)."""
         assert self.data is not None and self.step_fn is not None
         with self._nvtx_range("memory_bound"):
-            # Fused in-place style update that never leaves GPU memory.
-            self.data = self.step_fn(self.data)
+            t = self.data
+            for _ in range(self.repeats):
+                t = self.step_fn(t)
+            self.output = t
         self._synchronize()
 
     
@@ -102,13 +106,13 @@ class OptimizedMemoryBoundBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
-        return {"N": self.N, "repeats": 64}  # Match baseline's repeats for signature
+        return {"N": self.N, "repeats": self.repeats}  # Match baseline's repeats for signature
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
         if self.data is None:
             raise RuntimeError("Output not available - run benchmark first")
-        return self.data
+        return self.output if self.output is not None else self.data
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

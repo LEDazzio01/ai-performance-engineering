@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+import torch
+
 repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
@@ -85,12 +87,12 @@ class BaselineRouterBenchmark(BaseBenchmark):
         self.num_gpus = 8
         self.num_requests = 1000
         self._last = 0.0
+        self.output: Optional[torch.Tensor] = None
         
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.num_requests),
             tokens_per_iteration=float(self.num_requests * 100),  # ~100 tokens/request
         )
-        self.jitter_exemption_reason = "Router benchmark: fixed configuration"
 
     def setup(self) -> None:
         """Setup: Initialize baseline round-robin router."""
@@ -118,10 +120,14 @@ class BaselineRouterBenchmark(BaseBenchmark):
                 self.router.complete(f"req_{i-10}")
         
         self._last = float(routed)
+        self.output = torch.tensor([[self._last, float(self.num_gpus)]], dtype=torch.float32)
 
     def teardown(self) -> None:
         """Teardown: Clean up resources."""
         self.router = None
+        self.output = None
+        self.metrics = None
+        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(iterations=50, warmup=10)
@@ -142,11 +148,17 @@ class BaselineRouterBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"num_gpus": self.num_gpus, "num_requests": self.num_requests}
+        return {
+            "num_gpus": self.num_gpus,
+            "num_requests": self.num_requests,
+            "shapes": {"metrics": (1, 2)},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

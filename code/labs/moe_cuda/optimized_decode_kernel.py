@@ -42,7 +42,6 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
-        self.jitter_exemption_reason = "Decode kernel benchmark: fixed dimensions"
 
     def setup(self) -> None:
         import gc
@@ -151,7 +150,15 @@ class OptimizedDecodeKernelBenchmark(BaseBenchmark):
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"rows": self.rows, "cols": self.cols}
+        return {
+            "rows": self.rows,
+            "cols": self.cols,
+            "shapes": {
+                "input": (self.rows, self.cols),
+                "output": (self.rows, self.cols),
+            },
+            "dtypes": {"input": "float32"},
+        }
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

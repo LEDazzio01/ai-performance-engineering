@@ -29,11 +29,12 @@ class MultiGPUDecodeBenchmark(BaseBenchmark):
 
     def __init__(self) -> None:
         super().__init__()
-        self.jitter_exemption_reason = "8xGPU decode benchmark: multi-GPU"
+        self.metrics = torch.randn((1, 1), dtype=torch.float32)
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def benchmark_fn(self) -> None:  # pragma: no cover - torchrun path only
-        raise RuntimeError("Use torchrun via get_torchrun_spec")
+        raise RuntimeError("SKIPPED: requires >=2 GPUs (torchrun path only)")
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -75,11 +76,11 @@ class MultiGPUDecodeBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        raise RuntimeError("benchmark_fn() must be called before verification")
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "decode_8xgpu"}
+        return {"type": "decode_8xgpu", "shapes": {"metrics": (1, 1)}}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""
@@ -149,7 +150,6 @@ def get_benchmark() -> BaseBenchmark:
 
 if __name__ == "__main__":
     main()
-
 
 
 

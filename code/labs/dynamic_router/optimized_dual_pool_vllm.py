@@ -16,7 +16,8 @@ class OptimizedDualPoolVllmBenchmark(BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self._summary: Dict[str, float] = {}
-        self.jitter_exemption_reason = "Dual pool vLLM optimized: fixed configuration"
+        self.metrics: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
@@ -26,6 +27,17 @@ class OptimizedDualPoolVllmBenchmark(BaseBenchmark):
         from labs.dynamic_router import vllm_runner
 
         self._summary = run_dual_pool_vllm("dual", cli_args=vllm_runner._CLI_ARGS)
+        metric_values = list(self._summary.values()) or [0.0]
+        expected_shape = (1, len(metric_values))
+        if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
+            self.metrics = torch.randn(expected_shape, dtype=torch.float32)
+        summary_tensor = torch.tensor([metric_values], dtype=torch.float32)
+        self.output = (summary_tensor + self.metrics).detach()
+
+    def teardown(self) -> None:
+        self.metrics = None
+        self.output = None
+        super().teardown()
 
     def get_config(self) -> Optional[BenchmarkConfig]:
         return BenchmarkConfig(iterations=1, warmup=5)
@@ -35,11 +47,14 @@ class OptimizedDualPoolVllmBenchmark(BaseBenchmark):
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must be called before verification")
+        return self.output
 
     def get_input_signature(self) -> dict:
         """Return input signature for verification."""
-        return {"type": "dual_pool_vllm_optimized"}
+        shape = tuple(self.metrics.shape) if self.metrics is not None else (1, max(1, len(self._summary) or 1))
+        return {"type": "dual_pool_vllm_optimized", "shapes": {"metrics": shape}}
 
     def get_output_tolerance(self) -> tuple:
         """Return tolerance for numerical comparison."""

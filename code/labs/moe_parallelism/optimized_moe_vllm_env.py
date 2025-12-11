@@ -232,6 +232,7 @@ class OptimizedMoeVllmEnvBenchmark(PlanBenchmark):
                 "gpu_util": self.gpu_util,
             },
         )
+        self._finalize_output([self.step_ms, self.throughput, self.payload_bytes, self.effective_bw])
 
     def _apply_target_overrides(self) -> None:
         if self._overrides_applied:
@@ -276,7 +277,7 @@ def _parse_args() -> argparse.Namespace:
 
     def get_verify_output(self) -> torch.Tensor:
         """Return output tensor for verification comparison."""
-        return torch.tensor([hash(str(id(self))) % (2**31)], dtype=torch.float32)
+        return super().get_verify_output()
 
 
 
