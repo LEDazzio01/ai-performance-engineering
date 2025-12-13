@@ -4,7 +4,7 @@ This directory contains both the MCP server implementation and a robust client l
 
 ## Files
 
-- `mcp_server.py` - MCP server with 73+ tools for AI performance engineering
+- `mcp_server.py` - MCP server with 79+ tools for AI performance engineering
 - `mcp_client.py` - Robust client implementation with proper message ID tracking
 - `tool_generator.py` - Tool generation utilities
 
@@ -106,7 +106,7 @@ client = RobustMCPClient(
          ↓
 ┌─────────────────┐
 │ PerformanceEngine│  ← Core functionality
-│  (73+ tools)    │
+│  (79+ tools)    │
 └─────────────────┘
 ```
 
@@ -121,5 +121,4 @@ The robust client handles this automatically. If using a custom client:
 4. Reset on reconnection
 
 See `docs/mcp_client_guide.md` for details.
-
 

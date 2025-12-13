@@ -3,7 +3,7 @@
 🚀 MCP Server for AI Systems Performance
 
 Exposes the unified PerformanceEngine as MCP tools for AI chat integration.
-Consolidated to ~73 tools (reduced from 86, preserving all unique functionality).
+Consolidated to ~79 tools (reduced from 86, preserving all unique functionality).
 
 Usage:
     # Start the MCP server
@@ -16,7 +16,7 @@ ARCHITECTURE:
     ┌─────────────────────────────────────────────────────────────────────────┐
     │  AI Chat Client                                                         │
     │  ↓                                                                      │
-    │  MCP Server (this file) - 73 tools (no functionality lost)              │
+    │  MCP Server (this file) - 79 tools (no functionality lost)              │
     │  ↓                                                                      │
     │  PerformanceEngine (core/engine.py) - 10 unified domains                │
     │  ├── gpu         : aisp_gpu_info, aisp_gpu_topology, aisp_gpu_power     │
@@ -248,6 +248,9 @@ _EXPECTATION_OVERRIDES: Dict[str, str] = {
     "aisp_hw_pcie": "Runs PCIe hardware benchmark; exercises host↔GPU transfers. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_cache": "Runs memory hierarchy hardware benchmark; exercises GPU cache. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
     "aisp_hw_tc": "Runs tensor core hardware benchmark; exercises GPU math units. Run aisp_status first; supports precheck_only/dry_run/timeout_seconds.",
+    "aisp_tools_compare_precision": "Runs aisp tools compare-precision; may run evaluation workloads and write reports depending on args.",
+    "aisp_tools_dump_hw": "Runs aisp tools dump-hw; can be slow unless --fast is set.",
+    "aisp_tools_probe_hw": "Runs aisp tools probe-hw; probes hardware capabilities and writes artifacts/hardware_capabilities.json.",
 }
 
 
@@ -555,6 +558,24 @@ def _run_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT) -> Di
             "duration_seconds": round(time.time() - started_at, 2),
             "error": str(exc),
         }
+
+
+def _run_tools_cli(
+    tool: str,
+    tool_args: Optional[List[str]] = None,
+    timeout_seconds: Optional[int] = _BENCH_CLI_TIMEOUT,
+) -> Dict[str, Any]:
+    """Invoke `aisp tools <tool> -- <args...>` and return stdout/stderr/exit code."""
+    args: List[str] = ["tools", tool]
+    if tool_args:
+        args.append("--")
+        args.extend(tool_args)
+    result = _run_cli(args, timeout=timeout_seconds)
+    if isinstance(result, dict):
+        returncode = int(result.get("returncode", 0) or 0)
+        if returncode != 0 and not result.get("error"):
+            result["error"] = result.get("stderr") or result.get("stdout") or f"aisp tools {tool} failed with code {returncode}"
+    return result
 
 
 def _run_bench_cli(args: List[str], timeout: Optional[int] = _BENCH_CLI_TIMEOUT) -> Dict[str, Any]:
@@ -3997,6 +4018,182 @@ def tool_hf(params: Dict[str, Any]) -> Dict[str, Any]:
         return attach_context_if_requested(result, include_context, context_level)
     except Exception as e:
         return make_error(f"HuggingFace operation failed: {e}", include_context, context_level)
+
+
+# =============================================================================
+# TOOLS (NON-BENCHMARK UTILITIES)
+# =============================================================================
+
+def _extract_tools_cli_args(
+    params: Dict[str, Any],
+    include_context: bool,
+    context_level: str,
+    *,
+    default_timeout_seconds: int,
+) -> Tuple[Optional[List[str]], Optional[int], Optional[Dict[str, Any]]]:
+    raw_args = params.get("args")
+    if raw_args is None:
+        tool_args: Optional[List[str]] = []
+    elif isinstance(raw_args, list) and all(isinstance(a, str) for a in raw_args):
+        tool_args = raw_args
+    else:
+        return None, None, make_error("args must be a list of strings", include_context, context_level)
+
+    timeout_param = params.get("timeout_seconds")
+    timeout_seconds: Optional[int]
+    if timeout_param is None:
+        timeout_seconds = default_timeout_seconds
+    else:
+        try:
+            timeout_seconds = int(timeout_param)
+        except Exception:
+            return None, None, make_error("timeout_seconds must be an integer", include_context, context_level)
+
+    return tool_args, timeout_seconds, None
+
+
+@register_tool(
+    "aisp_tools_kv_cache",
+    "Tags: tools, kv-cache, memory, sizing, utility. "
+    "Run the KV-cache size calculator (non-benchmark utility). "
+    "Forwards args to `aisp tools kv-cache -- <args...>`.",
+    {"type": "object", "properties": with_context_params({
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments forwarded to the tool script."},
+        "timeout_seconds": {"type": "integer", "description": "Timeout for the tool invocation.", "default": 60},
+    })},
+)
+def tool_tools_kv_cache(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    tool_args, timeout_seconds, err = _extract_tools_cli_args(
+        params,
+        include_context,
+        context_level,
+        default_timeout_seconds=60,
+    )
+    if err:
+        return err
+    result = _run_tools_cli("kv-cache", tool_args, timeout_seconds=timeout_seconds)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_tools_cost_per_token",
+    "Tags: tools, cost, power, throughput, utility. "
+    "Run the cost-per-token calculator (non-benchmark utility). "
+    "Forwards args to `aisp tools cost-per-token -- <args...>`.",
+    {"type": "object", "properties": with_context_params({
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments forwarded to the tool script."},
+        "timeout_seconds": {"type": "integer", "description": "Timeout for the tool invocation.", "default": 60},
+    })},
+)
+def tool_tools_cost_per_token(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    tool_args, timeout_seconds, err = _extract_tools_cli_args(
+        params,
+        include_context,
+        context_level,
+        default_timeout_seconds=60,
+    )
+    if err:
+        return err
+    result = _run_tools_cli("cost-per-token", tool_args, timeout_seconds=timeout_seconds)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_tools_compare_precision",
+    "Tags: tools, precision, accuracy, fp16, bf16, fp8, utility. "
+    "Run the precision/accuracy comparison tool (non-benchmark utility). "
+    "Forwards args to `aisp tools compare-precision -- <args...>`.",
+    {"type": "object", "properties": with_context_params({
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments forwarded to the tool script."},
+        "timeout_seconds": {"type": "integer", "description": "Timeout for the tool invocation.", "default": 300},
+    })},
+)
+def tool_tools_compare_precision(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    tool_args, timeout_seconds, err = _extract_tools_cli_args(
+        params,
+        include_context,
+        context_level,
+        default_timeout_seconds=300,
+    )
+    if err:
+        return err
+    result = _run_tools_cli("compare-precision", tool_args, timeout_seconds=timeout_seconds)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_tools_detect_cutlass",
+    "Tags: tools, cutlass, environment, discovery, utility. "
+    "Run CUTLASS environment detection (non-benchmark utility). "
+    "Forwards args to `aisp tools detect-cutlass -- <args...>`.",
+    {"type": "object", "properties": with_context_params({
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments forwarded to the tool script."},
+        "timeout_seconds": {"type": "integer", "description": "Timeout for the tool invocation.", "default": 30},
+    })},
+)
+def tool_tools_detect_cutlass(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    tool_args, timeout_seconds, err = _extract_tools_cli_args(
+        params,
+        include_context,
+        context_level,
+        default_timeout_seconds=30,
+    )
+    if err:
+        return err
+    result = _run_tools_cli("detect-cutlass", tool_args, timeout_seconds=timeout_seconds)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_tools_dump_hw",
+    "Tags: tools, hardware, capabilities, report, utility. "
+    "Dump comprehensive hardware capability report (non-benchmark utility). "
+    "Forwards args to `aisp tools dump-hw -- <args...>`.",
+    {"type": "object", "properties": with_context_params({
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments forwarded to the tool script."},
+        "timeout_seconds": {"type": "integer", "description": "Timeout for the tool invocation.", "default": 300},
+    })},
+)
+def tool_tools_dump_hw(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    tool_args, timeout_seconds, err = _extract_tools_cli_args(
+        params,
+        include_context,
+        context_level,
+        default_timeout_seconds=300,
+    )
+    if err:
+        return err
+    result = _run_tools_cli("dump-hw", tool_args, timeout_seconds=timeout_seconds)
+    return attach_context_if_requested(result, include_context, context_level)
+
+
+@register_tool(
+    "aisp_tools_probe_hw",
+    "Tags: tools, hardware, capabilities, probe, cache, utility. "
+    "Probe GPU capabilities dynamically and cache results (non-benchmark utility). "
+    "Forwards args to `aisp tools probe-hw -- <args...>`.",
+    {"type": "object", "properties": with_context_params({
+        "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments forwarded to the tool script."},
+        "timeout_seconds": {"type": "integer", "description": "Timeout for the tool invocation.", "default": 600},
+    })},
+)
+def tool_tools_probe_hw(params: Dict[str, Any]) -> Dict[str, Any]:
+    include_context, context_level = extract_context_opts(params)
+    tool_args, timeout_seconds, err = _extract_tools_cli_args(
+        params,
+        include_context,
+        context_level,
+        default_timeout_seconds=600,
+    )
+    if err:
+        return err
+    result = _run_tools_cli("probe-hw", tool_args, timeout_seconds=timeout_seconds)
+    return attach_context_if_requested(result, include_context, context_level)
 
 
 # =============================================================================

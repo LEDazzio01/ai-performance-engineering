@@ -37,15 +37,6 @@ repo_root = Path(__file__).resolve().parents[2]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-UTILITY_SCRIPTS = {
-    "kv-cache": repo_root / "core" / "scripts" / "utilities" / "kv_cache_calc.py",
-    "cost-per-token": repo_root / "core" / "scripts" / "utilities" / "calculate_cost_per_token.py",
-    "compare-precision": repo_root / "core" / "scripts" / "utilities" / "compare_precision_accuracy.py",
-    "detect-cutlass": repo_root / "core" / "scripts" / "utilities" / "detect_cutlass_info.py",
-    "dump-hw": repo_root / "core" / "scripts" / "utilities" / "dump_hardware_capabilities.py",
-    "probe-hw": repo_root / "core" / "scripts" / "utilities" / "probe_hardware_capabilities.py",
-}
-
 from core.analysis.performance_analyzer import PerformanceAnalyzer, load_benchmark_data as load_benchmark_results
 from core.plugins.loader import load_plugin_apps
 
@@ -169,20 +160,6 @@ def _apply_suite_timeout(seconds: Optional[int]) -> None:
 
     signal.signal(signal.SIGALRM, _on_timeout)
     signal.alarm(seconds)
-
-
-def _run_utility(tool: str, tool_args: Optional[List[str]]) -> int:
-    """Execute a utility script with passthrough arguments."""
-    script_path = UTILITY_SCRIPTS.get(tool)
-    if script_path is None:
-        raise ValueError(f"Unknown utility '{tool}'.")
-    if not script_path.exists():
-        raise FileNotFoundError(f"Utility script not found at {script_path}")
-
-    extra_args = tool_args or []
-    cmd = [sys.executable, str(script_path), *extra_args]
-    result = subprocess.run(cmd)
-    return result.returncode
 
 
 # Import architecture optimizations early
@@ -1770,31 +1747,6 @@ if TYPER_AVAILABLE:
     def _print_scaling(data):
         for r in data.get('scaling_recommendations', [])[:3]:
             typer.echo(f"\n{r['factor']}: {r['recommendation']}")
-
-    @app.command("utils")
-    def utils(
-        tool: str = Option(
-            ...,
-            "--tool",
-            "-u",
-            help=f"Utility to run. Available: {', '.join(sorted(UTILITY_SCRIPTS))}",
-        ),
-        tool_args: Optional[List[str]] = typer.Argument(
-            None,
-            help="Arguments forwarded to the utility (use -- to separate).",
-        ),
-    ):
-        """Run repository utilities (e.g., KV cache calculator) from one entrypoint."""
-        try:
-            exit_code = _run_utility(tool, tool_args)
-        except ValueError as exc:
-            typer.echo(str(exc))
-            raise typer.Exit(code=1)
-        except FileNotFoundError as exc:
-            typer.echo(str(exc))
-            raise typer.Exit(code=1)
-
-        raise typer.Exit(code=exit_code)
 
     @app.command("audit")
     def audit(

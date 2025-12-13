@@ -129,6 +129,14 @@ CATEGORY_TOOLS: Dict[str, List[str]] = {
         "aisp_cluster_slurm",
         "aisp_cost_estimate",
     ],
+    "tools": [
+        "aisp_tools_kv_cache",
+        "aisp_tools_cost_per_token",
+        "aisp_tools_compare_precision",
+        "aisp_tools_detect_cutlass",
+        "aisp_tools_dump_hw",
+        "aisp_tools_probe_hw",
+    ],
     "utility": [
         "aisp_status",
         "aisp_context_summary",
@@ -311,7 +319,7 @@ def test_expected_tool_registration_matches_catalog():
     expected = {case.name for case in ALL_TOOL_CASES}
     registered = set(mcp_server.TOOLS.keys())
     assert expected == registered, "Tool catalog must mirror MCP server registry"
-    assert len(expected) == 73
+    assert len(expected) == 79
 
 
 def test_tool_list_protocol_matches_registration(server: mcp_server.MCPServer):

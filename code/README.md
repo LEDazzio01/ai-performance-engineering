@@ -510,19 +510,19 @@ curl http://localhost:8100/api/analysis/tradeoffs | jq .
 
 ---
 
-## CLI Utilities
+## CLI Tools
 
 ```bash
 # KV cache sizing
-python cli/aisp.py bench utils --tool kv-cache -- \
+python cli/aisp.py tools kv-cache -- \
     --layers 80 --hidden 8192 --tokens 4096 --batch 8 --dtype fp8
 
 # Cost per token
-python cli/aisp.py bench utils --tool cost-per-token -- \
+python cli/aisp.py tools cost-per-token -- \
     --avg-power 800 --throughput 1500 --electricity-cost 0.16
 
 # Hardware probe
-python cli/aisp.py bench utils --tool probe-hw
+python cli/aisp.py tools probe-hw
 ```
 
 ---

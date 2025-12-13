@@ -5,9 +5,31 @@
 
 ## Achieve MAXIMUM speedup when benchmarking baseline_ versus optimized_ variants when possible
 - For any speedups <1.05x, we must improve in a natural manner utilizing hardware, software, and algorithmic speedups.  
-= Both the baseline and the optimized variants need to equivalent workloads.  Perhaps we need to increase the workloads to demonstrate the speedup?  
+- Both the baseline and the optimized variants need to equivalent workloads.  Perhaps we need to increase the workloads to demonstrate the speedup?  
 - Let's consider all options and find the best speedup 
 - Make sure we're staying with the intent of the example and within the context of the chapter (book/chXX.md).
+
+## Benchmarks vs Tools (CRITICAL)
+
+### Benchmarks (comparable baseline vs optimized)
+- `aisp bench run --targets ...` should only include targets that are explicitly intended to demonstrate an optimization outcome.
+  - Default: **performance** (speedup) with clear speedup potential.
+  - Rare: **memory** (reduced memory) when explicitly the goal.
+- Comparable benchmarks must use `baseline_*.py` + `optimized_*.py` naming and MUST be equivalent workloads (no hidden work reduction, no extra work in a variant hot path).
+
+### Memory-goal benchmarks
+- Memory-goal benchmarks are still comparable baseline vs optimized pairs, but are evaluated on memory savings (not speed).
+- Gate on `baseline_memory_mb / optimized_memory_mb >= 1.05` (speed may regress; do not add a speed gate).
+
+### Tools / methodology / analysis scripts (NOT comparable benchmarks)
+- If something is not meant to be compared as baseline vs optimized (e.g., roofline analysis, config sweeps, monitoring bundles, validation workflows), it MUST NOT use `baseline_*/optimized_*` naming.
+- Keep only the “full / sophisticated” version (no `_basic`, no smoke/minimal variants).
+- Keep the tool script at the chapter/lab level when book context references it, but decouple it from benchmark discovery and `bench run`.
+- Run these via `aisp tools <name> -- <args...>` by registering the script path in `core/tools/tools_commands.py` (`TOOLS` mapping).
+
+## When to Move Code into `core/` (Reuse Rule)
+- If shared logic has **2+ call sites** across chapters/labs, extract it into `core/` (prefer `core/analysis/*` or `core/utils/*`) and import it from chapter code.
+- If a chapter’s narrative/book references specific chapter-local code, keep a thin chapter wrapper that calls into `core/` rather than moving everything out of the chapter.
 
 ## Verification Mixins REQUIRED
 - Benchmarks must surface verification metadata via `VerificationPayloadMixin` + `_set_verification_payload()` inside `benchmark_fn()` (or equivalent path).

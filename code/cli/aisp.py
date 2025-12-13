@@ -1770,7 +1770,23 @@ if typer:
     except Exception:
         BENCH_APP = None
 
+    # Tools integration (core)
+    try:
+        from core.tools import tools_commands
+        TOOLS_APP = tools_commands.app if getattr(tools_commands, "TYPER_AVAILABLE", False) else None
+    except Exception:
+        TOOLS_APP = None
+
     plugin_apps = load_plugin_apps()
+
+    if TOOLS_APP:
+        app.add_typer(TOOLS_APP, name="tools", help="Run non-benchmark tools and utilities")
+    else:  # pragma: no cover - tools missing during docs builds
+
+        @app.command("tools", help="Run non-benchmark tools and utilities")
+        def tools_stub() -> None:
+            typer.echo("Tools CLI unavailable (typer not installed or import failed).")
+            raise typer.Exit(code=1)
 
     if BENCH_APP:
         app.add_typer(BENCH_APP, name="bench", help="Run and profile benchmarks")
