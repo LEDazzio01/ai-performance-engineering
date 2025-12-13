@@ -1,4 +1,4 @@
-"""Optimized FP8 per-channel quantization for better accuracy.
+"""FP8 per-channel quantization benchmark for better accuracy.
 
 Per-channel (per-output-channel) quantization uses a separate scale factor
 for each output channel, preserving more accuracy than per-tensor scaling.

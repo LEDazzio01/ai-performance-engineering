@@ -31,8 +31,8 @@ else:
     _IMPORT_ERROR = None
 
 from labs.dynamic_router.topology import detect_topology
-from labs.dynamic_router.optimized_router import Router, SequenceInfo
-from labs.dynamic_router.baseline_router import Request
+from labs.dynamic_router.router_policy import Router, SequenceInfo
+from labs.dynamic_router.router_round_robin import Request
 
 
 def _skip(reason: str) -> None:

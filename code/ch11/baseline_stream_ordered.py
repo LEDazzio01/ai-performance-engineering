@@ -1,134 +1,84 @@
-"""baseline_stream_ordered.py - Serial execution on default stream."""
+"""baseline_stream_ordered.py - cudaMalloc baseline for stream-ordered allocators.
+
+This benchmark measures the cost of repeated device allocations inside a
+multi-stream workload using the default (synchronizing) allocator path.
+"""
 
 from __future__ import annotations
 
 from typing import Optional
 
 import torch
-import torch.nn as nn
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.profiling.stream_ordered import run_standard_allocator_capture
 
 
 class BaselineStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Sequential work on the default stream (no overlap)."""
+    """Baseline: cudaMalloc / cudaFree inside a multi-stream loop."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.model: Optional[nn.Module] = None
-        self.host_requests: Optional[list[torch.Tensor]] = None
-        self.host_outputs: Optional[list[torch.Tensor]] = None
-        self.device_inputs: Optional[list[torch.Tensor]] = None
-        self.device_outputs: Optional[list[torch.Tensor]] = None
-        self.batch_size = 128
-        self.hidden_dim = 1024
-        self.num_streams = 4
-        self.num_requests = 32  # More requests to amortize overhead
-        # Stream benchmark - fixed dimensions for overlap measurement
+        # Keep buffers small so allocator overhead dominates.
+        self.elements = 1 << 12  # 4,096 floats (~16KB) per stream buffer
+        # Many alloc/free cycles to amplify stream-ordered allocator benefit.
+        self.inner_iterations = 200
+        self.output: Optional[torch.Tensor] = None
+        self._payload_inputs: Optional[dict] = None
+
+        bytes_per_buffer = float(self.elements * 4)
+        # Each inner-iteration: 3 streams, H2D + D2H per stream.
+        self.register_workload_metadata(
+            bytes_per_iteration=3.0 * float(self.inner_iterations) * bytes_per_buffer * 2.0,
+            requests_per_iteration=float(self.inner_iterations),
+        )
 
     def setup(self) -> None:
         torch.manual_seed(42)
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
-
-        self.model = nn.Sequential(
-            nn.Linear(self.hidden_dim, self.hidden_dim * 2),
-            nn.ReLU(),
-            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
-        ).to(self.device).half().eval()
-
-        self.host_requests = [
-            torch.randn(
-                self.batch_size, self.hidden_dim, device="cpu", dtype=torch.float16, pin_memory=True
-            )
-            for _ in range(self.num_requests)
-        ]
-        self.host_outputs = [
-            torch.empty_like(req, device="cpu", pin_memory=True) for req in self.host_requests
-        ]
-        self.device_inputs = [
-            torch.empty_like(req, device=self.device) for req in self.host_requests
-        ]
-        self.device_outputs = [
-            torch.empty_like(inp, device=self.device) for inp in self.device_inputs
-        ]
+        torch.cuda.manual_seed_all(42)
+        # Compile + warm the extension outside the timed region.
+        _ = run_standard_allocator_capture(1024, 1)
         self._synchronize()
-        tokens = float(self.batch_size * self.hidden_dim * self.num_requests)
-        self.register_workload_metadata(
-            tokens_per_iteration=tokens,
-            requests_per_iteration=float(self.num_requests),
-        )
 
     def benchmark_fn(self) -> None:
-        assert self.model is not None
-        assert self.host_requests is not None
-        assert self.host_outputs is not None
-        assert self.device_inputs is not None
-        assert self.device_outputs is not None
-
-        with self._nvtx_range("stream_ordered"):
-            with torch.no_grad():
-                for h_req, h_out, d_in, d_out in zip(
-                    self.host_requests, self.host_outputs, self.device_inputs, self.device_outputs
-                ):
-                    d_in.copy_(h_req, non_blocking=True)
-                    out = self.model(d_in)
-                    d_out.copy_(out)
-                    h_out.copy_(d_out, non_blocking=True)
-                    torch.cuda.synchronize()
+        with self._nvtx_range("stream_ordered_baseline"):
+            self.output = run_standard_allocator_capture(self.elements, self.inner_iterations)
         self._synchronize()
-        if self.host_outputs is None or self.host_requests is None:
+        if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
-        output = torch.cat(self.host_outputs, dim=0)
-        inputs = {"requests": torch.stack(self.host_requests)}
-        self.output = output
-        self._payload_inputs = inputs
+        self._payload_inputs = {
+            "elements": torch.tensor([self.elements], dtype=torch.int64),
+            "inner_iterations": torch.tensor([self.inner_iterations], dtype=torch.int64),
+        }
 
     def capture_verification_payload(self) -> None:
-        inputs = self._payload_inputs
+        if self.output is None or self._payload_inputs is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
-            inputs=inputs,
-            output=self.output.detach().float().clone(),
-            batch_size=int(self.num_requests),
-            precision_flags={
-                "fp16": True,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-            output_tolerance=(1e-2, 1e-2),
+            inputs=self._payload_inputs,
+            output=self.output,
+            batch_size=int(self.inner_iterations),
+            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
+            output_tolerance=(0.0, 0.0),
         )
-
-    def teardown(self) -> None:
-        self.model = None
-        self.host_requests = None
-        self.host_outputs = None
-        self.device_inputs = None
-        self.device_outputs = None
-        super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=80, warmup=8)
-
-    def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_stream_metrics
-        return compute_stream_metrics(
-            sequential_time_ms=getattr(self, '_sequential_ms', 10.0),
-            overlapped_time_ms=getattr(self, '_overlapped_ms', 5.0),
-            num_streams=getattr(self, 'num_streams', 4),
-            num_operations=getattr(self, 'num_operations', 4),
-        )
+        return BenchmarkConfig(iterations=10, warmup=5)
 
     def validate_result(self) -> Optional[str]:
-        if self.host_outputs is None:
-            return "Outputs not initialized"
-        for out in self.host_outputs:
-            if not torch.isfinite(out).all():
-                return "Output contains non-finite values"
+        if self.output is None:
+            return "Output not produced"
+        if not torch.isfinite(self.output).all():
+            return "Output contains non-finite values"
         return None
 
 
-def get_benchmark() -> BaselineStreamOrderedBenchmark:
+def get_benchmark() -> BaseBenchmark:
     return BaselineStreamOrderedBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)

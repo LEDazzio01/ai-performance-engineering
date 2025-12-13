@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
 import torch
@@ -13,12 +12,6 @@ try:
 except ImportError:
     pass
 
-try:
-    from core.utils.logger import get_logger
-    LOGGER = get_logger(__name__)
-except ImportError:  # pragma: no cover
-    LOGGER = None
-
 from ch20.inductor_guard import (
     disable_inductor_cudagraph_features,
     restore_inductor_cudagraph_features,
@@ -27,7 +20,7 @@ from ch20.inductor_guard import (
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import is_torch_compile_supported_on_device
+from core.utils.compile_utils import compile_model
 
 
 class SimplePipeline(nn.Module):
@@ -52,7 +45,7 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
         super().__init__()
         self.model: Optional[nn.Module] = None
         self.inputs: Optional[list[torch.Tensor]] = None
-        self.outputs: Optional[list[torch.Tensor]] = None
+        self.stacked_inputs: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self.batch_size = 32
         self.hidden_dim = 1024
@@ -83,44 +76,25 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
                 torch.backends.cudnn.benchmark = True
                 torch.backends.cudnn.deterministic = False
             torch.manual_seed(42)
+            torch.cuda.manual_seed_all(42)
             
-            model = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device).half().eval()
-            compile_supported, compile_reason = is_torch_compile_supported_on_device()
-            disable_compile = bool(os.environ.get("PYTEST_CURRENT_TEST"))
-            if compile_supported and not disable_compile:
-                try:
-                    compiled_model = torch.compile(model, mode="reduce-overhead")
-                    self.model = compiled_model
-                    self._used_compiled_model = True
-                except Exception as exc:
-                    self._compile_error = f"{exc.__class__.__name__}: {exc}"
-                    self._used_compiled_model = False
-                    self.model = model
-                    if LOGGER is not None:
-                        LOGGER.warning(
-                            "torch.compile failed for %s; falling back to eager.",
-                            self.__class__.__name__,
-                            exc_info=exc,
-                        )
-            else:
-                reason = compile_reason or "torch.compile unsupported on this GPU"
-                if disable_compile:
-                    reason = "torch.compile disabled under pytest"
-                self._compile_error = reason
-                self._used_compiled_model = False
-                self.model = model
+            # Keep workload equivalent to baseline (FP32), optimize by compiling
+            # and running the pipeline as a single larger batch.
+            eager = SimplePipeline(hidden_dim=self.hidden_dim).to(self.device, dtype=torch.float32).eval()
+            self.model = compile_model(eager, mode="max-autotune")
+            self._used_compiled_model = True
 
-            test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
+            test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
             for _ in range(3):
                 with torch.no_grad():
                     _ = self.model(test_input)
             torch.cuda.synchronize()
             
             self.inputs = [
-                torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16).contiguous()
+                torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32).contiguous()
                 for _ in range(self.num_batches)
             ]
-            self.outputs = []
+            self.stacked_inputs = torch.stack(self.inputs, dim=0)
             self.output = None
             
             for inp in self.inputs[:5]:
@@ -133,28 +107,23 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
             raise
     
     def benchmark_fn(self) -> None:
-        assert self.model is not None and self.inputs is not None
+        assert self.model is not None and self.stacked_inputs is not None
         with self._nvtx_range("optimized_end_to_end_bandwidth"):
-            torch.cuda.reset_peak_memory_stats()
-            self.outputs = []
             with torch.no_grad():
-                for inp in self.inputs:
-                    out = self.model(inp)
-                    self.outputs.append(out)
-            if self.outputs:
-                self.output = torch.stack(self.outputs)
-            else:
-                self.output = None
+                flat = self.stacked_inputs.view(-1, self.stacked_inputs.shape[-1])
+                out = self.model(flat)
+                self.output = out.view(
+                    self.stacked_inputs.shape[0], self.stacked_inputs.shape[1], self.stacked_inputs.shape[2]
+                )
             self._synchronize()
 
     def capture_verification_payload(self) -> None:
-        if self.model is None or self.inputs is None or self.output is None:
+        if self.model is None or self.stacked_inputs is None or self.output is None:
             raise RuntimeError("capture_verification_payload() requires completed benchmark run")
-        stacked_inputs = torch.stack(self.inputs)
         self._set_verification_payload(
-            inputs={"inputs": stacked_inputs},
-            output=self.output,
-            batch_size=int(stacked_inputs.shape[0]),
+            inputs={"inputs": self.stacked_inputs.detach()},
+            output=self.output.detach().clone(),
+            batch_size=int(self.stacked_inputs.shape[0]),
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             output_tolerance=(0.1, 1.0),
         )
@@ -162,7 +131,7 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
     def teardown(self) -> None:
         self.model = None
         self.inputs = None
-        self.outputs = None
+        self.stacked_inputs = None
         torch.cuda.empty_cache()
         restore_inductor_cudagraph_features(self._inductor_cfg_state)
         self._inductor_cfg_state = None
@@ -173,7 +142,6 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
             warmup=10,
             enable_memory_tracking=True,
             enable_profiling=False,
-            use_subprocess=False,
         )
     
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
@@ -192,8 +160,10 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
     def validate_result(self) -> Optional[str]:
         if self.model is None:
             return "Model not initialized"
-        if self.outputs is None or len(self.outputs) != self.num_batches:
-            return f"Expected {self.num_batches} outputs, got {len(self.outputs) if self.outputs else 0}"
+        if self.output is None:
+            return "Output not initialized"
+        if tuple(self.output.shape) != (self.num_batches, self.batch_size, self.hidden_dim):
+            return f"Output shape mismatch: expected {(self.num_batches, self.batch_size, self.hidden_dim)}, got {tuple(self.output.shape)}"
         return None
 
     def get_verify_output(self) -> torch.Tensor:

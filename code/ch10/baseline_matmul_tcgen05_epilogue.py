@@ -7,8 +7,10 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
+from ch10.matmul_extension_tcgen05 import load_matmul_tcgen05_module
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
+from core.benchmark.tcgen05_requirements import check_tcgen05_support
 
 
 class BaselineMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -24,35 +26,51 @@ class BaselineMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBench
 
     def __init__(self) -> None:
         super().__init__()
+        available, reason = check_tcgen05_support(
+            loader=None,
+            module_name="ch10 matmul tcgen05 kernels",
+        )
+        self._tcgen05_available = available
+        self._skip_reason = reason or "SKIPPED: tcgen05 matmul unavailable"
+        self.module = None
         self.device = torch.device("cuda")
-        # Match other matmul benchmarks (baseline_matmul.py uses n=8192)
-        self.n = 8192
-        self.size = self.n
+        # Choose dimensions where epilogue fusion is measurable:
+        # keep K minimal (tcgen05 requires K%64==0) and use moderate M/N so
+        # kernel-launch + extra memory passes in the baseline are visible.
+        self.M = 2048
+        self.N = 2048
+        self.K = 64
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
         self.bias: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.register_workload_metadata(bytes_per_iteration=float(self.n * self.n * 2 * 4))
+        self.register_workload_metadata(bytes_per_iteration=float((self.M * self.K + self.N * self.K) * 2))
 
     def setup(self) -> None:
+        if not self._tcgen05_available:
+            raise RuntimeError(self._skip_reason)
+        if self.module is None:
+            self.module = load_matmul_tcgen05_module()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        dtype = torch.float16
-        self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
-        self.B = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
-        self.bias = torch.randn(self.size, device=self.device, dtype=dtype)
+        self.A = torch.randn(self.M, self.K, device=self.device, dtype=torch.float16)
+        self.B = torch.randn(self.N, self.K, device=self.device, dtype=torch.float16)
+        # Match the tcgen05 fused epilogue: bias is promoted to FP32 before activation.
+        self.bias = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        assert self.A is not None and self.B is not None and self.bias is not None
+        if not self._tcgen05_available:
+            raise RuntimeError(self._skip_reason)
+        assert self.A is not None and self.B is not None and self.bias is not None and self.module is not None
         with self._nvtx_range("baseline_matmul_tcgen05_bias_silu"):
             with torch.no_grad():
-                # Step 1: Matrix multiplication (uses cuBLAS)
-                C = torch.matmul(self.A, self.B)
+                # Use the same tcgen05 GEMM kernel as optimized; keep bias+SiLU separate.
+                C = self.module.matmul_tcgen05(self.A, self.B).float()
                 # Step 2: Add bias (separate kernel launch)
                 C = C + self.bias
                 # Step 3: SiLU activation (separate kernel launch)
-                self.output = F.silu(C)
+                self.output = F.silu(C).to(dtype=torch.float16)
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
@@ -61,14 +79,14 @@ class BaselineMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBench
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B, "bias": self.bias},
             output=self.output.detach().float().clone(),
-            batch_size=self.size,
+            batch_size=self.M,
             precision_flags={
                 "fp16": True,
                 "bf16": False,
                 "fp8": False,
                 "tf32": False,
             },
-            output_tolerance=(0.5, 5.0),
+            output_tolerance=(1e-2, 1e-2),
         )
 
     def teardown(self) -> None:

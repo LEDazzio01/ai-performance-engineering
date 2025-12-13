@@ -1,116 +1,157 @@
-"""Baseline benchmark for Chapter 13 warp specialization training example.
+"""baseline_warp_specialization_training.py - Eager fusion baseline.
 
-Standard PyTorch ops without warp specialization for comparison against Triton kernels."""
+Baseline: a "training-style epilogue" chain of elementwise ops executed in
+eager mode. Each op materializes intermediates, stressing bandwidth and
+kernel-launch overhead.
+
+Optimized variant uses torch.compile to fuse the chain into fewer kernels,
+reducing memory traffic and enabling warp-specialized schedules in Inductor.
+"""
 
 from __future__ import annotations
 
 from typing import Optional
 
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
-class BaselineWarpSpecializationTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Baseline training workload without warp specialization."""
+def _epilogue_chain(
+    x: torch.Tensor,
+    scale0: torch.Tensor,
+    bias0: torch.Tensor,
+    scale1: torch.Tensor,
+    bias1: torch.Tensor,
+    scale2: torch.Tensor,
+    bias2: torch.Tensor,
+) -> torch.Tensor:
+    y = x
+    y = y * scale0 + bias0
+    y = F.silu(y)
+    y = y * scale1 + bias1
+    y = F.gelu(y)
+    y = y * 0.5
+    y = torch.sigmoid(y) * y
+    y = y + bias2
+    y = y * scale2
+    y = torch.relu(y)
+    y = F.silu(y)
+    y = y * 1.1 + 0.1
+    y = F.gelu(y)
+    return y
 
-    def __init__(self):
+
+class BaselineWarpSpecializationTrainingBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Baseline: eager elementwise chain (many kernels, many intermediates)."""
+
+    def __init__(self) -> None:
         super().__init__()
-        self.model: Optional[nn.Module] = None
-        self.input: Optional[torch.Tensor] = None
-        self.weight: Optional[torch.Tensor] = None
-        self.batch = 512
-        self.width = 2048
-        tokens = self.batch * self.width
+        self.x: Optional[torch.Tensor] = None
+        self.scale0: Optional[torch.Tensor] = None
+        self.bias0: Optional[torch.Tensor] = None
+        self.scale1: Optional[torch.Tensor] = None
+        self.bias1: Optional[torch.Tensor] = None
+        self.scale2: Optional[torch.Tensor] = None
+        self.bias2: Optional[torch.Tensor] = None
+        self.output: Optional[torch.Tensor] = None
+
+        self.rows = 4096
+        self.cols = 4096
+        self.dtype = torch.bfloat16
+        tokens = self.rows * self.cols
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
-        self.output = None
         self.register_workload_metadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(tokens),
         )
 
     def setup(self) -> None:
-        """Allocate tensors and build a simple MLP to mimic training compute."""
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self.model = nn.Sequential(
-            nn.Linear(self.width, 4096),
-            nn.GELU(),
-            nn.Linear(4096, self.width),
-        ).to(self.device).train()
-
-        self.input = torch.randn(self.batch, self.width, device=self.device)
-        self.weight = torch.randn_like(self.input)
+        self.x = torch.randn(self.rows, self.cols, device=self.device, dtype=self.dtype)
+        # Keep parameters small (broadcast-friendly) but resident on GPU.
+        self.scale0 = torch.tensor(0.9, device=self.device, dtype=self.dtype)
+        self.bias0 = torch.tensor(0.1, device=self.device, dtype=self.dtype)
+        self.scale1 = torch.tensor(1.05, device=self.device, dtype=self.dtype)
+        self.bias1 = torch.tensor(-0.05, device=self.device, dtype=self.dtype)
+        self.scale2 = torch.tensor(0.97, device=self.device, dtype=self.dtype)
+        self.bias2 = torch.tensor(0.2, device=self.device, dtype=self.dtype)
+        self.output = None
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        """Run the baseline forward pass (no warp specialization)."""
-        if self.input is None or self.weight is None or self.model is None:
+        if any(v is None for v in (self.x, self.scale0, self.bias0, self.scale1, self.bias1, self.scale2, self.bias2)):
             raise RuntimeError("Benchmark not configured")
-
         with self._nvtx_range("baseline_warp_specialization_training"):
             with torch.no_grad():
-                fused = torch.relu(self.input * self.weight)
-                self.output = self.model(fused).detach().clone()
+                self.output = _epilogue_chain(
+                    self.x,
+                    self.scale0,
+                    self.bias0,
+                    self.scale1,
+                    self.bias1,
+                    self.scale2,
+                    self.bias2,
+                )
         self._synchronize()
-        if self.input is None or self.weight is None or self.output is None:
+        if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
+        if self.x is None or self.output is None:
+            raise RuntimeError("capture_verification_payload() requires a completed benchmark run")
         self._set_verification_payload(
-            inputs={"input": self.input, "weight": self.weight},
+            inputs={"x": self.x},
             output=self.output.detach().float().clone(),
-            batch_size=self.input.shape[0],
+            batch_size=int(self.rows),
             precision_flags={
                 "fp16": False,
-                "bf16": False,
+                "bf16": True,
                 "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+                "tf32": False,
             },
-            output_tolerance=(0.1, 1.0),
+            # BF16 elementwise chains can diverge slightly after fusion.
+            output_tolerance=(5e-2, 5e-2),
         )
 
     def teardown(self) -> None:
-        """Release GPU resources."""
-        self.model = None
-        self.input = None
-        self.weight = None
+        self.x = None
+        self.scale0 = None
+        self.bias0 = None
+        self.scale1 = None
+        self.bias1 = None
+        self.scale2 = None
+        self.bias2 = None
+        self.output = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        """Return a standard benchmark configuration."""
         return BenchmarkConfig(
             iterations=50,
-            warmup=5,
+            warmup=10,
             use_subprocess=True,
         )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload
 
-    def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_precision_metrics
-        return compute_precision_metrics(
-            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
-            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
-            precision_type="fp8",
-        )
-
     def validate_result(self) -> Optional[str]:
-        """Sanity-check that buffers were initialized."""
-        if self.model is None:
-            return "Model not initialized"
-        if self.input is None or self.weight is None:
-            return "Input tensors not initialized"
+        if self.x is None:
+            return "Input not initialized"
         return None
 
 
-def get_benchmark() -> BaselineWarpSpecializationTrainingBenchmark:
-    """Factory for harness discovery."""
+def get_benchmark() -> BaseBenchmark:
     return BaselineWarpSpecializationTrainingBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)

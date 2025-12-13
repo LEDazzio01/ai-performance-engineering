@@ -19,7 +19,7 @@ Collects modern decoder techniques-FlexAttention, FlexDecoding, speculative and 
 | `v1_bucketed_decode_loop.py` | V1 polling loop that reuses bucketed workspaces/masks and can export graph/allocator counters for Prometheus scraping. |
 | `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py` | Decode loop harness contrasting ragged CUDA-graph recaptures against bucketed/padded shapes, preallocated workspaces, and lazy KV compaction. |
 | `baseline_cudagraph_bucketing.py`, `optimized_cudagraph_bucketing.py`, `cudagraph_bucketing_common.py` | Dynamic-shape decode demos that contrast graph churn vs bucketed/pre-warmed CUDA Graph Tree captures. |
-| `baseline_vllm_monitoring.py`, `optimized_vllm_monitoring.py`, `monitoring_bundle.py`, `configs/vllm_monitoring.yaml` | Emit Prometheus/Grafana bundles for vLLM v1 metrics (TTFT, prefill/decode split, KV cache, queue churn, CUDA graph mode) with overrideable metric names and alert thresholds. |
+| `vllm_monitoring.py`, `monitoring_bundle.py`, `configs/vllm_monitoring.yaml` | Emit Prometheus/Grafana bundles for vLLM v1 metrics (TTFT, prefill/decode split, KV cache, queue churn, CUDA graph mode) with overrideable metric names and alert thresholds. (Tool; not a benchmark target.) |
 | `run_vllm_decoder.py`, `configs/`, `paged_attn_common.py`, `workload_config.py` | Serving integrations and config presets for pushing workloads through vLLM or custom harnesses. |
 | `compare.py`, `expectations_gb10.json`, `test_flex_attention.py` | Harness entry, regression thresholds, and pytest coverage for FlexAttention APIs. |
 
@@ -37,10 +37,10 @@ Use the benchmark harness for quick comparisons or drive the Typer CLI when you 
 ```bash
 cd ch18
 python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch18
-python cli/aisp.py bench run --targets ch18 --profile minimal
+python -m cli.aisp bench list-targets --chapter ch18
+python -m cli.aisp bench run --targets ch18 --profile minimal
 # Run the CUDA-graph bucketing simulators via the CLI (per-target flags only):
-python cli/aisp.py bench run \
+python -m cli.aisp bench run \
   --targets ch18:cudagraph_bucketing,ch18:cudagraph_bucketing_optimized \
   --target-extra-arg ch18:cudagraph_bucketing="--vllm-model gpt-oss-20b" \
   --target-extra-arg ch18:cudagraph_bucketing_optimized="--vllm-model gpt-oss-20b"
@@ -58,7 +58,7 @@ python cli/aisp.py bench run \
 - `flashmla_kernel.cu` includes the Blackwell-specific tensor memory guard to keep compilation healthy on SM121 hardware.
 - CUDA-graph bucketing demos default to `--vllm-model gpt-oss-20b`; override with `--vllm-model <name>` or disable capture bins via `--no-vllm-bins`.
 - `baseline_vllm_decode_graphs.py`, `optimized_vllm_decode_graphs.py`, and `v1_bucketed_decode_loop.py` accept `--prom-port` to expose `vllm:decode_graph_recaptures_total`, `vllm:decode_allocator_bytes`, and `vllm:decode_kv_compactions_total` for quick scraping alongside the main vLLM metrics endpoint.
-- To validate on live traffic: (1) run `python ch18/v1_bucketed_decode_loop.py --use-vllm --model <id> --prom-port 9300` next to your vLLM server and scrape both `/metrics` endpoints to watch graph recaptures/allocator bytes; (2) point Prometheus at the decode demo’s port and confirm `vllm:decode_graph_recaptures_rate` and `vllm:decode_allocator_mb` populate the new recording rules from `optimized_vllm_monitoring.py`.
+- To validate on live traffic: (1) run `python ch18/v1_bucketed_decode_loop.py --use-vllm --model <id> --prom-port 9300` next to your vLLM server and scrape both `/metrics` endpoints to watch graph recaptures/allocator bytes; (2) point Prometheus at the decode demo’s port and confirm `vllm:decode_graph_recaptures_rate` and `vllm:decode_allocator_mb` populate the new recording rules from `ch18/vllm_monitoring.py`.
 
 ### Live validation quickstart
 Run the bucketed loop beside a live vLLM server and scrape both endpoints:
@@ -69,15 +69,11 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000 --api-key token-abc123
 # 2) start the bucketed decode loop with metrics exposed
 python ch18/v1_bucketed_decode_loop.py --use-vllm --model meta-llama/Llama-3.1-8B-Instruct --prom-port 9300
 ```
-Point Prometheus at `http://localhost:8000/metrics` (vLLM) and `http://localhost:9300/metrics` (demo). You should see `vllm:decode_graph_recaptures_rate` and `vllm:decode_allocator_mb` populate via the recording rules defined in `optimized_vllm_monitoring.py`; also export `vllm:decode_kv_compactions_total` if you want compaction visibility.
+Point Prometheus at `http://localhost:8000/metrics` (vLLM) and `http://localhost:9300/metrics` (demo). You should see `vllm:decode_graph_recaptures_rate` and `vllm:decode_allocator_mb` populate via the recording rules defined in `ch18/vllm_monitoring.py`; also export `vllm:decode_kv_compactions_total` if you want compaction visibility.
 
 ## Monitoring bundle quickstart
 Export the vLLM v1 monitoring assets used throughout the chapter:
 ```bash
-python ch18/baseline_vllm_monitoring.py --outdir artifacts/vllm_monitoring_baseline
-python ch18/optimized_vllm_monitoring.py --outdir artifacts/vllm_monitoring_optimized
+python -m cli.aisp tools vllm-monitoring -- --outdir artifacts/vllm_monitoring
 ```
-- Baseline: TTFT p90, prefill/decode split, cache pressure, and a simple queue-drain sanity check.
-- Optimized: per-model TTFT/prefill/decode/e2e, KV cache percent, inter-token latency, queue churn, CUDA graph mode drift, and alert-ready recording rules.
-- Both bundles run under the harness: `python cli/aisp.py bench run --targets ch18:vllm_monitoring --profile none` emits baseline + optimized side by side.
-- Override metric names and alert thresholds via `--config /path/to/your_metrics.yaml` when calling the scripts directly, or pass to the harness with `--target-extra-arg ch18:vllm_monitoring="--config /path/custom.yaml"`.
+- Override metric names and alert thresholds via `--config /path/to/your_metrics.yaml`, e.g. `python -m cli.aisp tools vllm-monitoring -- --config /path/custom.yaml`.

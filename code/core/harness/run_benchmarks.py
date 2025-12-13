@@ -432,6 +432,31 @@ def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str,
     independently.
     """
     metrics: Dict[str, float] = {}
+    optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
+
+    if optimization_goal == "memory":
+        baseline_memory = result_entry.get("baseline_memory_mb")
+        _capture_metric(metrics, "baseline_memory_mb", baseline_memory)
+
+        best_opt = select_best_optimization(result_entry.get("optimizations", []), goal="memory")
+        if best_opt:
+            optimized_memory = best_opt.get("memory_mb")
+            _capture_metric(metrics, "best_optimized_memory_mb", optimized_memory)
+            if baseline_memory and optimized_memory and optimized_memory > 0:
+                try:
+                    baseline_mem_f = float(baseline_memory)
+                    optimized_mem_f = float(optimized_memory)
+                except (TypeError, ValueError):
+                    baseline_mem_f = 0.0
+                    optimized_mem_f = 0.0
+                if baseline_mem_f > 0 and optimized_mem_f > 0:
+                    _capture_metric(metrics, "best_memory_savings_ratio", baseline_mem_f / optimized_mem_f)
+                    _capture_metric(
+                        metrics,
+                        "best_memory_savings_pct",
+                        ((baseline_mem_f - optimized_mem_f) / baseline_mem_f) * 100.0,
+                    )
+        return metrics, best_opt
 
     # Capture baseline metrics
     baseline_time = result_entry.get("baseline_time_ms")
@@ -446,7 +471,7 @@ def collect_expectation_metrics(result_entry: Dict[str, Any]) -> Tuple[Dict[str,
     _capture_custom_metrics(metrics, "baseline_custom", baseline_custom)
 
     # Use single source of truth for selecting best optimization
-    best_opt = select_best_optimization(result_entry.get("optimizations", []))
+    best_opt = select_best_optimization(result_entry.get("optimizations", []), goal="speed")
     if best_opt:
         optimized_time = best_opt.get("time_ms")
         _capture_metric(metrics, "best_optimized_time_ms", optimized_time)
@@ -484,6 +509,7 @@ def build_expectation_metadata(
     metadata: Dict[str, Any] = {
         "example": result_entry.get("example"),
         "type": result_entry.get("type", "python"),
+        "optimization_goal": result_entry.get("optimization_goal", "speed"),
     }
     if git_commit:
         metadata["git_commit"] = git_commit
@@ -491,6 +517,21 @@ def build_expectation_metadata(
         metadata["best_optimization"] = best_opt.get("technique") or best_opt.get("file")
         metadata["best_optimization_file"] = best_opt.get("file")
         metadata["best_optimization_time_ms"] = best_opt.get("time_ms")
+        if (result_entry.get("optimization_goal") or "speed").strip().lower() == "memory":
+            metadata["best_optimization_memory_mb"] = best_opt.get("memory_mb")
+            baseline_memory = result_entry.get("baseline_memory_mb")
+            optimized_memory = best_opt.get("memory_mb")
+            if baseline_memory and optimized_memory and optimized_memory > 0:
+                try:
+                    baseline_mem_f = float(baseline_memory)
+                    optimized_mem_f = float(optimized_memory)
+                except (TypeError, ValueError):
+                    baseline_mem_f = 0.0
+                    optimized_mem_f = 0.0
+                if baseline_mem_f > 0 and optimized_mem_f > 0:
+                    metadata["best_memory_savings_ratio"] = baseline_mem_f / optimized_mem_f
+                    metadata["best_memory_savings_pct"] = ((baseline_mem_f - optimized_mem_f) / baseline_mem_f) * 100.0
+            return metadata
 
         # Derive speedup from timing values for consistency with metrics
         baseline_time = result_entry.get("baseline_time_ms")
@@ -1946,6 +1987,7 @@ def _test_chapter_impl(
     warmup: Optional[int] = None,
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
+    update_expectations: bool = False,
     ncu_metric_set: str = "auto",
     pm_sampling_interval: Optional[int] = None,
     graph_capture_ratio_threshold: Optional[float] = None,
@@ -2032,7 +2074,8 @@ def _test_chapter_impl(
     expectations_store = ExpectationsStore(
         chapter_dir,
         expectation_hardware_key,
-        accept_regressions=accept_regressions,
+        accept_regressions=accept_regressions or update_expectations,
+        force_mixed_provenance=update_expectations,
     )
     try:
         expectation_path = expectations_store.path.relative_to(repo_root)
@@ -2390,6 +2433,41 @@ def _test_chapter_impl(
                     target_label=f"{chapter_name}:{example_name}",
                 )
                 baseline_result = baseline_run.result
+                baseline_errors = list(getattr(baseline_result, "errors", None) or [])
+                if baseline_errors:
+                    skip_reason = None
+                    for msg in baseline_errors:
+                        upper = msg.upper()
+                        if "SKIPPED" not in upper:
+                            continue
+                        if "SKIPPED:" in msg:
+                            skip_reason = msg.split("SKIPPED:", 1)[1].strip()
+                        else:
+                            idx = upper.find("SKIPPED")
+                            skip_reason = msg[idx:].strip() if idx != -1 else msg.strip()
+                        break
+
+                    error_message = baseline_errors[0].strip() if baseline_errors else "Benchmark harness reported errors"
+                    if skip_reason:
+                        logger.warning(f"    WARNING: SKIPPED: {skip_reason}")
+                        result_entry["status"] = "skipped"
+                        result_entry["error"] = f"SKIPPED: {skip_reason}"
+                        result_entry["skip_reason"] = skip_reason
+                        benchmark_results.append(result_entry)
+                        skipped_hw += 1
+                    else:
+                        logger.error(f"    Baseline FAILED: {error_message}")
+                        result_entry["status"] = "failed_error"
+                        result_entry["error"] = error_message
+                        benchmark_results.append(result_entry)
+                        failed_error += 1
+                        maybe_reset_gpu_for_error(error_message, f"{chapter_name}:{example_name}:baseline")
+
+                    reset_cuda_state()
+                    if cold_start:
+                        reset_gpu_state()
+                    mark_progress(example_name)
+                    continue
                 baseline_timing = baseline_result.timing
                 baseline_memory = baseline_result.memory
                 baseline_custom_metrics = getattr(baseline_result, "custom_metrics", None) or {}
@@ -2617,6 +2695,46 @@ def _test_chapter_impl(
                         target_label=f"{chapter_name}:{example_name}",
                     )
                     optimized_result = optimized_run.result
+                    optimized_errors = list(getattr(optimized_result, "errors", None) or [])
+                    if optimized_errors:
+                        skip_reason = None
+                        for msg in optimized_errors:
+                            upper = msg.upper()
+                            if "SKIPPED" not in upper:
+                                continue
+                            if "SKIPPED:" in msg:
+                                skip_reason = msg.split("SKIPPED:", 1)[1].strip()
+                            else:
+                                idx = upper.find("SKIPPED")
+                                skip_reason = msg[idx:].strip() if idx != -1 else msg.strip()
+                            break
+
+                        error_message = optimized_errors[0].strip() if optimized_errors else "Benchmark harness reported errors"
+                        if skip_reason:
+                            logger.warning(f"    Testing: {opt_name}... SKIPPED: {skip_reason}")
+                            result_entry["optimizations"].append({
+                                "file": opt_name,
+                                "technique": technique,
+                                "status": "skipped",
+                                "error": f"SKIPPED: {skip_reason}",
+                                "skip_reason": skip_reason,
+                            })
+                            skipped_hw += 1
+                        else:
+                            logger.error(f"    Testing: {opt_name}... FAILED ({error_message})")
+                            result_entry["optimizations"].append({
+                                "file": opt_name,
+                                "technique": technique,
+                                "status": "failed_error",
+                                "error": error_message,
+                            })
+                            failed_error += 1
+                            maybe_reset_gpu_for_error(error_message, f"{chapter_name}:{example_name}:{opt_name}")
+
+                        reset_cuda_state()
+                        if cold_start:
+                            reset_gpu_state()
+                        continue
                     optimized_timing = optimized_result.timing
                     optimized_memory = optimized_result.memory
                     optimized_custom_metrics = getattr(optimized_result, "custom_metrics", None) or {}
@@ -2929,18 +3047,126 @@ def _test_chapter_impl(
             has_success = any(opt.get('status') == 'succeeded' for opt in optimizations)
             all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
     
-            evaluation = None
+            update_result = None
             if baseline_ok and has_success:
-                metrics, best_opt = collect_expectation_metrics(result_entry)
-                metadata = build_expectation_metadata(result_entry, best_opt, git_commit)
                 example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
-                evaluation = expectations_store.evaluate(example_key, metrics, metadata)
-                if evaluation:
-                    result_entry['expectation'] = evaluation.to_dict()
-                log_expectation_evaluation(logger, evaluation, repo_root)
-                # NOTE: 1.05x speedup clamping removed for data integrity (schema v2).
-                # Actual speedup values are now preserved, including regressions < 1.0.
-                if evaluation and evaluation.regressed:
+                optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
+                best_opt = select_best_optimization(result_entry.get("optimizations", []), goal=optimization_goal)
+                # POST-TIMING VERIFICATION: Strictly compare perf-run outputs
+                # Uses outputs captured from the timing run (no re-execution).
+                if verify_output and best_opt:
+                    from core.benchmark.verify_runner import VerifyRunner
+
+                    try:
+                        runner = _get_verify_runner() or VerifyRunner()
+
+                        def _get_perf_output(bench: Any):
+                            if hasattr(bench, "_subprocess_verify_output"):
+                                out = getattr(bench, "_subprocess_verify_output")
+                                if out is None:
+                                    raise RuntimeError("Missing subprocess verify_output")
+                                return out
+                            return bench.get_verify_output()
+
+                        def _get_perf_tolerance(bench: Any) -> tuple[float, float]:
+                            if hasattr(bench, "_subprocess_output_tolerance"):
+                                tol = getattr(bench, "_subprocess_output_tolerance")
+                                if tol is None:
+                                    raise RuntimeError("Missing subprocess output_tolerance")
+                                return tol
+                            return bench.get_output_tolerance()
+
+                        baseline_output = _get_perf_output(baseline_benchmark)
+                        optimized_output = _get_perf_output(optimized_benchmark)
+                        tol = _get_perf_tolerance(baseline_benchmark)
+
+                        comparison = runner.compare_perf_outputs(baseline_output, optimized_output, tol)
+
+                        result_entry["verification"] = {
+                            "passed": comparison.passed,
+                            "max_diff": comparison.max_diff,
+                            "location": comparison.location,
+                            "rtol": tol[0],
+                            "atol": tol[1],
+                        }
+
+                        if comparison.passed:
+                            logger.info(
+                                "    ✓ VERIFICATION PASSED: outputs match (max_diff=%s)",
+                                f"{comparison.max_diff:.6f}" if comparison.max_diff is not None else "0.0",
+                            )
+                        else:
+                            reason = "Output mismatch"
+                            if comparison.max_diff is not None:
+                                reason = f"Output mismatch (max_diff={comparison.max_diff:.6f})"
+                            logger.error("    ✗ VERIFICATION FAILED: %s", reason)
+                            result_entry["status"] = "failed_verification"
+                            result_entry["error"] = reason
+                            failed_error += 1
+                            benchmark_results.append(result_entry)
+                            mark_progress(example_name)
+                            reset_cuda_state()
+                            if cold_start:
+                                reset_gpu_state()
+                            continue
+                    except Exception as e:
+                        logger.error("    ✗ VERIFICATION FAILED: %s", e)
+                        result_entry["verification"] = {"passed": False, "reason": str(e)}
+                        result_entry["status"] = "failed_verification"
+                        result_entry["error"] = str(e)
+                        failed_error += 1
+                        benchmark_results.append(result_entry)
+                        mark_progress(example_name)
+                        reset_cuda_state()
+                        if cold_start:
+                            reset_gpu_state()
+                        continue
+
+                if best_opt:
+                    provenance = RunProvenance(
+                        git_commit=git_commit or "unknown",
+                        hardware_key=expectation_hardware_key,
+                        profile_name=profile_type,
+                        timestamp=datetime.now().isoformat(),
+                        iterations=int(iterations),
+                        warmup_iterations=int(warmup),
+                    )
+                    entry = ExpectationEntry(
+                        example=result_entry.get("example", example_key),
+                        type=result_entry.get("type", "python"),
+                        optimization_goal=result_entry.get("optimization_goal", "speed"),
+                        baseline_time_ms=float(result_entry.get("baseline_time_ms") or 0.0),
+                        best_optimized_time_ms=float(best_opt.get("time_ms") or 0.0),
+                        provenance=provenance,
+                        baseline_memory_mb=result_entry.get("baseline_memory_mb"),
+                        best_optimized_memory_mb=best_opt.get("memory_mb"),
+                        baseline_p75_ms=result_entry.get("baseline_p75_ms"),
+                        baseline_p90_ms=result_entry.get("baseline_p90_ms"),
+                        best_optimized_p75_ms=best_opt.get("p75_ms"),
+                        best_optimized_p90_ms=best_opt.get("p90_ms"),
+                        baseline_throughput=result_entry.get("baseline_throughput"),
+                        best_optimized_throughput=best_opt.get("throughput"),
+                        best_optimization_name=best_opt.get("technique") or best_opt.get("file"),
+                        best_optimization_file=best_opt.get("file"),
+                        best_optimization_technique=best_opt.get("technique"),
+                    )
+                    update_result = expectations_store.update_entry(example_key, entry)
+                    try:
+                        result_entry["expectation"] = update_result.to_dict()
+                    except Exception:
+                        result_entry["expectation"] = {
+                            "status": update_result.status,
+                            "message": update_result.message,
+                            "validation_issues": [issue.to_dict() for issue in update_result.validation_issues],
+                        }
+                    logger.info("    Expectations: %s", update_result.message)
+
+                is_rejected_regression = bool(
+                    update_result
+                    and update_result.status == "rejected"
+                    and any(issue.issue_type == "regression" for issue in update_result.validation_issues)
+                )
+                if is_rejected_regression:
                     regression_metrics = None
                     if best_opt and isinstance(best_opt, dict):
                         regression_metrics = best_opt.get("gpu_metrics")
@@ -2955,79 +3181,11 @@ def _test_chapter_impl(
                         live_metrics = query_gpu_telemetry()
                         logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(live_metrics))
                     result_entry['status'] = 'failed_regression'
-                    regression_details = evaluation.regressions[0] if evaluation.regressions else None
-                    if regression_details:
-                        result_entry['error'] = (
-                            f"Expectation regression on {regression_details['metric']}: "
-                            f"observed {_format_metric_value(regression_details.get('observed'))} vs "
-                            f"expected {_format_metric_value(regression_details.get('expected'))}"
-                        )
-                    else:
-                        result_entry['error'] = 'Expectation regression detected'
+                    result_entry["error"] = update_result.message if update_result else "Expectation regression detected"
                     failed_regression += 1
                 else:
                     result_entry['status'] = 'succeeded'
                     successful += 1
-                    
-                    # POST-TIMING VERIFICATION: Strictly compare perf-run outputs
-                    # Uses outputs captured from the timing run (no re-execution).
-                    if verify_output and best_opt:
-                        from core.benchmark.verify_runner import VerifyRunner
-
-                        try:
-                            runner = _get_verify_runner() or VerifyRunner()
-
-                            def _get_perf_output(bench: Any):
-                                if hasattr(bench, "_subprocess_verify_output"):
-                                    out = getattr(bench, "_subprocess_verify_output")
-                                    if out is None:
-                                        raise RuntimeError("Missing subprocess verify_output")
-                                    return out
-                                return bench.get_verify_output()
-
-                            def _get_perf_tolerance(bench: Any) -> tuple[float, float]:
-                                if hasattr(bench, "_subprocess_output_tolerance"):
-                                    tol = getattr(bench, "_subprocess_output_tolerance")
-                                    if tol is None:
-                                        raise RuntimeError("Missing subprocess output_tolerance")
-                                    return tol
-                                return bench.get_output_tolerance()
-
-                            baseline_output = _get_perf_output(baseline_benchmark)
-                            optimized_output = _get_perf_output(optimized_benchmark)
-                            tol = _get_perf_tolerance(baseline_benchmark)
-
-                            comparison = runner.compare_perf_outputs(baseline_output, optimized_output, tol)
-
-                            result_entry["verification"] = {
-                                "passed": comparison.passed,
-                                "max_diff": comparison.max_diff,
-                                "location": comparison.location,
-                                "rtol": tol[0],
-                                "atol": tol[1],
-                            }
-
-                            if comparison.passed:
-                                logger.info(
-                                    "    ✓ VERIFICATION PASSED: outputs match (max_diff=%s)",
-                                    f"{comparison.max_diff:.6f}" if comparison.max_diff is not None else "0.0",
-                                )
-                            else:
-                                reason = "Output mismatch"
-                                if comparison.max_diff is not None:
-                                    reason = f"Output mismatch (max_diff={comparison.max_diff:.6f})"
-                                logger.error("    ✗ VERIFICATION FAILED: %s", reason)
-                                result_entry["status"] = "failed_verification"
-                                result_entry["error"] = reason
-                                successful -= 1
-                                failed_error += 1
-                        except Exception as e:
-                            logger.error("    ✗ VERIFICATION FAILED: %s", e)
-                            result_entry["verification"] = {"passed": False, "reason": str(e)}
-                            result_entry["status"] = "failed_verification"
-                            result_entry["error"] = str(e)
-                            successful -= 1
-                            failed_error += 1
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
                 successful += 1
@@ -3414,43 +3572,85 @@ def _test_chapter_impl(
             all_skipped_opt = bool(optimizations) and all(opt.get('status') == 'skipped' for opt in optimizations)
             baseline_ok = result_entry.get('baseline_time_ms') is not None
 
-            evaluation = None
+            update_result = None
             if baseline_ok and has_success:
+                example_key = expectation_example_key(result_entry["example"], result_entry.get("type", "cuda"))
+                optimization_goal = (result_entry.get("optimization_goal") or "speed").strip().lower()
+                best_opt = select_best_optimization(result_entry.get("optimizations", []), goal=optimization_goal)
+                if best_opt:
+                    provenance = RunProvenance(
+                        git_commit=git_commit or "unknown",
+                        hardware_key=expectation_hardware_key,
+                        profile_name=profile_type,
+                        timestamp=datetime.now().isoformat(),
+                        iterations=int(iterations),
+                        warmup_iterations=int(warmup),
+                    )
+                    entry = ExpectationEntry(
+                        example=result_entry.get("example", example_key),
+                        type=result_entry.get("type", "cuda"),
+                        optimization_goal=result_entry.get("optimization_goal", "speed"),
+                        baseline_time_ms=float(result_entry.get("baseline_time_ms") or 0.0),
+                        best_optimized_time_ms=float(best_opt.get("time_ms") or 0.0),
+                        provenance=provenance,
+                        baseline_memory_mb=result_entry.get("baseline_memory_mb"),
+                        best_optimized_memory_mb=best_opt.get("memory_mb"),
+                        baseline_p75_ms=result_entry.get("baseline_p75_ms"),
+                        baseline_p90_ms=result_entry.get("baseline_p90_ms"),
+                        best_optimized_p75_ms=best_opt.get("p75_ms"),
+                        best_optimized_p90_ms=best_opt.get("p90_ms"),
+                        baseline_throughput=result_entry.get("baseline_throughput"),
+                        best_optimized_throughput=best_opt.get("throughput"),
+                        best_optimization_name=best_opt.get("technique") or best_opt.get("file"),
+                        best_optimization_file=best_opt.get("file"),
+                        best_optimization_technique=best_opt.get("technique"),
+                    )
+                    update_result = expectations_store.update_entry(example_key, entry)
+                    try:
+                        result_entry["expectation"] = update_result.to_dict()
+                    except Exception:
+                        result_entry["expectation"] = {
+                            "status": update_result.status,
+                            "message": update_result.message,
+                            "validation_issues": [issue.to_dict() for issue in update_result.validation_issues],
+                        }
+                    logger.info("    Expectations: %s", update_result.message)
 
-                metrics, best_opt = collect_expectation_metrics(result_entry)
-                metadata = build_expectation_metadata(result_entry, best_opt, git_commit)
-                example_key = expectation_example_key(result_entry['example'], result_entry.get('type', 'python'))
-                evaluation = expectations_store.evaluate(example_key, metrics, metadata)
-                if evaluation:
-                    result_entry['expectation'] = evaluation.to_dict()
-                log_expectation_evaluation(logger, evaluation, repo_root)
-                if evaluation and evaluation.regressed:
+                is_rejected_regression = bool(
+                    update_result
+                    and update_result.status == "rejected"
+                    and any(issue.issue_type == "regression" for issue in update_result.validation_issues)
+                )
+                if is_rejected_regression:
                     regression_metrics = None
                     if best_opt and isinstance(best_opt, dict):
                         regression_metrics = best_opt.get("gpu_metrics")
                     if not regression_metrics:
                         regression_metrics = result_entry.get("baseline_gpu_metrics")
                     if regression_metrics:
-                        logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(regression_metrics))
+                        logger.warning(
+                            "    🌡️ GPU telemetry during regression: %s",
+                            format_gpu_telemetry(regression_metrics),
+                        )
                         temp = regression_metrics.get("temperature_gpu_c")
                         if temp is not None and temp >= 85:
-                            logger.warning("    ⚠️ GPU temperature %.1f°C exceeds recommended threshold; consider cooling or resetting before re-running.", temp)
+                            logger.warning(
+                                "    ⚠️ GPU temperature %.1f°C exceeds recommended threshold; consider cooling or resetting before re-running.",
+                                temp,
+                            )
                     else:
                         live_metrics = query_gpu_telemetry()
-                        logger.warning("    🌡️ GPU telemetry during regression: %s", format_gpu_telemetry(live_metrics))
-                    result_entry['status'] = 'failed_regression'
-                    regression_details = evaluation.regressions[0] if evaluation.regressions else None
-                    if regression_details:
-                        result_entry['error'] = (
-                            f"Expectation regression on {regression_details['metric']}: "
-                            f"observed {_format_metric_value(regression_details.get('observed'))} vs "
-                            f"expected {_format_metric_value(regression_details.get('expected'))}"
+                        logger.warning(
+                            "    🌡️ GPU telemetry during regression: %s",
+                            format_gpu_telemetry(live_metrics),
                         )
-                    else:
-                        result_entry['error'] = 'Expectation regression detected'
+                    result_entry["status"] = "failed_regression"
+                    result_entry["error"] = (
+                        update_result.message if update_result else "Expectation regression detected"
+                    )
                     failed_regression += 1
                 else:
-                    result_entry['status'] = 'succeeded'
+                    result_entry["status"] = "succeeded"
                     successful += 1
             elif baseline_ok and (all_skipped_opt or not optimizations):
                 result_entry['status'] = 'succeeded'
@@ -5115,6 +5315,7 @@ def test_chapter(
     warmup: Optional[int] = None,
     only_examples: Optional[List[str]] = None,
     accept_regressions: bool = False,
+    update_expectations: bool = False,
     ncu_metric_set: str = "auto",
     pm_sampling_interval: Optional[int] = None,
     graph_capture_ratio_threshold: Optional[float] = None,
@@ -5155,6 +5356,7 @@ def test_chapter(
         graph_capture_memory_threshold_mb=graph_capture_memory_threshold_mb,
         only_examples=only_examples,
         accept_regressions=accept_regressions,
+        update_expectations=update_expectations,
         ncu_metric_set=ncu_metric_set,
         pm_sampling_interval=pm_sampling_interval,
         launch_via=launch_via,

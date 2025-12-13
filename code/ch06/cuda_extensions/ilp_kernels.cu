@@ -10,34 +10,38 @@ __global__ void sequential_ops_kernel(float* output, const float* input, int N) 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     
     if (idx < N) {
-        // Sequential operations - each depends on previous
+        // Dependent chain (intentionally non-linear so the compiler can't
+        // trivially collapse it into a single fused op).
         float val = input[idx];
-        val = val * 2.0f;      // Op 1
-        val = val + 1.0f;      // Op 2 (depends on Op 1)
-        val = val * 3.0f;      // Op 3 (depends on Op 2)
-        val = val - 5.0f;      // Op 4 (depends on Op 3)
+        val = val * val + 0.10f;
+        val = val * val + 0.20f;
+        val = val * val + 0.30f;
+        val = val * val + 0.40f;
         output[idx] = val;
     }
 }
 
-// Optimized: Independent operations (high ILP)
-// Computes SAME function as sequential: output = ((input * 2 + 1) * 3) - 5 = input * 6 - 2
-// But uses independent partial computations that expose ILP to the compiler/hardware
+// Optimized: unroll + multiple independent registers per thread (higher ILP).
+// Computes the SAME function as sequential_ops_kernel for every element.
 __global__ void independent_ops_kernel(float* output, const float* input, int N) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (idx < N) {
-        // Independent operations that combine to same result as sequential
-        // Sequential computes: ((val * 2 + 1) * 3) - 5 = val * 6 + 3 - 5 = val * 6 - 2
-        // We compute: (val * 3) + (val * 3) - 2 = val * 6 - 2 (same result!)
-        float val = input[idx];
-        float part1 = val * 3.0f;   // Independent: 3x
-        float part2 = val * 3.0f;   // Independent: 3x (same op, different register)
-        float part3 = -2.0f;        // Independent: constant
-        
-        // Combine independent results: 3x + 3x - 2 = 6x - 2
-        output[idx] = part1 + part2 + part3;
-    }
+    int base_idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
+    if (base_idx >= N) return;
+
+    float v0 = input[base_idx];
+    float v1 = (base_idx + 1 < N) ? input[base_idx + 1] : 0.0f;
+    float v2 = (base_idx + 2 < N) ? input[base_idx + 2] : 0.0f;
+    float v3 = (base_idx + 3 < N) ? input[base_idx + 3] : 0.0f;
+
+    // Interleave dependent chains across 4 independent values.
+    v0 = v0 * v0 + 0.10f; v1 = v1 * v1 + 0.10f; v2 = v2 * v2 + 0.10f; v3 = v3 * v3 + 0.10f;
+    v0 = v0 * v0 + 0.20f; v1 = v1 * v1 + 0.20f; v2 = v2 * v2 + 0.20f; v3 = v3 * v3 + 0.20f;
+    v0 = v0 * v0 + 0.30f; v1 = v1 * v1 + 0.30f; v2 = v2 * v2 + 0.30f; v3 = v3 * v3 + 0.30f;
+    v0 = v0 * v0 + 0.40f; v1 = v1 * v1 + 0.40f; v2 = v2 * v2 + 0.40f; v3 = v3 * v3 + 0.40f;
+
+    output[base_idx] = v0;
+    if (base_idx + 1 < N) output[base_idx + 1] = v1;
+    if (base_idx + 2 < N) output[base_idx + 2] = v2;
+    if (base_idx + 3 < N) output[base_idx + 3] = v3;
 }
 
 // Further optimized: Loop unrolling to expose more ILP
@@ -51,21 +55,24 @@ __global__ void unrolled_ilp_kernel(float* output, const float* input, int N) {
         float val2 = input[base_idx + 2];
         float val3 = input[base_idx + 3];
         
-        // Process all 4 independently (exposes ILP)
-        float res0 = val0 * 2.0f + 1.0f;
-        float res1 = val1 * 3.0f - 5.0f;
-        float res2 = val2 * 4.0f + 2.0f;
-        float res3 = val3 * 5.0f - 3.0f;
-        
-        output[base_idx] = res0;
-        output[base_idx + 1] = res1;
-        output[base_idx + 2] = res2;
-        output[base_idx + 3] = res3;
+        val0 = val0 * val0 + 0.10f; val1 = val1 * val1 + 0.10f; val2 = val2 * val2 + 0.10f; val3 = val3 * val3 + 0.10f;
+        val0 = val0 * val0 + 0.20f; val1 = val1 * val1 + 0.20f; val2 = val2 * val2 + 0.20f; val3 = val3 * val3 + 0.20f;
+        val0 = val0 * val0 + 0.30f; val1 = val1 * val1 + 0.30f; val2 = val2 * val2 + 0.30f; val3 = val3 * val3 + 0.30f;
+        val0 = val0 * val0 + 0.40f; val1 = val1 * val1 + 0.40f; val2 = val2 * val2 + 0.40f; val3 = val3 * val3 + 0.40f;
+
+        output[base_idx] = val0;
+        output[base_idx + 1] = val1;
+        output[base_idx + 2] = val2;
+        output[base_idx + 3] = val3;
     } else {
         // Handle remainder elements
         for (int i = 0; i < 4 && base_idx + i < N; ++i) {
             float val = input[base_idx + i];
-            output[base_idx + i] = val * 2.0f + 1.0f;
+            val = val * val + 0.10f;
+            val = val * val + 0.20f;
+            val = val * val + 0.30f;
+            val = val * val + 0.40f;
+            output[base_idx + i] = val;
         }
     }
 }
@@ -107,7 +114,8 @@ void independent_ops(torch::Tensor output, torch::Tensor input) {
     
     int N = input.size(0);
     int threads_per_block = 256;
-    int num_blocks = (N + threads_per_block - 1) / threads_per_block;
+    // Each thread processes 4 elements.
+    int num_blocks = ((N + 3) / 4 + threads_per_block - 1) / threads_per_block;
     
     // Use default stream (nullptr)
     cudaStream_t stream = nullptr;
@@ -138,7 +146,6 @@ void unrolled_ilp(torch::Tensor output, torch::Tensor input) {
     
     int N = input.size(0);
     int threads_per_block = 256;
-    // Each thread processes 4 elements, so fewer blocks needed
     int num_blocks = ((N + 3) / 4 + threads_per_block - 1) / threads_per_block;
     
     // Use default stream (nullptr)
@@ -169,4 +176,3 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("independent_ops", &independent_ops, "Independent operations kernel (optimized, high ILP)");
     m.def("unrolled_ilp", &unrolled_ilp, "Unrolled ILP kernel (optimized, high ILP)");
 }
-

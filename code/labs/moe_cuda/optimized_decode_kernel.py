@@ -37,6 +37,7 @@ class OptimizedDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.rows = 4096
         self.cols = 1024
         self.input: Optional[torch.Tensor] = None
+        self._output_buffer: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         tokens = self.rows * self.cols
         self._workload = WorkloadMetadata(
@@ -91,27 +92,30 @@ class OptimizedDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.cols,
             dtype=torch.float32,
         ).to(self.device).contiguous()  # Explicitly ensure contiguity
-        
-        self.output = torch.zeros(
+
+        self._output_buffer = torch.empty(
             self.rows,
             self.cols,
             dtype=torch.float32,
-        ).to(self.device).contiguous()  # Explicitly ensure contiguity
+            device=self.device,
+        ).contiguous()
+        self.output = None
         
         torch.cuda.synchronize(self.device)
         
         # Verify tensors are properly allocated before benchmark
         assert self.input.is_contiguous(), "Input tensor must be contiguous for TMA"
-        assert self.output.is_contiguous(), "Output tensor must be contiguous for TMA"
+        assert self._output_buffer.is_contiguous(), "Output tensor must be contiguous for TMA"
 
     def benchmark_fn(self) -> None:
-        if self.input is None or self.output is None:
+        if self.input is None or self._output_buffer is None:
             raise RuntimeError("Decode tensors not initialized")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_decode_kernel_optimized", enable=enable_nvtx):
-            run_optimized_kernel(self.input, self.output)
+            run_optimized_kernel(self.input, self._output_buffer)
         torch.cuda.synchronize(self.device)
+        self.output = self._output_buffer
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
@@ -126,10 +130,11 @@ class OptimizedDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         torch.cuda.empty_cache()
         self.input = None
+        self._output_buffer = None
         self.output = None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5, measurement_timeout_seconds=60, setup_timeout_seconds=60)  # Min warmup for CUDA
+        return BenchmarkConfig(iterations=10, warmup=5, measurement_timeout_seconds=300, setup_timeout_seconds=300)  # Min warmup for CUDA
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

@@ -3,7 +3,7 @@
 
 ADDS: Run top-K experts on parallel CUDA streams.
 - Overlaps expert computations
-- Based on ch15/optimized_expert_parallelism.py pattern
+- Based on ch15/expert_parallelism.py pattern
 - Reduces total execution time by hiding latency
 
 Cumulative: batched + multi-stream

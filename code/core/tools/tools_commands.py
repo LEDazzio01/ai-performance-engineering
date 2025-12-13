@@ -64,6 +64,61 @@ TOOLS: Dict[str, ToolSpec] = {
         script_path=REPO_ROOT / "core" / "scripts" / "utilities" / "probe_hardware_capabilities.py",
         description="Probe hardware capabilities (recommended).",
     ),
+    "roofline": ToolSpec(
+        name="roofline",
+        script_path=REPO_ROOT / "ch10" / "roofline" / "roofline.py",
+        description="Run the roofline tool (chapter utility, not a benchmark pair).",
+    ),
+    "dynamic-router-eval": ToolSpec(
+        name="dynamic-router-eval",
+        script_path=REPO_ROOT / "labs" / "dynamic_router" / "cheap_eval.py",
+        description="Run the dynamic-router cheap eval stack (tool, not a benchmark pair).",
+    ),
+    "vllm-monitoring": ToolSpec(
+        name="vllm-monitoring",
+        script_path=REPO_ROOT / "ch18" / "vllm_monitoring.py",
+        description="Emit Prometheus/Grafana monitoring bundle for vLLM v1 metrics.",
+    ),
+    "spec-config-sweep": ToolSpec(
+        name="spec-config-sweep",
+        script_path=REPO_ROOT / "ch18" / "speculative_decode" / "spec_config_sweep.py",
+        description="Sweep speculative-decoding config files and write summary JSON.",
+    ),
+    "moe-validation": ToolSpec(
+        name="moe-validation",
+        script_path=REPO_ROOT / "ch15" / "moe_validation" / "moe_validation.py",
+        description="Sweep MoE routing guardrails and report overflow/Gini/entropy + throughput.",
+    ),
+    "kv-cache-math": ToolSpec(
+        name="kv-cache-math",
+        script_path=REPO_ROOT / "ch15" / "kv_cache_management_math.py",
+        description="Run the math-only KV-cache attention tool (chapter utility).",
+    ),
+    "context-parallelism": ToolSpec(
+        name="context-parallelism",
+        script_path=REPO_ROOT / "ch13" / "context_parallelism.py",
+        description="Run the multi-GPU context-parallel ring-attention demo (torchrun required).",
+    ),
+    "expert-parallelism": ToolSpec(
+        name="expert-parallelism",
+        script_path=REPO_ROOT / "ch15" / "expert_parallelism.py",
+        description="Run the MoE expert-parallelism demo (local overlap or distributed all-to-all).",
+    ),
+    "fp8-perchannel-demo": ToolSpec(
+        name="fp8-perchannel-demo",
+        script_path=REPO_ROOT / "ch13" / "fp8_perchannel_demo.py",
+        description="Run the FP8 per-channel scaling demo (chapter utility).",
+    ),
+    "fp8-perchannel-bench": ToolSpec(
+        name="fp8-perchannel-bench",
+        script_path=REPO_ROOT / "ch13" / "fp8_perchannel_bench.py",
+        description="Run the FP8 per-channel scaling benchmark (chapter utility).",
+    ),
+    "flex-attention-cute": ToolSpec(
+        name="flex-attention-cute",
+        script_path=REPO_ROOT / "labs" / "flexattention" / "flex_attention_cute.py",
+        description="Run the FlashAttention CuTe backend tool (FlexAttention fallback utility).",
+    ),
 }
 
 
@@ -113,4 +168,3 @@ if TYPER_AVAILABLE:
         app.command(_name, help=_spec.description)(_make_tool_command(_name, _spec.description))
 else:
     app = None  # type: ignore
-

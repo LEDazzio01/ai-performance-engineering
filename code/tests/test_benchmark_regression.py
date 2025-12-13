@@ -68,8 +68,8 @@ def test_quick_baseline_optimized_speedup(request, harness):
         pytest.skip("ch01 directory not found")
     
     # Only test one specific benchmark pair for the quick check
-    baseline_path = ch01_dir / "baseline_ilp_basic.py"
-    optimized_path = ch01_dir / "optimized_ilp_basic.py"
+    baseline_path = ch01_dir / "baseline_ilp.py"
+    optimized_path = ch01_dir / "optimized_ilp.py"
     
     if not baseline_path.exists() or not optimized_path.exists():
         pytest.skip("ILP benchmark files not found")
@@ -100,10 +100,10 @@ def test_quick_baseline_optimized_speedup(request, harness):
 def test_benchmark_result_consistency(request, harness):
     """Test that benchmark results are consistent across runs (variance check)."""
     repo_root = Path(__file__).parent.parent
-    baseline_path = repo_root / "ch01" / "baseline_ilp_basic.py"
+    baseline_path = repo_root / "ch01" / "baseline_ilp.py"
     
     if not baseline_path.exists():
-        pytest.skip("baseline_ilp_basic.py not found")
+        pytest.skip("baseline_ilp.py not found")
     
     benchmark = load_benchmark(baseline_path)
     if benchmark is None:
@@ -125,10 +125,10 @@ def test_benchmark_result_consistency(request, harness):
 def test_benchmark_memory_usage(request):
     """Test that benchmarks report memory usage when enabled."""
     repo_root = Path(__file__).parent.parent
-    baseline_path = repo_root / "ch01" / "baseline_ilp_basic.py"
+    baseline_path = repo_root / "ch01" / "baseline_ilp.py"
     
     if not baseline_path.exists():
-        pytest.skip("baseline_ilp_basic.py not found")
+        pytest.skip("baseline_ilp.py not found")
     
     benchmark = load_benchmark(baseline_path)
     if benchmark is None:
@@ -156,10 +156,10 @@ def test_benchmark_memory_usage(request):
 def test_benchmark_timeout_handling(request):
     """Test that benchmarks respect timeout limits."""
     repo_root = Path(__file__).parent.parent
-    baseline_path = repo_root / "ch01" / "baseline_ilp_basic.py"
+    baseline_path = repo_root / "ch01" / "baseline_ilp.py"
     
     if not baseline_path.exists():
-        pytest.skip("baseline_ilp_basic.py not found")
+        pytest.skip("baseline_ilp.py not found")
     
     benchmark = load_benchmark(baseline_path)
     if benchmark is None:
@@ -191,7 +191,7 @@ def test_benchmark_validation_coverage(request):
     
     # Test benchmarks that should have validation (only a few for lightweight check)
     validation_benchmarks = [
-        ("ch01", "optimized_ilp_basic.py"),
+        ("ch01", "optimized_ilp.py"),
         ("ch18", "optimized_quantization.py"),
     ]
     

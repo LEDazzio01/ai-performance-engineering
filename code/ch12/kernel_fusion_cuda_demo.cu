@@ -1,5 +1,5 @@
-// baseline_kernel_fusion.cu - Separate kernels (baseline)
-// Demonstrates multiple kernel launches with intermediate memory traffic
+// kernel_fusion_cuda_demo.cu - Kernel fusion + CUDA graphs demo
+// Demonstrates multiple kernel launches, CUDA graph capture, and a fused kernel.
 //
 // Key concepts:
 // - Separate kernels: Multiple kernel launches with intermediate memory traffic
@@ -278,4 +278,3 @@ int main() {
     
     return 0;
 }
-

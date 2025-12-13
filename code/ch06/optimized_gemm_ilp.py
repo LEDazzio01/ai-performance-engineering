@@ -22,6 +22,8 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self):
         super().__init__()
         self.input: Optional[torch.Tensor] = None
+        self._buf0: Optional[torch.Tensor] = None
+        self._buf1: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self.N = 10_000_000
         self._extension = None
@@ -37,14 +39,11 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._extension = load_ilp_extension()
         
         torch.manual_seed(42)
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        self._synchronize()
-        self._extension.independent_ops(self.output, self.input)
-        self._synchronize()
-        torch.manual_seed(42)
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        torch.cuda.manual_seed_all(42)
+        # Keep magnitudes small so the dependent square chain remains finite.
+        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32) * 0.1
+        self._buf0 = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self._buf1 = torch.empty(self.N, device=self.device, dtype=torch.float32)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
@@ -52,16 +51,20 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         Same iteration count as baseline for fair comparison and output verification.
         """
-        assert self._extension is not None and self.output is not None and self.input is not None
+        assert self._extension is not None and self.input is not None and self._buf0 is not None and self._buf1 is not None
         with self._nvtx_range("gemm_ilp_optimized"):
-            src = self.input
-            dst = self.output
+            src: torch.Tensor = self.input
+            buf0: torch.Tensor = self._buf0
+            buf1: torch.Tensor = self._buf1
+            dst: torch.Tensor = buf0
             for _ in range(self.repeats):
                 self._extension.independent_ops(dst, src)
-                src, dst = dst, src
-            if src is not self.output:
-                self.output.copy_(src)
+                src, dst = dst, (buf1 if dst is buf0 else buf0)
             self._synchronize()
+
+        self.output = src[:1024].detach().clone()
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
         self._set_verification_payload(
@@ -75,6 +78,8 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         """Clean up resources."""
         self.input = None
+        self._buf0 = None
+        self._buf1 = None
         self.output = None
         torch.cuda.empty_cache()
 
@@ -106,8 +111,8 @@ class OptimizedILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
             return "Output tensor not initialized"
         if self.input is None:
             return "Input tensor not initialized"
-        if self.output.shape[0] != self.N:
-            return f"Output shape mismatch: expected {self.N}, got {self.output.shape[0]}"
+        if self.output.shape[0] != 1024:
+            return f"Output shape mismatch: expected 1024, got {self.output.shape[0]}"
         if not torch.isfinite(self.output).all():
             return "Output contains non-finite values"
         return None

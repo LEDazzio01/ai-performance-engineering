@@ -42,8 +42,8 @@ pytestmark = pytest.mark.skipif(
 # Whitelist of chapters/benchmarks for quick correctness checks
 # Only test a few representative benchmarks to keep CI fast
 QUICK_TEST_WHITELIST = [
-    ("ch01", "baseline_ilp_basic.py"),
-    ("ch01", "optimized_ilp_basic.py"),
+    ("ch01", "baseline_ilp.py"),
+    ("ch01", "optimized_ilp.py"),
     ("ch18", "baseline_quantization.py"),
     ("ch18", "optimized_quantization.py"),
 ]
@@ -256,9 +256,9 @@ def test_benchmark_protocol_compliance():
         pytest.skip("ch01 directory not found")
     
     # Use whitelisted benchmark for the quick check
-    baseline_path = ch01_dir / "baseline_ilp_basic.py"
+    baseline_path = ch01_dir / "baseline_ilp.py"
     if not baseline_path.exists():
-        pytest.skip("baseline_ilp_basic.py not found")
+        pytest.skip("baseline_ilp.py not found")
     
     benchmark = load_benchmark(baseline_path)
     if benchmark is None:

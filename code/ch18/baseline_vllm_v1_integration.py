@@ -34,6 +34,7 @@ logger = get_logger(__name__)
 # Check for vLLM
 try:
     from vllm import LLM, SamplingParams
+    from vllm.inputs.data import TokensPrompt
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
@@ -95,10 +96,34 @@ class BaselineVLLMV1Integration:
                         f"contention from previous benchmark. Original error: {error_msg}"
                     ) from e
                 raise
-        
-        # Create prompts
+
+        if not self.use_vllm:
+            raise RuntimeError("vLLM required for this benchmark. Install with: pip install vllm")
+
+        # Build pre-tokenized prompts so CPU tokenization doesn't dominate, and so
+        # prefix caching (in the optimized variant) can skip meaningful prefill.
+        tokenizer = self.llm.get_tokenizer()
+        base_ids = tokenizer.encode("Once upon a time in a land far away, ", add_special_tokens=False)
+        if not base_ids:
+            raise RuntimeError("Tokenizer returned empty token IDs for baseline prefix")
+
+        max_prompt_len = 512 - self.max_tokens
+        suffix_ids: List[List[int]] = []
+        for i in range(self.batch_size):
+            ids = tokenizer.encode(f"there was a {i}.", add_special_tokens=False)
+            if not ids:
+                raise RuntimeError(f"Tokenizer returned empty token IDs for suffix {i}")
+            suffix_ids.append(ids)
+        max_suffix = max(len(ids) for ids in suffix_ids)
+        if max_suffix >= max_prompt_len:
+            raise RuntimeError("Suffix length exceeds max prompt length; reduce max_tokens or suffix text.")
+
+        target_prefix_len = max_prompt_len - max_suffix
+        repeats = (target_prefix_len + len(base_ids) - 1) // len(base_ids)
+        prefix_ids = (base_ids * repeats)[:target_prefix_len]
+
         self.prompts = [
-            f"Once upon a time in a land far away, there was a {i}" 
+            TokensPrompt(prompt_token_ids=prefix_ids + suffix_ids[i])
             for i in range(self.batch_size)
         ]
         
@@ -112,16 +137,11 @@ class BaselineVLLMV1Integration:
     
     def run(self) -> Dict[str, float]:
         """Execute baseline vLLM inference."""
-        if not self.use_vllm:
-            # Simulation mode - use actual model inference without vLLM optimizations
-            logger.warning("vLLM not available - benchmark requires vLLM installation")
-            raise RuntimeError("vLLM required for this benchmark. Install with: pip install vllm")
-        
         torch.cuda.synchronize()
         start = time.perf_counter()
         
         # Generate
-        outputs = self.llm.generate(self.prompts, self.sampling_params)
+        outputs = self.llm.generate(self.prompts, self.sampling_params, use_tqdm=False)
         
         torch.cuda.synchronize()
         end = time.perf_counter()
@@ -130,6 +150,8 @@ class BaselineVLLMV1Integration:
         
         # Calculate metrics
         total_tokens = sum(len(output.outputs[0].token_ids) for output in outputs)
+        first_ids = outputs[0].outputs[0].token_ids if outputs else []
+        token_ids = list(first_ids[:16])
         throughput = total_tokens / elapsed
         mean_latency_ms = (elapsed / len(self.prompts)) * 1000
         
@@ -140,6 +162,7 @@ class BaselineVLLMV1Integration:
             "mean_latency_ms": mean_latency_ms,
             "throughput_tokens_per_sec": throughput,
             "total_tokens": total_tokens,
+            "token_ids": token_ids,
         }
     
     def cleanup(self):
@@ -157,7 +180,7 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.runner = BaselineVLLMV1Integration()
         self._metrics: Dict[str, Any] = {}
         self.output: Optional[torch.Tensor] = None
-        self._ran = False
+        self._last_token_ids: Optional[torch.Tensor] = None
         self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=8.0)
 
@@ -165,24 +188,20 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.runner.setup()
         self._metrics = {}
         self.output = None
-        self._ran = False
+        self._last_token_ids = None
 
     def benchmark_fn(self) -> None:
-        if self._ran:
-            self._synchronize()
-            return
         self._metrics = self.runner.run()
-        self.output = torch.tensor(
-            [
-                float(self.runner.batch_size),
-                float(self.runner.max_tokens),
-            ],
-            dtype=torch.float32,
-        )
-        self._ran = True
+        token_ids = self._metrics.get("token_ids")
+        if token_ids is None:
+            raise RuntimeError("Runner did not return token_ids for verification")
+        self._last_token_ids = torch.as_tensor(token_ids, dtype=torch.int32)
+        self.output = self._last_token_ids
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
+        if self._last_token_ids is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={
                 "batch_size": torch.tensor(self.runner.batch_size),
@@ -192,7 +211,7 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
             batch_size=self.runner.batch_size,
             parameter_count=0,
             precision_flags={"fp16": False, "bf16": True, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.0, 0.0),
         )
 
     def teardown(self) -> None:
@@ -201,11 +220,12 @@ class BaselineVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmark
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=1,
-            warmup=0,
+            iterations=3,
+            warmup=1,
             use_subprocess=True,
             setup_timeout_seconds=600,
             measurement_timeout_seconds=600,
+            timing_method="wall_clock",
         )
 
     def get_custom_metrics(self) -> Dict[str, Any]:

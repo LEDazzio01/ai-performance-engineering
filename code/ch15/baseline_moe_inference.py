@@ -81,7 +81,7 @@ class BaselineMoeInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
             moe_layer_frequency=max(1, env_override_int("BASELINE_MOE_MOE_FREQ", 2)),
             batch_size=env_override_int("BASELINE_MOE_BATCH", 1),
             context_window=env_override_int("BASELINE_MOE_CONTEXT", 512),
-            decode_tokens=env_override_int("BASELINE_MOE_DECODE", 32),
+            decode_tokens=env_override_int("BASELINE_MOE_DECODE", 64),
             router_noise=env_override_float("BASELINE_MOE_ROUTER_NOISE", 0.0),
             dtype=torch.bfloat16,
         )
@@ -219,7 +219,14 @@ class BaselineMoeInferenceBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     # ------------------------------------------------------------------- configs
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=8, warmup=5)
+        # This benchmark optimizes end-to-end inference latency (host sync + decode loop),
+        # so we intentionally time with a CPU wall-clock timer. Both baseline and
+        # optimized variants synchronize GPU work before returning.
+        return BenchmarkConfig(
+            iterations=8,
+            warmup=5,
+            device=torch.device("cpu"),
+        )
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload_metadata

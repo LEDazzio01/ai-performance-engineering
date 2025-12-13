@@ -206,7 +206,7 @@ ENTRIES["ch01"] = chapter_entry(
     contents=[
         ("`baseline_performance.py`, `optimized_performance.py`", "Goodput-focused training loop pair that toggles pinned memory, CUDA Graphs, and tensor preallocation."),
         ("`baseline_guided_decoding.py`, `optimized_guided_decoding.py`, `baseline_guided_decoding_math.py`, `optimized_guided_decoding_math.py`", "Guided decoding microbenchmark plus math-only validator for deterministic correctness checks."),
-        ("`baseline_ilp_basic.py`, `optimized_ilp_basic.py`", "Instruction-level parallelism exercises that expose loop unrolling and register reuse benefits."),
+        ("`baseline_ilp.py`, `optimized_ilp.py`", "Instruction-level parallelism exercises that expose loop unrolling and register reuse benefits."),
         ("`baseline_warp_specialization.py`, `optimized_warp_specialization.py`", "Warp-specialized producer/consumer example that demonstrates overlapped memory movement."),
         ("`baseline_gemm.cu`, `optimized_gemm_batched.cu`, `optimized_gemm_strided.cu`", "CUDA GEMM variants (single, batched, strided) used to illustrate launch amortization and memory coalescing."),
         ("`compare.py`, `workload_config.py`, `arch_config.py`, `expectations_gb10.json`", "Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds."),
@@ -299,9 +299,9 @@ ENTRIES["ch04"] = chapter_entry(
         "Adopt symmetric memory pools to simplify KV-cache replication and optimizer state sharding.",
     ],
     contents=[
-        ("`baseline_dataparallel.py`, `optimized_dataparallel.py`, `baseline_dataparallel_basic.py`, `optimized_dataparallel_basic.py`", "Reference data-parallel loops that compare naive gradient exchange vs fused+overlapped NCCL."),
-        ("`baseline_no_overlap.py`, `optimized_no_overlap.py`, `baseline_no_overlap_basic.py`, `optimized_no_overlap_basic.py`", "Overlap studies that stage compute/comm concurrency and pipeline microbatches to hide allreduce latency."),
-        ("`baseline_nvlink.py`, `optimized_nvlink.py`, `baseline_nvlink_multigpu.py`, `optimized_nvlink_multigpu.py`, `baseline_nvlink_topology_blind.py`, `optimized_nvlink_topology_aware.py`", "NVLink and NVSwitch exercises for validating peer bandwidth and NUMA-aware rank placement."),
+        ("`baseline_dataparallel.py`, `optimized_dataparallel.py`", "Reference data-parallel loops that compare naive gradient exchange vs fused+overlapped NCCL."),
+        ("`baseline_no_overlap.py`, `optimized_no_overlap.py`", "Overlap studies that stage compute/comm concurrency and pipeline microbatches to hide allreduce latency."),
+        ("`baseline_nvlink.py`, `optimized_nvlink.py`, `baseline_nvlink_multigpu.py`, `optimized_nvlink_multigpu.py`, `baseline_nvlink_topology_aware.py`, `optimized_nvlink_topology_aware.py`", "NVLink and NVSwitch exercises for validating peer bandwidth and NUMA-aware rank placement."),
         ("`baseline_continuous_batching_multigpu.py`, `optimized_continuous_batching_multigpu.py`, `baseline_disaggregated.py`, `optimized_disaggregated.py`", "Continuous batching + disaggregated inference demos that showcase NVLink pooling and remote KV reuse."),
         ("`baseline_nvshmem_pipeline_parallel_multigpu.py`, `optimized_nvshmem_pipeline_parallel_multigpu.py`, `baseline_nvshmem_training_example_multigpu.py`, `optimized_nvshmem_training_example_multigpu.py`", "NVSHMEM pipeline and training samples highlighting device-driven synchronization benefits."),
         ("`baseline_symmetric_memory_multigpu.py`, `optimized_symmetric_memory_multigpu.py`, `baseline_symmetric_memory_perf.py`, `optimized_symmetric_memory_perf.py`", "Symmetric memory utilities for distributed KV cache and optimizer shards."),
@@ -566,7 +566,7 @@ ENTRIES["ch12"] = chapter_entry(
         ("`baseline_dynamic_parallelism_host.cu`, `baseline_dynamic_parallelism_device.cu`, `optimized_dynamic_parallelism_host.cu`, `optimized_dynamic_parallelism_device.cu`, `dynamic_parallelism_sm121/`", "Device-side launch samples showing when dynamic parallelism helps or hurts."),
         ("`baseline_work_queue.{py,cu}`, `optimized_work_queue.{py,cu}`, `work_queue_common.cuh`", "GPU work queues for irregular batch sizes, including NVTX instrumentation."),
         ("`baseline_uneven_partition.cu`, `optimized_uneven_partition.cu`, `baseline_uneven_static.cu`, `optimized_uneven_static.cu`", "Uneven workload partitioners that rebalance CTA assignments at runtime."),
-        ("`baseline_kernel_fusion.{py,cu}`, `optimized_kernel_fusion.{py,cu}`", "Kernel fusion exercises within graph capture so you can remove CPU synchronization entirely."),
+        ("`baseline_kernel_fusion.py`, `optimized_kernel_fusion.py`, `kernel_fusion_cuda_demo.cu`", "Kernel fusion exercises within graph capture so you can remove CPU synchronization entirely. (`kernel_fusion_cuda_demo.cu` is a standalone tool; not a benchmark target.)"),
         ("`compare.py`, `cuda_extensions/`, `expectations_gb10.json`", "Harness entry, extension stubs, and expectation thresholds."),
     ],
     validation=[
@@ -597,7 +597,7 @@ ENTRIES["ch13"] = chapter_entry(
         ("`baseline_training_standard.py`, `optimized_training_standard.py`, `train.py`, `train_deepseek_v3.py`, `train_deepseek_coder.py`", "Reference training loops showcasing eager vs compiled paths and DeepSeek-inspired configs."),
         ("`baseline_dataloader_default.py`, `optimized_dataloader_default.py`, `baseline_memory_profiling.py`, `optimized_memory_profiling.py`, `memory_profiling.py`", "DataLoader/memory studies that explain how to read allocator stats and fix leaks."),
         ("`baseline_attention_standard.py`, `optimized_attention_standard.py`, `baseline_arithmetic_intensity.py`, `optimized_arithmetic_intensity.py`, `baseline_matmul_pytorch.py`, `optimized_matmul_pytorch.py`", "Attention and matmul microbenchmarks tuned purely within PyTorch."),
-        ("`baseline_context_parallelism.py`, `optimized_context_parallelism.py`, `baseline_expert_parallelism.py`, `optimized_expert_parallelism.py`, `fsdp_example.py`", "Context, expert, and FSDP sharding demos for scaling beyond a single GPU."),
+        ("`context_parallelism.py`, `fsdp_example.py`", "Context and FSDP sharding demos for scaling beyond a single GPU. (Tools; not benchmark targets.)"),
         ("`baseline_precisionfp8*.py`, `optimized_precisionfp8*.py`, `baseline_precisionmixed.py`, `optimized_precisionmixed.py`, `compiled_autograd.py`", "Precision-management suites covering Transformer Engine and compiled autograd recipes."),
         ("`baseline_quantization.py`, `optimized_quantization.py`, `baseline_kv_cache_naive.py`, `optimized_kv_cache.py`", "Quantization and KV-cache pipelines for inference/training memory savings."),
         ("`compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_gb10.json`, `workload_config.py`", "Harness entry, performance comparison helper, dependencies, and regression baselines."),
@@ -984,13 +984,13 @@ ENTRIES["labs/flexattention"] = lab_entry(
     ],
     contents=[
         ("`baseline_flex_attention.py`, `optimized_flex_attention.py`", "FlexAttention DSL workloads toggling `torch.compile` for fused kernels."),
-        ("`baseline_flex_attention_cute.py`, `optimized_flex_attention_cute.py`", "CuTe/FlashAttention versions for hardware without FlexAttention support."),
-        ("`flexattention_common.py`, `expectations_gb10.json`", "Shared input builders, score modifiers, and regression thresholds."),
+        ("`flex_attention_cute.py`", "CuTe/FlashAttention tool for hardware without FlexAttention bindings."),
+        ("`flexattention_common.py`, `expectations_b200.json`", "Shared input builders, score modifiers, and regression thresholds."),
     ],
     validation=[
         "`python cli/aisp.py bench run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.",
         "`BLOCK_SIZE=64 DOC_SPAN=128 python cli/aisp.py bench run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.",
-        "`python cli/aisp.py bench run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.",
+        "`python -m cli.aisp tools flex-attention-cute -- --batch 2 --seq-len 1024` succeeds even on systems missing FlexAttention bindings.",
     ],
     notes=[
         "Environment variables such as `BLOCK_SIZE`, `DOC_SPAN`, and `TORCH_COMPILE_MODE` are read at runtime for quick experiments.",

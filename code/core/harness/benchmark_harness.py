@@ -29,6 +29,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union, cast
 
 import numpy as np
@@ -457,6 +458,14 @@ class BenchmarkConfig:
     full_device_sync: bool = field(default_factory=lambda: _get_default_value("full_device_sync", True))
     """Use torch.cuda.synchronize() instead of event.synchronize() for stream-safe timing.
     Critical for protecting against multi-stream timing exploits (see Locus/KernelBench 2025)."""
+
+    timing_method: str = field(default_factory=lambda: _get_default_value("timing_method", "cuda_event"))
+    """Timing method for CUDA benchmarks.
+
+    - "cuda_event" (default): Use CUDA events for device-side timing.
+    - "wall_clock": Use host wall clock timing + full device sync. Prefer this for
+      workloads that launch work on non-default streams (e.g., framework runtimes).
+    """
     
     grad_to_none: Optional[List[str]] = field(default_factory=lambda: _get_default_value("grad_to_none", None))
     """List of tensor attribute names to clear gradients for between iterations."""
@@ -727,6 +736,56 @@ class BenchmarkConfig:
         if changes:
             return False, f"Timing config modified during execution: {'; '.join(changes)}"
         return True, None
+
+
+def _freeze_benchmark_config_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({k: _freeze_benchmark_config_value(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_benchmark_config_value(v) for v in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze_benchmark_config_value(v) for v in value)
+    if isinstance(value, set):
+        return frozenset(_freeze_benchmark_config_value(v) for v in value)
+    return value
+
+
+class ReadOnlyBenchmarkConfigView:
+    """Read-only view of BenchmarkConfig exposed to benchmark code.
+
+    Benchmarks MUST NOT mutate harness configuration at runtime. The harness
+    passes this view via ``benchmark._config`` so that accidental or intentional
+    mutation attempts fail fast without affecting harness behavior.
+    """
+
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Dict[str, Any]) -> None:
+        object.__setattr__(self, "_values", values)
+
+    @classmethod
+    def from_config(cls, config: "BenchmarkConfig") -> "ReadOnlyBenchmarkConfigView":
+        values: Dict[str, Any] = {}
+        for key, value in config.__dict__.items():
+            if str(key).startswith("_"):
+                continue
+            values[str(key)] = _freeze_benchmark_config_value(value)
+        return cls(values)
+
+    def __getattr__(self, name: str) -> Any:
+        values = object.__getattribute__(self, "_values")
+        if name in values:
+            return values[name]
+        raise AttributeError(f"{self.__class__.__name__} has no attribute {name!r}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError(
+            "Benchmark config is read-only during execution. "
+            "Override get_config() to return desired config values."
+        )
+
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}({dict(object.__getattribute__(self, '_values'))!r})"
 
 
 @dataclass
@@ -1237,11 +1296,9 @@ class BenchmarkHarness:
             torch.manual_seed(seed)
             seed_info["random_seed"] = seed
             seed_info["numpy_seed"] = seed
-            seed_info["torch_seed"] = seed
             
             if torch.cuda.is_available():
                 torch.cuda.manual_seed_all(seed)
-                seed_info["cuda_seed"] = seed
             
             if LOGGER_AVAILABLE:
                 logger.info(f"Seeds set to {seed} (random, numpy, torch, cuda)")
@@ -1252,7 +1309,19 @@ class BenchmarkHarness:
                 "Deterministic mode enabled (may impact performance by 5-20%). "
                 "This ensures bitwise reproducibility, but forces slower fallback kernels and ops without deterministic support may raise."
             )
-        
+
+        # Always capture current seeds for mutation detection, even if we did not explicitly seed.
+        try:
+            seed_info["torch_seed"] = int(torch.initial_seed())
+        except Exception as exc:
+            raise RuntimeError("Failed to read torch.initial_seed() for seed tracking") from exc
+
+        if torch.cuda.is_available():
+            try:
+                seed_info["cuda_seed"] = int(torch.cuda.initial_seed())
+            except Exception as exc:
+                raise RuntimeError("Failed to read torch.cuda.initial_seed() for seed tracking") from exc
+
         return seed_info
 
     @contextmanager
@@ -1482,7 +1551,30 @@ class BenchmarkHarness:
         script_args.extend(_config_args_from_map())
         script_args.extend(extra_args)
 
-        full_cmd = torchrun_cmd + [str(spec.script_path)] + script_args
+        wrapper_script = Path(__file__).resolve().with_name("torchrun_wrapper.py")
+        if not wrapper_script.exists():
+            raise RuntimeError(f"Missing torchrun wrapper script: {wrapper_script}")
+
+        expected_torch_seed = getattr(self, "_seed_info", {}).get("torch_seed")
+        if expected_torch_seed is None:
+            raise RuntimeError("Missing expected torch seed for torchrun enforcement")
+
+        wrapper_args: List[str] = [
+            "--aisp-target-script",
+            str(Path(spec.script_path).resolve()),
+            "--aisp-expected-torch-seed",
+            str(int(expected_torch_seed)),
+        ]
+        if getattr(config, "deterministic", False):
+            wrapper_args.append("--aisp-deterministic")
+
+        if torch.cuda.is_available():
+            expected_cuda_seed = getattr(self, "_seed_info", {}).get("cuda_seed")
+            if expected_cuda_seed is None:
+                raise RuntimeError("Missing expected CUDA seed for torchrun enforcement")
+            wrapper_args.extend(["--aisp-expected-cuda-seed", str(int(expected_cuda_seed))])
+
+        full_cmd = torchrun_cmd + [str(wrapper_script)] + wrapper_args + script_args
         print(f"[harness] torchrun cmd: {' '.join(full_cmd)}", flush=True)
 
         env = os.environ.copy()
@@ -1526,10 +1618,32 @@ class BenchmarkHarness:
                 )
             elapsed = time.time() - start
             if process.returncode != 0:
-                preview = stderr.strip().splitlines()[-5:] if stderr else []
+                stderr_lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
                 errors.append(f"torchrun exited with code {process.returncode}")
-                if preview:
-                    errors.append("stderr: " + " | ".join(preview))
+                if stderr_lines:
+                    # Prefer showing the root-cause message (e.g., seed mutation) instead of only the
+                    # torchrun elastic summary tail.
+                    interesting = [
+                        line
+                        for line in stderr_lines
+                        if "seed mutation detected" in line.lower()
+                        or "cuda seed mutation detected" in line.lower()
+                    ]
+                    if interesting:
+                        # Add the first few matching lines (deduped) for clarity.
+                        seen: set[str] = set()
+                        for line in interesting:
+                            key = line.lower()
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            errors.append(line)
+                            if len(seen) >= 3:
+                                break
+
+                    tail = stderr_lines[-8:]
+                    if tail:
+                        errors.append("stderr_tail: " + " | ".join(tail))
         except FileNotFoundError:
             raise RuntimeError("SKIPPED: torchrun not found in PATH.")
 
@@ -1734,8 +1848,6 @@ class BenchmarkHarness:
         print(f"[harness] execution_mode={config.execution_mode} launch_via={config.launch_via}", flush=True)
         
         previous_config = getattr(benchmark, "_config", None)
-        # Make merged config visible to benchmarks that need per-target args.
-        benchmark._config = config  # type: ignore[attr-defined]
 
         # Fail-fast compliance gate for perf path
         if not callable_wrapped and isinstance(benchmark, BaseBenchmark):
@@ -1763,6 +1875,10 @@ class BenchmarkHarness:
         # or where the config was created before __post_init__ could fix it
         if config.percentiles is None or not isinstance(config.percentiles, list):
             config.percentiles = [25, 50, 75, 99]
+
+        # Make merged config visible to benchmarks, but prevent runtime mutation.
+        # Benchmarks read this via get_config() / self._config.
+        benchmark._config = ReadOnlyBenchmarkConfigView.from_config(config)  # type: ignore[attr-defined]
         
         gpu_mem_logger: Optional[GpuMemoryLogger] = None
         if should_enable_gpu_memory_logging(getattr(config, "enable_gpu_memory_logging", False)):
@@ -2111,8 +2227,12 @@ class BenchmarkHarness:
                 # Parse JSON result from isolated runner
                 try:
                     # Strip any non-JSON prefix (e.g., compilation messages from CUDA extensions)
-                    # that may be printed before the JSON output
-                    json_start = stdout.find('{')
+                    # that may be printed before the JSON output. Prefer the final JSON payload
+                    # emitted by isolated_runner (starts with {"success": ...}) because other
+                    # libraries may print Python dicts containing '{' on stdout.
+                    json_start = stdout.rfind('{"success"')
+                    if json_start < 0:
+                        json_start = stdout.find('{')
                     if json_start > 0:
                         # There's content before JSON - store it for debugging but parse only JSON
                         prefix = stdout[:json_start].strip()
@@ -2550,6 +2670,17 @@ class BenchmarkHarness:
             
             with execution_lock:  # Acquire lock during execution
                 try:
+                    def _init_cuda_for_worker_thread() -> None:
+                        if not torch.cuda.is_available():
+                            return
+                        target_device = self.device if isinstance(self.device, torch.device) else None
+                        if target_device is None or target_device.type != "cuda":
+                            target_device = torch.device("cuda")
+                        device_index = target_device.index if target_device.index is not None else 0
+                        torch.cuda.init()
+                        torch.cuda.set_device(device_index)
+                        torch.cuda.synchronize(device_index)
+
                     # Ensure the CUDA primary context exists before any kernels run.
                     if torch.cuda.is_available():
                         torch.cuda.init()
@@ -2572,6 +2703,13 @@ class BenchmarkHarness:
 
                     # Apply per-target CLI overrides (e.g., backend selection) before setup.
                     self._apply_target_overrides(benchmark, config)
+
+                    # Clear torch.compile caches BEFORE setup/warmup so compilation
+                    # overhead cannot leak into measured iterations.
+                    if getattr(config, "clear_compile_cache", False):
+                        from core.harness.validity_checks import clear_compile_cache as _clear_compile_cache
+
+                        _clear_compile_cache()
 
                     # Setup - this may include CUDA extension compilation OR torch.compile()
                     # IMPORTANT: Setup can hang, so we need actual timeout enforcement
@@ -2603,6 +2741,7 @@ class BenchmarkHarness:
                         
                         def run_setup():
                             try:
+                                _init_cuda_for_worker_thread()
                                 _run_setup_with_detection()
                                 setup_complete.set()
                             except Exception as e:
@@ -2671,6 +2810,7 @@ class BenchmarkHarness:
                         
                         def run_warmup():
                             try:
+                                _init_cuda_for_worker_thread()
                                 start_stage('warmup')
                                 self._warmup(benchmark.benchmark_fn, config.warmup, config)
                                 finish_stage('warmup')
@@ -2753,6 +2893,7 @@ class BenchmarkHarness:
                                         
                                         def run_profiling():
                                             try:
+                                                _init_cuda_for_worker_thread()
                                                 # Wrap _benchmark_without_profiling to match expected signature
                                                 def timing_wrapper(fn: Callable, cfg: BenchmarkConfig) -> List[float]:
                                                     times, _ = self._benchmark_without_profiling(fn, cfg)
@@ -3361,9 +3502,8 @@ class BenchmarkHarness:
             reset_cuda_memory_pool(self.device)
         
         # 2. Clear torch.compile cache for consistent compilation state
-        if getattr(config, 'clear_compile_cache', False):
-            clear_compile_cache()
-        
+        # NOTE: compile caches are cleared before setup/warmup in BenchmarkHarness.benchmark().
+
         # 3. Capture GPU state before benchmark (for consistency check)
         gpu_state_before = None
         if getattr(config, 'monitor_gpu_state', True) and self.device.type == "cuda":
@@ -3378,10 +3518,19 @@ class BenchmarkHarness:
         is_cuda = self.device.type == "cuda"
         
         if is_cuda:
+            timing_method = getattr(config, "timing_method", "cuda_event")
+            if timing_method not in {"cuda_event", "wall_clock"}:
+                raise RuntimeError(
+                    f"Invalid timing_method '{timing_method}'. "
+                    "Expected 'cuda_event' or 'wall_clock'."
+                )
+            if timing_method == "wall_clock" and not getattr(config, "full_device_sync", True):
+                raise RuntimeError("timing_method='wall_clock' requires full_device_sync=True.")
+            use_cuda_events = timing_method == "cuda_event"
             # Use CUDA Events for accurate GPU timing
             # Create events once - reuse across iterations (efficient)
-            start_event = torch.cuda.Event(enable_timing=True)
-            end_event = torch.cuda.Event(enable_timing=True)
+            start_event = torch.cuda.Event(enable_timing=True) if use_cuda_events else None
+            end_event = torch.cuda.Event(enable_timing=True) if use_cuda_events else None
             
             # L2 cache clearing buffer (Triton best practice)
             # See: https://github.com/triton-lang/triton/blob/main/python/triton/testing.py
@@ -3454,7 +3603,8 @@ class BenchmarkHarness:
                 wall_start = time.perf_counter()
                 
                 # Record start event (non-blocking)
-                start_event.record()
+                if start_event is not None:
+                    start_event.record()
                 
                 result = None
                 
@@ -3471,7 +3621,8 @@ class BenchmarkHarness:
                         result = fn()
                 
                 # Record end event (non-blocking)
-                end_event.record()
+                if end_event is not None:
+                    end_event.record()
                 
                 # CRITICAL: Full device sync vs event sync (Triton/Locus best practice)
                 # event.synchronize() only waits for operations on the stream where the event was recorded.
@@ -3488,7 +3639,10 @@ class BenchmarkHarness:
                 wall_elapsed_ms = (wall_end - wall_start) * 1000
                 wall_clock_times_ms.append(wall_elapsed_ms)
                 
-                elapsed_ms = start_event.elapsed_time(end_event)
+                if start_event is not None and end_event is not None:
+                    elapsed_ms = start_event.elapsed_time(end_event)
+                else:
+                    elapsed_ms = wall_elapsed_ms
                 if use_cuda_graph and cuda_graph_captured and cuda_graph is not None and graph_cheat_detector is not None:
                     try:
                         graph_cheat_detector.end_replay(elapsed_ms)
@@ -3703,7 +3857,12 @@ class BenchmarkHarness:
             # Flag anomalies where CUDA events report much less time than wall clock
             # (this could indicate timing manipulation or missing stream sync)
             timing_cross_validation_ratio = None
-            if getattr(config, 'cross_validate_timing', True) and wall_clock_times_ms and times_ms:
+            if (
+                timing_method == "cuda_event"
+                and getattr(config, 'cross_validate_timing', True)
+                and wall_clock_times_ms
+                and times_ms
+            ):
                 cuda_median = sorted(times_ms)[len(times_ms) // 2]
                 wall_median = sorted(wall_clock_times_ms)[len(wall_clock_times_ms) // 2]
                 
@@ -3776,6 +3935,27 @@ class BenchmarkHarness:
                     "Benchmarks must not modify warmup/iterations during execution. "
                     "Set enforce_config_immutability=False to disable this check (not recommended)."
                 )
+
+        # Detect RNG seed mutation during performance runs.
+        expected_torch_seed = getattr(self, "_seed_info", {}).get("torch_seed")
+        if expected_torch_seed is not None:
+            current_seed = int(torch.initial_seed())
+            if current_seed != expected_torch_seed:
+                raise RuntimeError(
+                    "Seed mutation detected during benchmark execution. "
+                    f"Expected torch.initial_seed()={expected_torch_seed}, got {current_seed}. "
+                    "Benchmarks MUST NOT reseed during setup/warmup/measurement; rely on harness-configured seeds."
+                )
+        if torch.cuda.is_available():
+            expected_cuda_seed = getattr(self, "_seed_info", {}).get("cuda_seed")
+            if expected_cuda_seed is not None:
+                current_cuda_seed = int(torch.cuda.initial_seed())
+                if current_cuda_seed != expected_cuda_seed:
+                    raise RuntimeError(
+                        "CUDA seed mutation detected during benchmark execution. "
+                        f"Expected torch.cuda.initial_seed()={expected_cuda_seed}, got {current_cuda_seed}. "
+                        "Benchmarks MUST NOT reseed during setup/warmup/measurement; rely on harness-configured seeds."
+                    )
         
         # ===== VALIDITY PROTECTIONS (Post-benchmark) =====
         # Check GPU state consistency to detect throttling/thermal issues

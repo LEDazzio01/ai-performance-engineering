@@ -178,6 +178,13 @@ class BaselineKVStandard(VerificationPayloadMixin, BaseBenchmark):
         """Memory optimization - lower memory usage is better."""
         return "memory"
 
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=10,
+            warmup=5,
+            enable_memory_tracking=True,
+        )
+
     def teardown(self):
         """Clean up."""
         del self.kv_cache

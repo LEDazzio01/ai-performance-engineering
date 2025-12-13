@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <vector>
 #include <numeric>
+#include <chrono>
+#include "../core/common/headers/cuda_verify.cuh"
 
 namespace {
 constexpr int TILE = 32;
@@ -59,25 +61,30 @@ __global__ void simple_warp_specialized_kernel(const float* __restrict__ A,
 }
 
 void run_optimized() {
-    constexpr int batches = 32;
+    constexpr int batches = 4096;
     constexpr int num_streams = 3;
     const size_t bytes = TILE_ELEMS * sizeof(float);
 
-    std::vector<float> h_A(batches * TILE_ELEMS);
-    std::vector<float> h_B(batches * TILE_ELEMS);
-    std::vector<float> h_C(batches * TILE_ELEMS);
-    std::iota(h_A.begin(), h_A.end(), 0.0f);
-    std::iota(h_B.begin(), h_B.end(), 1.0f);
+    // Use pinned host memory so H2D/D2H can overlap with compute.
+    float* h_A = nullptr;
+    float* h_B = nullptr;
+    float* h_C = nullptr;
+    cudaMallocHost(&h_A, static_cast<size_t>(batches) * TILE_ELEMS * sizeof(float));
+    cudaMallocHost(&h_B, static_cast<size_t>(batches) * TILE_ELEMS * sizeof(float));
+    cudaMallocHost(&h_C, static_cast<size_t>(batches) * TILE_ELEMS * sizeof(float));
+    for (int i = 0; i < batches * TILE_ELEMS; ++i) {
+        h_A[i] = static_cast<float>(i);
+        h_B[i] = static_cast<float>(i + 1);
+        h_C[i] = 0.0f;
+    }
 
     cudaStream_t streams[num_streams];
     for (int i = 0; i < num_streams; ++i) {
         cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
     }
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
+    cudaDeviceSynchronize();
+    const auto start = std::chrono::high_resolution_clock::now();
 
     for (int b = 0; b < batches; ++b) {
         cudaStream_t st = streams[b % num_streams];
@@ -86,37 +93,32 @@ void run_optimized() {
         cudaMallocAsync(&dB, bytes, st);
         cudaMallocAsync(&dC, bytes, st);
 
-        cudaMemcpyAsync(dA, h_A.data() + b * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
-        cudaMemcpyAsync(dB, h_B.data() + b * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync(dA, h_A + static_cast<size_t>(b) * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
+        cudaMemcpyAsync(dB, h_B + static_cast<size_t>(b) * TILE_ELEMS, bytes, cudaMemcpyHostToDevice, st);
 
         simple_warp_specialized_kernel<<<1, THREADS, 3 * bytes, st>>>(dA, dB, dC);
-        simple_warp_specialized_kernel<<<1, THREADS, 3 * bytes, st>>>(dC, dA, dB);
 
-        cudaMemcpyAsync(h_C.data() + b * TILE_ELEMS, dC, bytes, cudaMemcpyDeviceToHost, st);
+        cudaMemcpyAsync(h_C + static_cast<size_t>(b) * TILE_ELEMS, dC, bytes, cudaMemcpyDeviceToHost, st);
 
         cudaFreeAsync(dA, st);
         cudaFreeAsync(dB, st);
         cudaFreeAsync(dC, st);
     }
 
-    for (int i = 0; i < num_streams; ++i) {
-        cudaStreamSynchronize(streams[i]);
-    }
-
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, start, stop);
+    cudaDeviceSynchronize();
+    const auto stop = std::chrono::high_resolution_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
 
     double checksum = 0.0;
-    for (float v : h_C) checksum += v;
+    for (int i = 0; i < batches * TILE_ELEMS; ++i) checksum += h_C[i];
 
-    printf("optimized_warp_specialized_multistream: %.3f ms, checksum %.3f\n",
-           ms, checksum / h_C.size());
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    const float verify_checksum = static_cast<float>(checksum);
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
+    printf("TIME_MS: %.3f\n", ms);
     for (int i = 0; i < num_streams; ++i) cudaStreamDestroy(streams[i]);
+    cudaFreeHost(h_A);
+    cudaFreeHost(h_B);
+    cudaFreeHost(h_C);
 }
 }  // namespace
 

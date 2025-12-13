@@ -35,6 +35,7 @@ logger = get_logger(__name__)
 # Check for vLLM
 try:
     from vllm import LLM, SamplingParams
+    from vllm.inputs.data import TokensPrompt
     VLLM_AVAILABLE = True
 except ImportError:
     VLLM_AVAILABLE = False
@@ -67,29 +68,53 @@ class OptimizedVLLMV1Integration:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         if self.use_vllm:
-            # Optimized: CUDA graphs enabled, prefix caching, chunked prefill
+            import gc
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+            # Optimized: CUDA graphs enabled + prefix caching (workload remains identical).
             self.llm = LLM(
                 model=self.model_name,
                 enforce_eager=False,  # Enable CUDA graphs
-                enable_prefix_caching=True,  # Enable prefix caching
+                enable_prefix_caching=True,
                 enable_chunked_prefill=self.enable_chunked_prefill,
-                max_num_batched_tokens=8192,  # Optimize for throughput
-                max_num_seqs=256,  # Higher concurrent sequences
-                gpu_memory_utilization=0.9,  # Use more GPU memory
+                gpu_memory_utilization=0.7,  # Match baseline to keep memory pressure comparable
                 dtype="bfloat16",
-                # Blackwell-specific optimizations
-                kv_cache_dtype="fp8_e4m3" if torch.cuda.is_available() else "auto",
+                tensor_parallel_size=1,
+                max_model_len=512,
             )
             
             logger.info(f"Loaded model: {self.model_name}")
             logger.info("Optimized config: CUDA graphs, prefix caching, chunked prefill")
-            if torch.cuda.is_available():
-                logger.info("Using FP8 KV cache for Blackwell")
-        
-        # Create prompts with common prefix for caching
-        common_prefix = "Once upon a time in a land far away, "
+
+        if not self.use_vllm:
+            raise RuntimeError("vLLM required for this benchmark. Install with: pip install vllm")
+
+        tokenizer = self.llm.get_tokenizer()
+        base_ids = tokenizer.encode("Once upon a time in a land far away, ", add_special_tokens=False)
+        if not base_ids:
+            raise RuntimeError("Tokenizer returned empty token IDs for prefix")
+
+        max_prompt_len = 512 - self.max_tokens
+        suffix_ids: List[List[int]] = []
+        for i in range(self.batch_size):
+            ids = tokenizer.encode(f"there was a {i}.", add_special_tokens=False)
+            if not ids:
+                raise RuntimeError(f"Tokenizer returned empty token IDs for suffix {i}")
+            suffix_ids.append(ids)
+        max_suffix = max(len(ids) for ids in suffix_ids)
+        if max_suffix >= max_prompt_len:
+            raise RuntimeError("Suffix length exceeds max prompt length; reduce max_tokens or suffix text.")
+
+        target_prefix_len = max_prompt_len - max_suffix
+        repeats = (target_prefix_len + len(base_ids) - 1) // len(base_ids)
+        prefix_ids = (base_ids * repeats)[:target_prefix_len]
+
         self.prompts = [
-            f"{common_prefix}there was a {i}" 
+            TokensPrompt(prompt_token_ids=prefix_ids + suffix_ids[i])
             for i in range(self.batch_size)
         ]
         
@@ -103,16 +128,11 @@ class OptimizedVLLMV1Integration:
     
     def run(self) -> Dict[str, float]:
         """Execute optimized vLLM inference."""
-        if not self.use_vllm:
-            # vLLM required for this benchmark
-            logger.warning("vLLM not available - benchmark requires vLLM installation")
-            raise RuntimeError("vLLM required for this benchmark. Install with: pip install vllm")
-        
         torch.cuda.synchronize()
         start = time.perf_counter()
         
         # Generate (CUDA graphs will be used after warmup)
-        outputs = self.llm.generate(self.prompts, self.sampling_params)
+        outputs = self.llm.generate(self.prompts, self.sampling_params, use_tqdm=False)
         
         torch.cuda.synchronize()
         end = time.perf_counter()
@@ -121,6 +141,8 @@ class OptimizedVLLMV1Integration:
         
         # Calculate metrics
         total_tokens = sum(len(output.outputs[0].token_ids) for output in outputs)
+        first_ids = outputs[0].outputs[0].token_ids if outputs else []
+        token_ids = list(first_ids[:16])
         throughput = total_tokens / elapsed
         mean_latency_ms = (elapsed / len(self.prompts)) * 1000
         
@@ -131,6 +153,7 @@ class OptimizedVLLMV1Integration:
             "mean_latency_ms": mean_latency_ms,
             "throughput_tokens_per_sec": throughput,
             "total_tokens": total_tokens,
+            "token_ids": token_ids,
         }
     
     def cleanup(self):
@@ -148,7 +171,7 @@ class OptimizedVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.runner = OptimizedVLLMV1Integration()
         self._metrics: Dict[str, Any] = {}
         self.output: Optional[torch.Tensor] = None
-        self._ran = False
+        self._last_token_ids: Optional[torch.Tensor] = None
         self._verification_payload = None
         self.register_workload_metadata(requests_per_iteration=8.0)
 
@@ -156,25 +179,21 @@ class OptimizedVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.runner.setup()
         self._metrics = {}
         self.output = None
-        self._ran = False
+        self._last_token_ids = None
 
     def benchmark_fn(self) -> None:
         """Entry point used by the harness warmup/iteration loops."""
-        if self._ran:
-            self._synchronize()
-            return
-        self._metrics = self.run()
-        self.output = torch.tensor(
-            [
-                float(self.runner.batch_size),
-                float(self.runner.max_tokens),
-            ],
-            dtype=torch.float32,
-        )
-        self._ran = True
+        self._metrics = self.runner.run()
+        token_ids = self._metrics.get("token_ids")
+        if token_ids is None:
+            raise RuntimeError("Runner did not return token_ids for verification")
+        self._last_token_ids = torch.as_tensor(token_ids, dtype=torch.int32)
+        self.output = self._last_token_ids
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
+        if self._last_token_ids is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={
                 "batch_size": torch.tensor(self.runner.batch_size),
@@ -184,21 +203,8 @@ class OptimizedVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmar
             batch_size=self.runner.batch_size,
             parameter_count=0,
             precision_flags={"fp16": False, "bf16": True, "fp8": False, "tf32": torch.backends.cuda.matmul.allow_tf32},
-            output_tolerance=(0.1, 1.0),
+            output_tolerance=(0.0, 0.0),
         )
-
-    def teardown(self) -> None:
-        self.runner.cleanup()
-        super().teardown()
-
-    def run(self) -> Dict[str, Any]:
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        metrics = self.runner.run()
-        torch.cuda.synchronize()
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        self._metrics = {"latency_ms": elapsed_ms, **metrics}
-        return self._metrics
 
     def teardown(self) -> None:
         self.runner.cleanup()
@@ -206,11 +212,12 @@ class OptimizedVLLMV1IntegrationBenchmark(VerificationPayloadMixin, BaseBenchmar
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=1,
-            warmup=0,
+            iterations=3,
+            warmup=1,
             use_subprocess=True,
             setup_timeout_seconds=600,
             measurement_timeout_seconds=600,
+            timing_method="wall_clock",
         )
 
     def get_workload_metadata(self) -> WorkloadMetadata | None:

@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "../core/common/headers/arch_detection.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 #include "../core/common/headers/tma_helpers.cuh"
 
 #if CUDART_VERSION >= 13000
@@ -396,7 +397,6 @@ int main(int argc, char** argv) {
             tma_2d_pipeline_kernel<64, 32, 1><<<grid, block>>>(in_desc, out_desc, d_out, M, N, N);
         }
         check_cuda(cudaGetLastError(), "tma_2d_pipeline_kernel launch");
-        check_cuda(cudaDeviceSynchronize(), "tma kernel sync");
     };
 
     auto launch_baseline = [&](const PipelineOption& option) {
@@ -410,7 +410,6 @@ int main(int argc, char** argv) {
             tma_2d_pipeline_baseline_kernel<64, 32><<<grid, block>>>(d_in, d_out, M, N, N, N);
         }
         check_cuda(cudaGetLastError(), "tma_2d_pipeline_baseline launch");
-        check_cuda(cudaDeviceSynchronize(), "baseline pipeline sync");
     };
 
     // Warmup
@@ -419,13 +418,14 @@ int main(int argc, char** argv) {
     } else {
         launch_baseline(baseline_option);
     }
+    check_cuda(cudaDeviceSynchronize(), "warmup sync");
     
     // Benchmark TMA vs baseline
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     
-    const int iterations = 50;
+    const int iterations = 3;
     
     // Benchmark TMA path
     float tma_ms = 0;
@@ -465,11 +465,25 @@ int main(int argc, char** argv) {
     } else {
         std::printf("Speedup: 1.00x (TMA disabled)\n");
     }
+    // Emit a single, authoritative timing line for the Python harness.
+    // In baseline-only mode (or when TMA is unavailable), report baseline_ms.
+    const float selected_ms = (enable_tma && tma_ms > 0.0f) ? tma_ms : baseline_ms;
+    std::printf("TIME_MS: %.6f\n", selected_ms);
 
     std::vector<float> h_out(TILE_M * tile_width);
     check_cuda(cudaMemcpy(h_out.data(), d_out, h_out.size() * sizeof(float), cudaMemcpyDeviceToHost), "copy sample");
 
     std::printf("Sample output element: %.2f -> %.2f\n", h_in[0], h_out[0]);
+
+#ifdef VERIFY
+    std::vector<float> h_verify(static_cast<std::size_t>(M) * N);
+    check_cuda(cudaMemcpy(h_verify.data(), d_out, bytes, cudaMemcpyDeviceToHost), "copy output verify");
+    double checksum = 0.0;
+    for (float v : h_verify) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     cudaFree(d_in);
     cudaFree(d_out);

@@ -18,7 +18,7 @@ from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.utils.compile_utils import compile_model, enable_tf32
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
-from labs.moe_cuda.optimized_router_vectorized import VectorizedTopKMoE
+from labs.moe_cuda.optimized_router_vectorized import GroupedTopKMoE
 
 
 class AdaptiveTopKMoE(nn.Module):
@@ -144,7 +144,7 @@ class OptimizedRouterTopKBenchmark(VerificationPayloadMixin, BaseBenchmark):
         enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
+        model = GroupedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
         model = model.to(self.device, dtype=torch.bfloat16)
         model.eval()
         
@@ -172,16 +172,17 @@ class OptimizedRouterTopKBenchmark(VerificationPayloadMixin, BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_router_topk", enable=enable_nvtx):
             with torch.inference_mode():
-                out = self.model(self.inputs)
-                self.output = out.detach().float().clone()
+                self.output = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
 
     def capture_verification_payload(self) -> None:
+        if self.inputs is None or self.output is None or self.model is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"input": self.inputs.detach()},
-            output=self.output,
+            output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},

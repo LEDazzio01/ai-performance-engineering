@@ -1,4 +1,9 @@
-"""baseline_kv_cache_management.py - Baseline KV cache without management."""
+"""baseline_kv_cache_management.py - Baseline KV cache decode without reuse.
+
+This baseline models a naive decode loop that recomputes K/V projections for the
+entire prefix on every step (no KV cache reuse). The optimized variant reuses
+cached projected K/V and only projects the newly appended token each step.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +11,14 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
 class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Baseline: recomputes KV every step (no cache reuse)."""
+    """Baseline: recompute prefix K/V every decode step (no cache reuse)."""
     
     def __init__(self):
         super().__init__()
@@ -20,9 +26,10 @@ class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.k_proj: Optional[nn.Linear] = None
         self.v_proj: Optional[nn.Linear] = None
         self.out_proj: Optional[nn.Linear] = None
-        self.inputs: Optional[list[torch.Tensor]] = None
+        self.tokens: Optional[torch.Tensor] = None
         self.hidden_dim = 256
         self.num_heads = 8
+        self.head_dim = self.hidden_dim // self.num_heads
         self.batch_size = 8
         self.steps = 32
         tokens = self.batch_size * self.steps
@@ -47,37 +54,48 @@ class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device, dtype=torch.bfloat16)
         for module in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
             module.eval()
-        
-        self.inputs = [
-            torch.randn(self.batch_size, 1, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-            for _ in range(self.steps)
-        ]
+
+        self.tokens = torch.randn(
+            self.batch_size,
+            self.steps,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
         self._synchronize()
-        self._verify_input = self.inputs[0].detach()
+        self._verify_input = self.tokens.detach()
     
     def benchmark_fn(self) -> None:
         """Benchmark: KV cache without management."""
         assert self.q_proj is not None and self.k_proj is not None and self.v_proj is not None and self.out_proj is not None
-        assert self.inputs is not None
+        assert self.tokens is not None
         with self._nvtx_range("baseline_kv_cache_management"):
             with torch.no_grad():
-                queries = torch.cat(self.inputs, dim=1)
-                all_inputs = torch.cat(self.inputs, dim=1)
+                outputs = torch.empty(
+                    self.batch_size,
+                    self.steps,
+                    self.hidden_dim,
+                    device=self.device,
+                    dtype=torch.bfloat16,
+                )
+                for t in range(self.steps):
+                    query = self.tokens[:, t : t + 1, :]
+                    prefix = self.tokens[:, : t + 1, :]
 
-                q = self.q_proj(queries)
-                k = self.k_proj(all_inputs)
-                v = self.v_proj(all_inputs)
+                    q = self.q_proj(query)
+                    k = self.k_proj(prefix)
+                    v = self.v_proj(prefix)
 
-                head_dim = self.hidden_dim // self.num_heads
-                q = q.view(self.batch_size, -1, self.num_heads, head_dim).transpose(1, 2)
-                k = k.view(self.batch_size, -1, self.num_heads, head_dim).transpose(1, 2)
-                v = v.view(self.batch_size, -1, self.num_heads, head_dim).transpose(1, 2)
+                    q = q.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                    k = k.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                    v = v.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
 
-                attn = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
-                attn = attn.transpose(1, 2).contiguous().view(self.batch_size, -1, self.hidden_dim)
-                output = self.out_proj(attn)
-                self.output = output
-                _ = output[:, -1, :].sum()
+                    attn = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+                    attn = attn.transpose(1, 2).contiguous().reshape(self.batch_size, 1, self.hidden_dim)
+                    out = self.out_proj(attn)
+                    outputs[:, t : t + 1, :] = out
+
+                self.output = outputs
         if self.output is None:
             raise RuntimeError("No output computed during benchmark")
 
@@ -108,7 +126,7 @@ class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark
         self.k_proj = None
         self.v_proj = None
         self.out_proj = None
-        self.inputs = None
+        self.tokens = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -135,8 +153,8 @@ class BaselineKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark
     def validate_result(self) -> Optional[str]:
         if any(layer is None for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj)):
             return "Projection layers not initialized"
-        if self.inputs is None:
-            return "Inputs not initialized"
+        if self.tokens is None:
+            return "Tokens not initialized"
         return None
 
 

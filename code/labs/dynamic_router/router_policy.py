@@ -1,5 +1,5 @@
 """
-Optimized dynamic router scaffold with prefill/decode separation.
+Telemetry-driven router policy scaffold with prefill/decode separation.
 
 Key features:
   - EWMA-smoothed TTFT/TPOT metrics
@@ -20,18 +20,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Deque, Dict, Iterable, List, Optional, Set, Tuple
 
-import torch
-
 repo_root = Path(__file__).parent.parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
-
-from core.harness.benchmark_harness import (
-    BaseBenchmark,
-    BenchmarkConfig,
-    WorkloadMetadata,
-)
-from core.benchmark.verification_mixin import VerificationPayloadMixin
 
 # -------------------------
 # EWMA helper
@@ -370,132 +361,3 @@ class Router:
                 best_gpu = gid
         return best_gpu
 
-
-#============================================================================
-# Benchmark Harness Integration
-#============================================================================
-
-class OptimizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Benchmark harness wrapper for optimized dynamic router."""
-
-    def __init__(self):
-        super().__init__()
-        self.router = None
-        self.num_gpus = 8
-        self.num_requests = 1000
-        self._last = 0.0
-        self.metrics: Optional[torch.Tensor] = None
-        self.output: Optional[torch.Tensor] = None
-        self.verify_input: Optional[torch.Tensor] = None
-        self.register_workload_metadata(
-            requests_per_iteration=float(self.num_requests),
-            tokens_per_iteration=float(self.num_requests * 100),
-        )
-
-    def setup(self) -> None:
-        """Setup: Initialize optimized router with GPU pools."""
-        torch.manual_seed(42)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(42)
-        self.router = Router(
-            ewma_alpha=0.3,
-            migration_budget_per_window=32,
-            migration_window_seconds=1.0,
-            kv_locality_boost=0.3,
-        )
-        
-        # Register GPUs: half prefill, half decode, some overlap
-        for i in range(self.num_gpus):
-            self.router.register_gpu(
-                f"gpu_{i}",
-                is_prefill=(i < 4),  # First 4 GPUs for prefill
-                is_decode=(i >= 2),  # Last 6 GPUs for decode
-                hourly_cost=1.0 + i * 0.1,
-            )
-            # Seed with initial metrics
-            self.router.update_metrics(f"gpu_{i}", {
-                "ttft_ms": 50.0 + i * 5,
-                "tpot": 10.0 + i,
-                "queue_depth": float(i),
-                "mem_free_gb": 40.0 - i * 2,
-                "kv_hit_rate": 0.5,
-            })
-
-    def benchmark_fn(self) -> None:
-        """Benchmark: Route requests and update metrics."""
-        if self.router is None:
-            return
-            
-        routed = 0
-        for i in range(self.num_requests):
-            # Route prefill
-            gpu = self.router.choose_prefill_gpu()
-            if gpu:
-                routed += 1
-                # Simulate metric update
-                self.router.update_metrics(gpu, {
-                    "ttft_ms": 50.0 + (i % 10),
-                    "queue_depth": float(i % 5),
-                })
-            
-            # Route decode
-            seq = SequenceInfo(
-                seq_id=f"seq_{i}",
-                current_gpu=gpu or "gpu_0",
-                kv_gpus={gpu} if gpu else set(),
-                expected_tokens_remaining=100,
-            )
-            decode_gpu = self.router.choose_decode_gpu(seq)
-            if decode_gpu:
-                routed += 1
-        
-        self._last = float(routed)
-        verify_tensor = torch.tensor([[float(self.num_requests), float(self.num_gpus)]], dtype=torch.float32)
-        expected_shape = tuple(verify_tensor.shape)
-        if self.metrics is None or tuple(self.metrics.shape) != expected_shape:
-            self.metrics = torch.zeros_like(verify_tensor)
-        if self.verify_input is None or tuple(self.verify_input.shape) != expected_shape:
-            self.verify_input = torch.ones_like(verify_tensor)
-        self.output = (verify_tensor * self.verify_input + self.metrics).detach()
-
-    def capture_verification_payload(self) -> None:
-        self._set_verification_payload(
-            inputs={
-                "verify_input": self.verify_input.detach(),
-                "num_gpus": torch.tensor([self.num_gpus], dtype=torch.int64),
-                "num_requests": torch.tensor([self.num_requests], dtype=torch.int64),
-            },
-            output=self.output,
-            batch_size=1,
-            parameter_count=0,
-            precision_flags={"fp16": False, "bf16": False, "tf32": False},
-            output_tolerance=(0.1, 1.0),
-        )
-
-    def teardown(self) -> None:
-        """Teardown: Clean up resources."""
-        self.router = None
-        self.metrics = None
-        self.output = None
-        self.verify_input = None
-        super().teardown()
-
-    def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=50, warmup=10)
-    
-    def get_custom_metrics(self) -> Optional[dict]:
-        return {
-            "optimized_router.ewma_smoothing": True,
-            "optimized_router.kv_locality": True,
-            "optimized_router.migration_planning": True,
-        }
-
-    def validate_result(self) -> Optional[str]:
-        if self.router is None:
-            return "Router not initialized"
-        return None
-
-
-def get_benchmark() -> BaseBenchmark:
-    """Factory function for benchmark discovery."""
-    return OptimizedRouterBenchmark()

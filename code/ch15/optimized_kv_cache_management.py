@@ -1,32 +1,19 @@
-"""optimized_kv_cache_management.py - Optimized KV cache management."""
+"""optimized_kv_cache_management.py - KV cache decode with reuse (optimized)."""
 
 from __future__ import annotations
 
 from typing import Optional
-from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-try:
-    from torch.nn.attention import SDPBackend, sdpa_kernel
-except ImportError:  # pragma: no cover - older PyTorch fallback
-    SDPBackend = None  # type: ignore[assignment]
-    sdpa_kernel = None  # type: ignore[assignment]
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch15.verification_payload_mixin import VerificationPayloadMixin
 
 
-def _flash_sdp_context():
-    """Prefer the new sdpa_kernel API; fall back to no-op if unavailable."""
-    if sdpa_kernel is None or SDPBackend is None or not hasattr(SDPBackend, "FLASH_ATTENTION"):
-        return nullcontext()
-    return sdpa_kernel([SDPBackend.FLASH_ATTENTION])
-
-
 class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized: KV cache reuse and management."""
+    """Optimized: reuse projected K/V across decode steps (KV cache)."""
     
     def __init__(self):
         super().__init__()
@@ -34,8 +21,9 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.k_proj: Optional[nn.Linear] = None
         self.v_proj: Optional[nn.Linear] = None
         self.out_proj: Optional[nn.Linear] = None
-        self.inputs: Optional[list[torch.Tensor]] = None
-        self.cache_buffer: Optional[torch.Tensor] = None
+        self.tokens: Optional[torch.Tensor] = None
+        self.k_cache: Optional[torch.Tensor] = None
+        self.v_cache: Optional[torch.Tensor] = None
         # Match baseline batch_size for fair comparison
         self.batch_size = 8
         self.hidden_dim = 256
@@ -55,13 +43,6 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
         )
     
     def setup(self) -> None:
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            # Prefer flash; we'll verify compatibility below.
-            torch.backends.cuda.enable_flash_sdp(True)
-            torch.backends.cuda.enable_mem_efficient_sdp(False)
-            torch.backends.cuda.enable_math_sdp(False)
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         
@@ -71,47 +52,65 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim, bias=False).to(self.device, dtype=torch.bfloat16)
         for module in (self.q_proj, self.k_proj, self.v_proj, self.out_proj):
             module.eval()
-        
-        self.cache_buffer = torch.zeros(self.batch_size, self.steps, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-        self.inputs = [
-            torch.randn(self.batch_size, 1, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
-            for _ in range(self.steps)
-        ]
-        # Verify flash SDP works on this install/arch; otherwise skip.
-        try:
-            q = torch.randn(self.batch_size, 1, self.num_heads, self.head_dim, device=self.device, dtype=torch.bfloat16)
-            k = torch.randn_like(q)
-            v = torch.randn_like(q)
-            with _flash_sdp_context():
-                _ = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-        except Exception as exc:
-            raise RuntimeError(f"SKIPPED: flash-attn kernels unavailable on this arch/install: {exc}") from exc
+
+        self.tokens = torch.randn(
+            self.batch_size,
+            self.steps,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self.k_cache = torch.empty(
+            self.batch_size,
+            self.steps,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self.v_cache = torch.empty(
+            self.batch_size,
+            self.steps,
+            self.hidden_dim,
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
         self._synchronize()
-        self._verify_input = self.inputs[0].detach()
+        self._verify_input = self.tokens.detach()
     
     def benchmark_fn(self) -> None:
         assert self.q_proj is not None and self.k_proj is not None and self.v_proj is not None and self.out_proj is not None
-        assert self.inputs is not None and self.cache_buffer is not None
+        assert self.tokens is not None and self.k_cache is not None and self.v_cache is not None
         with self._nvtx_range("optimized_kv_cache_management"):
             with torch.no_grad():
-                queries = torch.cat(self.inputs, dim=1)
-                k_cache = torch.cat(self.inputs, dim=1)
-                
-                q = self.q_proj(queries)
-                k = self.k_proj(k_cache)
-                v = self.v_proj(k_cache)
-                
-                q = q.view(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
-                k = k.view(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
-                v = v.view(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
-                
-                attn = F.scaled_dot_product_attention(q, k, v, is_causal=True)
-                attn = attn.transpose(1, 2).contiguous().view(self.batch_size, -1, self.hidden_dim)
-                output = self.out_proj(attn)
-                
-                # Update cache with the newest token block without reallocation.
-                self.cache_buffer.copy_(k_cache)
-                self.output = output
+                outputs = torch.empty(
+                    self.batch_size,
+                    self.steps,
+                    self.hidden_dim,
+                    device=self.device,
+                    dtype=torch.bfloat16,
+                )
+                for t in range(self.steps):
+                    query = self.tokens[:, t : t + 1, :]
+                    q = self.q_proj(query)
+
+                    new_k = self.k_proj(query)
+                    new_v = self.v_proj(query)
+                    self.k_cache[:, t : t + 1, :] = new_k
+                    self.v_cache[:, t : t + 1, :] = new_v
+
+                    k = self.k_cache[:, : t + 1, :]
+                    v = self.v_cache[:, : t + 1, :]
+
+                    q = q.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                    k = k.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+                    v = v.reshape(self.batch_size, -1, self.num_heads, self.head_dim).transpose(1, 2)
+
+                    attn = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+                    attn = attn.transpose(1, 2).contiguous().reshape(self.batch_size, 1, self.hidden_dim)
+                    out = self.out_proj(attn)
+                    outputs[:, t : t + 1, :] = out
+
+                self.output = outputs
 
     def capture_verification_payload(self) -> None:
         if self.output is None or self._verify_input is None:
@@ -140,8 +139,9 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
         self.k_proj = None
         self.v_proj = None
         self.out_proj = None
-        self.inputs = None
-        self.cache_buffer = None
+        self.tokens = None
+        self.k_cache = None
+        self.v_cache = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -168,8 +168,8 @@ class OptimizedKVCacheManagementBenchmark(VerificationPayloadMixin, BaseBenchmar
     def validate_result(self) -> Optional[str]:
         if any(layer is None for layer in (self.q_proj, self.k_proj, self.v_proj, self.out_proj)):
             return "Projection layers not initialized"
-        if self.inputs is None or self.cache_buffer is None:
-            return "Inputs/cache not initialized"
+        if self.tokens is None or self.k_cache is None or self.v_cache is None:
+            return "Tokens/cache not initialized"
         return None
 
 

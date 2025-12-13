@@ -32,6 +32,10 @@ METRIC_DIRECTIONS: Dict[str, str] = {
     "best_optimized_speedup": "higher",
     "baseline_time_ms": "lower",
     "best_optimized_time_ms": "lower",
+    "baseline_memory_mb": "lower",
+    "best_optimized_memory_mb": "lower",
+    "best_memory_savings_ratio": "higher",
+    "best_memory_savings_pct": "higher",
     "baseline_throughput.requests_per_s": "higher",
     "baseline_throughput.tokens_per_s": "higher",
     "baseline_throughput.samples_per_s": "higher",
@@ -110,12 +114,19 @@ class ExpectationEntry:
     example: str
     type: str  # "python" or "cuda"
 
+    # Primary optimization goal ("speed" or "memory")
+    optimization_goal: str
+
     # Timing metrics (source of truth)
     baseline_time_ms: float
     best_optimized_time_ms: float
 
     # Provenance
     provenance: RunProvenance
+
+    # Optional memory metrics (for memory-goal benchmarks)
+    baseline_memory_mb: Optional[float] = None
+    best_optimized_memory_mb: Optional[float] = None
 
     # Optional extended metrics
     baseline_p75_ms: Optional[float] = None
@@ -139,9 +150,43 @@ class ExpectationEntry:
         return self.baseline_time_ms / self.best_optimized_time_ms
 
     @property
+    def best_memory_savings_ratio(self) -> Optional[float]:
+        """Compute memory savings ratio (baseline / optimized). Higher is better."""
+        if self.baseline_memory_mb is None or self.best_optimized_memory_mb is None:
+            return None
+        if self.best_optimized_memory_mb <= 0:
+            return None
+        return float(self.baseline_memory_mb) / float(self.best_optimized_memory_mb)
+
+    @property
+    def best_memory_savings_pct(self) -> Optional[float]:
+        """Compute memory savings percentage (higher is better)."""
+        ratio = self.best_memory_savings_ratio
+        if ratio is None:
+            return None
+        if self.baseline_memory_mb is None or self.baseline_memory_mb <= 0:
+            return None
+        baseline_mb = float(self.baseline_memory_mb)
+        optimized_mb = float(self.best_optimized_memory_mb) if self.best_optimized_memory_mb is not None else 0.0
+        return ((baseline_mb - optimized_mb) / baseline_mb) * 100.0
+
+    @property
+    def primary_improvement(self) -> float:
+        """Primary improvement ratio derived from the benchmark's optimization goal."""
+        goal = (self.optimization_goal or "speed").strip().lower()
+        if goal == "memory":
+            ratio = self.best_memory_savings_ratio
+            if ratio is None:
+                raise RuntimeError(
+                    "optimization_goal='memory' requires baseline_memory_mb and best_optimized_memory_mb"
+                )
+            return ratio
+        return self.best_speedup
+
+    @property
     def is_regression(self) -> bool:
-        """Check if this represents a regression (optimized slower than baseline)."""
-        return self.best_speedup < 1.0
+        """Check if this represents a regression relative to the optimization goal."""
+        return self.primary_improvement < 1.0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON storage.
@@ -163,6 +208,16 @@ class ExpectationEntry:
             "provenance": self.provenance.to_dict(),
             "metadata": {},
         }
+
+        # Add optional memory metrics
+        if self.baseline_memory_mb is not None:
+            result["metrics"]["baseline_memory_mb"] = float(self.baseline_memory_mb)
+        if self.best_optimized_memory_mb is not None:
+            result["metrics"]["best_optimized_memory_mb"] = float(self.best_optimized_memory_mb)
+        if self.best_memory_savings_ratio is not None:
+            result["metrics"]["best_memory_savings_ratio"] = float(self.best_memory_savings_ratio)
+        if self.best_memory_savings_pct is not None:
+            result["metrics"]["best_memory_savings_pct"] = float(self.best_memory_savings_pct)
 
         # Add optional percentile metrics
         if self.baseline_p75_ms is not None:
@@ -187,6 +242,7 @@ class ExpectationEntry:
             result["custom_metrics"] = self.custom_metrics
 
         # Add metadata
+        result["metadata"]["optimization_goal"] = self.optimization_goal
         if self.best_optimization_name:
             result["metadata"]["best_optimization"] = self.best_optimization_name
         if self.best_optimization_file:
@@ -196,6 +252,12 @@ class ExpectationEntry:
         # Store speedup in metadata for compatibility (derived from times)
         result["metadata"]["best_optimization_speedup"] = self.best_speedup
         result["metadata"]["best_optimization_time_ms"] = self.best_optimized_time_ms
+        if self.best_optimized_memory_mb is not None:
+            result["metadata"]["best_optimization_memory_mb"] = float(self.best_optimized_memory_mb)
+        if self.best_memory_savings_ratio is not None:
+            result["metadata"]["best_memory_savings_ratio"] = float(self.best_memory_savings_ratio)
+        if self.best_memory_savings_pct is not None:
+            result["metadata"]["best_memory_savings_pct"] = float(self.best_memory_savings_pct)
 
         return result
 
@@ -218,8 +280,11 @@ class ExpectationEntry:
         return cls(
             example=data.get("example", ""),
             type=data.get("type", "python"),
+            optimization_goal=metadata.get("optimization_goal", "speed"),
             baseline_time_ms=metrics.get("baseline_time_ms", 0.0),
             best_optimized_time_ms=metrics.get("best_optimized_time_ms", 0.0),
+            baseline_memory_mb=metrics.get("baseline_memory_mb"),
+            best_optimized_memory_mb=metrics.get("best_optimized_memory_mb"),
             provenance=RunProvenance.from_dict(provenance_data),
             baseline_p75_ms=metrics.get("baseline_p75_ms"),
             baseline_p90_ms=metrics.get("baseline_p90_ms"),
@@ -310,32 +375,51 @@ class UpdateResult:
 # =============================================================================
 
 
-def select_best_optimization(optimizations: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Select the best optimization from a list based on speedup.
+def select_best_optimization(
+    optimizations: Optional[List[Dict[str, Any]]],
+    *,
+    goal: str = "speed",
+) -> Optional[Dict[str, Any]]:
+    """Select the best optimization from a list based on the optimization goal.
 
     This is the SINGLE SOURCE OF TRUTH for selecting the best optimization.
     Used by both metrics collection and metadata building to ensure consistency.
 
     Args:
-        optimizations: List of optimization result dicts with 'status' and 'speedup' keys.
+        optimizations: List of optimization result dicts. Speed selections use 'speedup'.
+        goal: Primary optimization goal ('speed' or 'memory').
 
     Returns:
         The optimization dict with the highest speedup, or None if no successful optimizations.
     """
+    goal_norm = (goal or "speed").strip().lower()
+
     best: Optional[Dict[str, Any]] = None
-    best_speedup = float("-inf")
+    best_score = float("-inf")
 
     for opt in optimizations or []:
         # Only consider successful optimizations
         if opt.get("status") != "succeeded":
             continue
 
-        # Get speedup, defaulting to 0.0 if missing or None
-        speedup = float(opt.get("speedup") or 0.0)
+        if goal_norm == "memory":
+            memory_mb = opt.get("memory_mb")
+            if memory_mb is None:
+                continue
+            try:
+                score = -float(memory_mb)  # lower memory is better
+            except (TypeError, ValueError):
+                continue
+        else:
+            # Default: speed
+            try:
+                score = float(opt.get("speedup") or 0.0)
+            except (TypeError, ValueError):
+                score = 0.0
 
-        if speedup > best_speedup:
+        if score > best_score:
             best = opt
-            best_speedup = speedup
+            best_score = score
 
     return best
 
@@ -635,6 +719,8 @@ class ExpectationsStore:
         examples = self._data.setdefault("examples", {})
         existing = examples.get(example_key)
 
+        goal = (entry.optimization_goal or "speed").strip().lower()
+
         # Check provenance consistency if entry already exists
         if existing and not self._force_mixed_provenance:
             existing_provenance = existing.get("provenance")
@@ -660,22 +746,49 @@ class ExpectationsStore:
                         ],
                     )
 
+        # Determine the primary score based on optimization goal
+        if goal == "memory":
+            metric_label = "best_memory_savings_ratio"
+            new_score = entry.best_memory_savings_ratio
+            if new_score is None:
+                return UpdateResult(
+                    status="rejected",
+                    message="Memory-goal benchmark missing memory metrics (baseline_memory_mb/best_optimized_memory_mb).",
+                    entry=entry,
+                    validation_issues=[
+                        ValidationIssue(
+                            example_key=example_key,
+                            issue_type="missing_memory_metrics",
+                            message="Missing memory metrics for memory-goal benchmark",
+                            stored_value=None,
+                            expected_value="baseline_memory_mb and best_optimized_memory_mb",
+                        )
+                    ],
+                )
+        else:
+            metric_label = "best_speedup"
+            new_score = entry.best_speedup
+
         # Determine if this is an improvement, regression, or unchanged
         status = "updated"
         if existing:
-            existing_metrics = existing.get("metrics", {})
-            old_speedup = existing_metrics.get("best_speedup", 0.0)
-            new_speedup = entry.best_speedup
+            existing_entry = ExpectationEntry.from_dict(existing)
+            if goal == "memory":
+                old_score = existing_entry.best_memory_savings_ratio
+                if old_score is None:
+                    old_score = 0.0
+            else:
+                old_score = existing_entry.best_speedup
 
-            if new_speedup > old_speedup * (1 + RELATIVE_TOLERANCE):
+            if new_score > old_score * (1 + RELATIVE_TOLERANCE):
                 status = "improved"
-            elif new_speedup < old_speedup * (1 - RELATIVE_TOLERANCE):
+            elif new_score < old_score * (1 - RELATIVE_TOLERANCE):
                 if not self._accept_regressions:
                     return UpdateResult(
                         status="rejected",
                         message=(
-                            f"Regression detected: new speedup {new_speedup:.3f}x < "
-                            f"existing {old_speedup:.3f}x. Use accept_regressions=True to override."
+                            f"Regression detected ({metric_label}): new {new_score:.3f} < "
+                            f"existing {old_score:.3f}. Use accept_regressions=True to override."
                         ),
                         entry=entry,
                         validation_issues=[
@@ -683,20 +796,34 @@ class ExpectationsStore:
                                 example_key=example_key,
                                 issue_type="regression",
                                 message="Performance regression rejected",
-                                stored_value=old_speedup,
-                                expected_value=new_speedup,
-                                delta_pct=((new_speedup - old_speedup) / old_speedup) * 100 if old_speedup else None,
+                                stored_value=old_score,
+                                expected_value=new_score,
+                                delta_pct=((new_score - old_score) / old_score) * 100 if old_score else None,
                             )
                         ],
                     )
                 status = "regressed"
             else:
                 # Within tolerance - check if timing values changed significantly
+                existing_metrics = existing.get("metrics", {})
                 old_baseline = existing_metrics.get("baseline_time_ms", 0.0)
                 old_optimized = existing_metrics.get("best_optimized_time_ms", 0.0)
+                old_baseline_mem = existing_metrics.get("baseline_memory_mb")
+                old_opt_mem = existing_metrics.get("best_optimized_memory_mb")
                 if (
                     abs(entry.baseline_time_ms - old_baseline) < SPEEDUP_TOLERANCE
                     and abs(entry.best_optimized_time_ms - old_optimized) < SPEEDUP_TOLERANCE
+                    and (
+                        goal != "memory"
+                        or (
+                            entry.baseline_memory_mb is not None
+                            and entry.best_optimized_memory_mb is not None
+                            and old_baseline_mem is not None
+                            and old_opt_mem is not None
+                            and abs(float(entry.baseline_memory_mb) - float(old_baseline_mem)) < SPEEDUP_TOLERANCE
+                            and abs(float(entry.best_optimized_memory_mb) - float(old_opt_mem)) < SPEEDUP_TOLERANCE
+                        )
+                    )
                 ):
                     status = "unchanged"
 
@@ -709,7 +836,7 @@ class ExpectationsStore:
 
         return UpdateResult(
             status=status,
-            message=f"Entry {example_key} {status} with speedup {entry.best_speedup:.3f}x",
+            message=f"Entry {example_key} {status} ({goal}) score {float(new_score):.3f}",
             entry=entry,
         )
 
@@ -831,6 +958,64 @@ class ExpectationsStore:
                         expected_value=stored_speedup,
                     )
                 )
+
+        # Check 3b: Memory-savings consistency (when memory metrics are present)
+        baseline_mem = metrics.get("baseline_memory_mb")
+        optimized_mem = metrics.get("best_optimized_memory_mb")
+        stored_mem_ratio = metrics.get("best_memory_savings_ratio")
+        stored_mem_pct = metrics.get("best_memory_savings_pct")
+        if isinstance(baseline_mem, (int, float)) and isinstance(optimized_mem, (int, float)):
+            if baseline_mem > 0 and optimized_mem > 0:
+                computed_ratio = float(baseline_mem) / float(optimized_mem)
+                computed_pct = ((float(baseline_mem) - float(optimized_mem)) / float(baseline_mem)) * 100.0
+
+                if stored_mem_ratio is not None and abs(float(stored_mem_ratio) - computed_ratio) > SPEEDUP_TOLERANCE:
+                    stored_mem_ratio_f = float(stored_mem_ratio)
+                    issues.append(
+                        ValidationIssue(
+                            example_key=example_key,
+                            issue_type="memory_savings_mismatch",
+                            message=(
+                                f"Stored best_memory_savings_ratio {stored_mem_ratio_f:.6f} differs from "
+                                f"computed ratio {computed_ratio:.6f}"
+                            ),
+                            stored_value=stored_mem_ratio,
+                            expected_value=computed_ratio,
+                        )
+                    )
+
+                if stored_mem_pct is not None and abs(float(stored_mem_pct) - computed_pct) > SPEEDUP_TOLERANCE:
+                    stored_mem_pct_f = float(stored_mem_pct)
+                    issues.append(
+                        ValidationIssue(
+                            example_key=example_key,
+                            issue_type="memory_savings_pct_mismatch",
+                            message=(
+                                f"Stored best_memory_savings_pct {stored_mem_pct_f:.6f} differs from "
+                                f"computed pct {computed_pct:.6f}"
+                            ),
+                            stored_value=stored_mem_pct,
+                            expected_value=computed_pct,
+                        )
+                    )
+
+                metadata_ratio = metadata.get("best_memory_savings_ratio")
+                if stored_mem_ratio is not None and metadata_ratio is not None:
+                    stored_mem_ratio_f = float(stored_mem_ratio)
+                    metadata_ratio_f = float(metadata_ratio)
+                    if abs(stored_mem_ratio_f - metadata_ratio_f) > SPEEDUP_TOLERANCE:
+                        issues.append(
+                            ValidationIssue(
+                                example_key=example_key,
+                                issue_type="metadata_drift_memory",
+                                message=(
+                                    f"Metrics best_memory_savings_ratio ({stored_mem_ratio_f:.6f}) differs from "
+                                    f"metadata best_memory_savings_ratio ({metadata_ratio_f:.6f})"
+                                ),
+                                stored_value=metadata_ratio,
+                                expected_value=stored_mem_ratio,
+                            )
+                        )
 
         # Check 4: Provenance completeness (for schema v2 entries)
         schema_version = self._data.get("schema_version", 1)

@@ -29,6 +29,7 @@ class BaselineDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.rows = 4096
         self.cols = 1024
         self.input: Optional[torch.Tensor] = None
+        self._output_buffer: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         tokens = self.rows * self.cols
         self._workload = WorkloadMetadata(
@@ -78,17 +79,19 @@ class BaselineDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.cols,
             dtype=torch.float32,
         ).to(self.device)
-        self.output = torch.zeros_like(self.input)
+        self._output_buffer = torch.empty_like(self.input)
+        self.output = None
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
-        if self.input is None or self.output is None:
+        if self.input is None or self._output_buffer is None:
             raise RuntimeError("Decode tensors not initialized")
 
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_decode_kernel_baseline", enable=enable_nvtx):
-            run_baseline_kernel(self.input, self.output)
+            run_baseline_kernel(self.input, self._output_buffer)
         torch.cuda.synchronize(self.device)
+        self.output = self._output_buffer
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
 
@@ -105,11 +108,12 @@ class BaselineDecodeKernelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         torch.cuda.empty_cache()
         self.input = None
+        self._output_buffer = None
         self.output = None
 
     def get_config(self) -> BenchmarkConfig:
         # Use shorter runs to keep verification fast on slow builds/GPUs.
-        return BenchmarkConfig(iterations=10, warmup=5, measurement_timeout_seconds=60, setup_timeout_seconds=60)  # Min warmup for CUDA
+        return BenchmarkConfig(iterations=10, warmup=5, measurement_timeout_seconds=300, setup_timeout_seconds=300)  # Min warmup for CUDA
 
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

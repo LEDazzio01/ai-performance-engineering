@@ -73,23 +73,6 @@ __global__ void baseline_warp_specialized_two_pipelines_kernel(
     float* C_buf = stage_ptr(C_stage, stage);
     const size_t base = static_cast<size_t>(tile) * kBaselineTileElems;
 
-    int next_tile = tile + kBaselinePipelineStages * stride;
-    if (next_tile < num_tiles) {
-      int next_stage = (iteration + kBaselinePipelineStages) % kBaselinePipelineStages;
-      float* A_next = stage_ptr(A_stage, next_stage);
-      float* B_next = stage_ptr(B_stage, next_stage);
-      size_t next_base = static_cast<size_t>(next_tile) * kBaselineTileElems;
-      pipe_lc.producer_acquire();
-#pragma unroll
-      for (int idx = lane_id; idx < kBaselineTileElems; idx += kBaselineWarpSize) {
-        if (warp_id == 0) {
-          A_next[idx] = A_global[next_base + idx];
-          B_next[idx] = B_global[next_base + idx];
-        }
-      }
-      pipe_lc.producer_commit();
-    }
-
     pipe_lc.consumer_wait();
     if (warp_id == 1) {
 #pragma unroll
@@ -98,6 +81,24 @@ __global__ void baseline_warp_specialized_two_pipelines_kernel(
       }
     }
     pipe_lc.consumer_release();
+
+    // Only reuse a stage buffer after the consumer releases it; otherwise we can
+    // overwrite live data and deadlock the pipeline.
+    int next_tile = tile + kBaselinePipelineStages * stride;
+    if (next_tile < num_tiles) {
+      float* A_next = stage_ptr(A_stage, stage);
+      float* B_next = stage_ptr(B_stage, stage);
+      size_t next_base = static_cast<size_t>(next_tile) * kBaselineTileElems;
+      pipe_lc.producer_acquire();
+      if (warp_id == 0) {
+#pragma unroll
+        for (int idx = lane_id; idx < kBaselineTileElems; idx += kBaselineWarpSize) {
+          A_next[idx] = A_global[next_base + idx];
+          B_next[idx] = B_global[next_base + idx];
+        }
+      }
+      pipe_lc.producer_commit();
+    }
 
     pipe_cs.producer_acquire();
     // compute warp already filled C_buf; no additional work needed.
@@ -136,4 +137,3 @@ inline void launch_baseline_warp_specialized_two_pipelines(
 }
 
 }  // namespace ch11
-

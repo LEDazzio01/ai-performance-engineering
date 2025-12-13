@@ -57,10 +57,9 @@ def build_flex_attention_inputs(
     use_vmap: bool | None = None,
 ) -> FlexAttentionInputs:
     """Create qkv tensors, a block mask, and a relative bias table."""
-    generator = torch.Generator(device=device).manual_seed(42)
-    q = torch.randn(batch, heads, seq_len, head_dim, device=device, dtype=dtype, generator=generator)
-    k = torch.randn_like(q, generator=generator)
-    v = torch.randn_like(q, generator=generator)
+    q = torch.randn(batch, heads, seq_len, head_dim, device=device, dtype=dtype)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
 
     doc_ids = _make_doc_ids(batch, heads, seq_len, doc_span, device=device)
 
@@ -102,10 +101,9 @@ def build_qkv_inputs(
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create only qkv tensors for cases where custom masks are not needed."""
-    generator = torch.Generator(device=device).manual_seed(42)
-    q = torch.randn(batch, heads, seq_len, head_dim, device=device, dtype=dtype, generator=generator)
-    k = torch.randn_like(q, generator=generator)
-    v = torch.randn_like(q, generator=generator)
+    q = torch.randn(batch, heads, seq_len, head_dim, device=device, dtype=dtype)
+    k = torch.randn_like(q)
+    v = torch.randn_like(q)
     return q, k, v
 
 

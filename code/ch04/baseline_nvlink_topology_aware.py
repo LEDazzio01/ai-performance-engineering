@@ -1,8 +1,8 @@
-"""baseline_nvlink_topology_blind.py
+"""baseline_nvlink_topology_aware.py
 
 Baseline NVLink benchmark that ignores topology: default stream, no peer access enablement,
 and no attempt to pick near-neighbor pairs. Uses a simple P2P copy between GPU 0 and GPU 1
-if available, otherwise falls back to a single-GPU memcpy to keep the harness runnable.
+if available. Requires >=2 GPUs.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, Workl
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
-class BaselineNvlinkTopologyBlindBenchmark(VerificationPayloadMixin, BaseBenchmark):
+class BaselineNvlinkTopologyAwareBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Naive P2P copy that does not enable peer access or respect NVLink distance."""
 
     def __init__(self):
@@ -42,7 +42,7 @@ class BaselineNvlinkTopologyBlindBenchmark(VerificationPayloadMixin, BaseBenchma
 
     def benchmark_fn(self) -> None:
         assert self.src is not None and self.dst is not None
-        with self._nvtx_range("baseline_nvlink_topology_blind"):
+        with self._nvtx_range("baseline_nvlink_topology_aware"):
             # Naive: default stream copy, peer access may be disabled
             self.dst.copy_(self.src, non_blocking=False)
             self._synchronize()
@@ -105,9 +105,9 @@ class BaselineNvlinkTopologyBlindBenchmark(VerificationPayloadMixin, BaseBenchma
 
 
 def get_benchmark() -> BaseBenchmark:
-    return BaselineNvlinkTopologyBlindBenchmark()
+    return BaselineNvlinkTopologyAwareBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
-    benchmark_main(BaselineNvlinkTopologyBlindBenchmark)
+    benchmark_main(BaselineNvlinkTopologyAwareBenchmark)

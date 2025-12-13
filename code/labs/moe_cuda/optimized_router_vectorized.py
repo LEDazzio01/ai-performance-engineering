@@ -1,9 +1,8 @@
-"""labs.moe_cuda/optimized_router_vectorized.py - Vectorized expert dispatch step.
+"""labs.moe_cuda/optimized_router_vectorized.py - Grouped expert dispatch step.
 
-This step removes the Python loop over experts by batching expert MLPs, using
-scatter/index_add accumulation, and wrapping the forward pass in a CUDA graph.
-It also reduces batch size to a GB10-friendly setting so latency is dominated by
-device-side math instead of launch overhead.
+This step groups token assignments by expert to run larger GEMMs, then wraps the
+forward pass in a CUDA graph to remove Python dispatch overhead. Baseline uses a
+per-token weight gather path; this variant is the standard MoE grouped dispatch.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import compile_callable, enable_tf32
+from core.utils.compile_utils import enable_tf32
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
@@ -72,8 +71,36 @@ class VectorizedTopKMoE(nn.Module):
         return output
 
 
+class GroupedTopKMoE(VectorizedTopKMoE):
+    """Top-k router that groups assignments by expert (larger matmuls)."""
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:  # pragma: no cover - benchmarked
+        logits = self.router(tokens)
+        top_scores, expert_ids = torch.topk(logits, self.top_k, dim=-1)
+        probs = torch.softmax(top_scores, dim=-1, dtype=tokens.dtype)
+
+        batch = tokens.shape[0]
+        flat_tokens = tokens.unsqueeze(1).expand(-1, self.top_k, -1).reshape(-1, self.hidden_size)
+        flat_expert_ids = expert_ids.reshape(-1)
+        flat_probs = probs.reshape(-1, 1).to(tokens.dtype)
+        token_indices = torch.arange(batch, device=tokens.device).repeat_interleave(self.top_k)
+
+        output = torch.zeros_like(tokens, dtype=tokens.dtype)
+        for expert in range(self.num_experts):
+            mask = flat_expert_ids == expert
+            expert_tokens = flat_tokens[mask]
+            expert_probs = flat_probs[mask]
+
+            hidden = expert_tokens @ self.w1[expert] + self.b1[expert]
+            hidden = F.gelu(hidden)
+            expert_out = hidden @ self.w2[expert] + self.b2[expert]
+            output.index_add_(0, token_indices[mask], expert_out * expert_probs)
+
+        return output
+
+
 class VectorizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Benchmark for the vectorized top-k router with graphs + compile."""
+    """Benchmark for grouped top-k router with CUDA graphs."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -129,9 +156,8 @@ class VectorizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
+        model = GroupedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)
         model = model.to(self.device, dtype=torch.bfloat16)
-        model = compile_callable(model, mode="reduce-overhead", fullgraph=True)
         model.eval()
         self.model = model
 
@@ -142,21 +168,21 @@ class VectorizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
             dtype=torch.bfloat16,
         ).to(self.device)
 
-        # Capture the forward pass into a CUDA graph to hide launch overhead.
+        self.output = None
+
+        # Capture the forward pass into a CUDA graph to hide Python dispatch overhead.
+        self.graph = None
+        self.static_output = None
         try:
-            self.graph = torch.cuda.CUDAGraph()
-            self.static_output = torch.empty_like(self.inputs)
             torch.cuda.synchronize(self.device)
+            self.graph = torch.cuda.CUDAGraph()
             with torch.cuda.graph(self.graph):
                 assert self.model is not None and self.inputs is not None
-            self.static_output = self.model(self.inputs)
-            self.output = self.static_output.detach().float().clone()
+                self.static_output = self.model(self.inputs)
+            torch.cuda.synchronize(self.device)
         except Exception:
             self.graph = None
             self.static_output = None
-            self.output = None
-        finally:
-            torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         if self.model is None or self.inputs is None:
@@ -166,17 +192,22 @@ class VectorizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with nvtx_range("moe_cuda_router_vectorized", enable=enable_nvtx):
             if self.graph is not None:
                 self.graph.replay()
+                if self.static_output is None:
+                    raise RuntimeError("CUDA graph replay missing static output buffer")
+                self.output = self.static_output
             else:
-                with torch.autocast("cuda", dtype=torch.bfloat16), torch.inference_mode():
-                    self.output = self.model(self.inputs).detach().float().clone()
+                with torch.inference_mode():
+                    self.output = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
 
     def capture_verification_payload(self) -> None:
+        if self.inputs is None or self.output is None or self.model is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"input": self.inputs.detach()},
-            output=self.output,
+            output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},

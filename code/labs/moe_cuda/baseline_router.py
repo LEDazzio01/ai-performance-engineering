@@ -1,4 +1,4 @@
-"""labs.moe_cuda/baseline_router.py - Dense MoE router baseline."""
+"""labs.moe_cuda/baseline_router.py - Top-k MoE router baseline."""
 
 from __future__ import annotations
 
@@ -20,40 +20,8 @@ from core.harness.benchmark_harness import WorkloadMetadata
 from core.utils.compile_utils import enable_tf32
 from labs.moe_cuda.optimized_router_vectorized import VectorizedTopKMoE
 
-
-class Expert(nn.Module):
-    """Simple feed-forward expert."""
-
-    def __init__(self, hidden_size: int, expansion: int = 2) -> None:
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size * expansion),
-            nn.GELU(),
-            nn.Linear(hidden_size * expansion, hidden_size),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover - exercised via benchmark
-        return self.net(x)
-
-
-class DenseRouterMoE(nn.Module):
-    """Runs every expert for each input token."""
-
-    def __init__(self, hidden_size: int, num_experts: int, expansion: int = 2) -> None:
-        super().__init__()
-        self.experts = nn.ModuleList([
-            Expert(hidden_size, expansion) for _ in range(num_experts)
-        ])
-
-    def forward(self, tokens: torch.Tensor) -> torch.Tensor:  # pragma: no cover - benchmarked
-        output = torch.zeros_like(tokens)
-        for expert in self.experts:
-            output += expert(tokens)
-        return output / len(self.experts)
-
-
 class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Baseline top-k MoE router using an eager VectorizedTopKMoE forward."""
+    """Baseline top-k MoE router using per-token weight gathers."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,7 +34,7 @@ class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.batch_size),
-            tokens_per_iteration=float(self.batch_size * self.hidden_size),
+            tokens_per_iteration=float(self.batch_size * self.top_k),
         )
 
     def setup(self) -> None:
@@ -130,16 +98,17 @@ class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
         enable_nvtx = get_nvtx_enabled(self.get_config())
         with nvtx_range("moe_cuda_dense_router", enable=enable_nvtx):
             with torch.inference_mode():
-                out = self.model(self.inputs)
-                self.output = out.detach().float().clone()
+                self.output = self.model(self.inputs)
         torch.cuda.synchronize(self.device)
         if self.output is None:
             raise RuntimeError("benchmark_fn() did not produce output")
 
     def capture_verification_payload(self) -> None:
+        if self.inputs is None or self.output is None or self.model is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"input": self.inputs.detach()},
-            output=self.output,
+            output=self.output.detach().float().clone(),
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             precision_flags={"bf16": True, "tf32": torch.backends.cuda.matmul.allow_tf32},
@@ -176,7 +145,7 @@ class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         if self.model is None:
-            return "Dense MoE model missing"
+            return "Top-k MoE model missing"
         if self.inputs is None:
             return "Inputs missing"
         return None

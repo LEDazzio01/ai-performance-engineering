@@ -16,7 +16,16 @@
         "best_optimized_p75_ms": 6220.498085021973,
         "best_optimized_speedup": 1.0960903633714134,
         "best_optimized_time_ms": 6220.498085021973,
-        "best_speedup": 1.0960903633714134
+        "best_speedup": 1.0960903633714134,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "75cbbbcfaaac628797e7636c22f2adb10d4d072f",
+        "hardware_key": "b200",
+        "iterations": 0,
+        "profile_name": "none",
+        "timestamp": "2025-12-08T19:40:47.886346",
+        "warmup_iterations": 0
       },
       "type": "python"
     }

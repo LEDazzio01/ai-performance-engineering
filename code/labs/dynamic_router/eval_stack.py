@@ -2,8 +2,8 @@
 
 This is intentionally lightweight so you can drop it into the dynamic router lab
 and replace the mock generators with real engine hooks when you have vLLM or
-TensorRT-LLM running. Both the baseline and optimized benchmarks share this
-helper to emit the same artifact layout:
+TensorRT-LLM running. This is a lab tool (not a comparable benchmark target)
+that emits a consistent artifact layout:
 
 /artifacts/dynamic_router/cheap_eval/<run_id>/
   quality.jsonl       # per-item exact-match results
@@ -300,12 +300,12 @@ class CheapEvalStack:
             throughput_summary=throughput_summary or None,
         )
 
-    def run(self, mode: str) -> Dict[str, float]:
-        run_id = f"{mode}_{int(time.time())}"
+    def run(self) -> Dict[str, float]:
+        run_id = f"full_{int(time.time())}"
         run_dir = self.cfg.run_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        optimized = mode == "optimized"
+        optimized = True
 
         loaded = self._load_real_metrics()
         if loaded:
@@ -356,7 +356,7 @@ class CheapEvalStack:
         (run_dir / "tps_goodput.json").write_text(json.dumps(throughput_summary, indent=2))
         (run_dir / "scorecard.json").write_text(json.dumps(scorecard, indent=2))
         sys_meta = {
-            "mode": mode,
+            "mode": "full",
             "seed": self.cfg.seed,
             "experts": self.cfg.experts,
             "top_k": self.cfg.top_k,
@@ -733,8 +733,8 @@ class CheapEvalStack:
         return " ".join("".join(cleaned).split())
 
 
-def run_eval_stack(mode: str, cfg: EvalConfig | None = None) -> Dict[str, float]:
-    """Convenience entrypoint used by the harness benchmarks."""
+def run_eval_stack(cfg: EvalConfig | None = None) -> Dict[str, float]:
+    """Convenience entrypoint used by tools."""
     cfg = cfg or EvalConfig()
     runner = CheapEvalStack(cfg)
-    return runner.run(mode)
+    return runner.run()

@@ -193,8 +193,7 @@ class MoEFeedForward(nn.Module):
             expert_counts = torch.bincount(top_indices.reshape(-1), minlength=self.num_experts)
             overloaded = expert_counts > capacity
             drop_mask = overloaded[top_indices]
-            if drop_mask.any():
-                top_scores = top_scores * (~drop_mask).float()
+            top_scores = top_scores * (~drop_mask).float()
             overflow_mask = drop_mask.any(dim=-1)
         combined = torch.zeros_like(flat)
 
@@ -212,6 +211,154 @@ class MoEFeedForward(nn.Module):
                         selected_weights = selected_weights.unsqueeze(-1)
                     selected_weights = selected_weights.to(expert_out.dtype)
                     combined.index_add_(0, indices, expert_out * selected_weights)
+        combined = combined.view(batch, seq, hidden)
+        if collect_router_stats:
+            stats = {
+                "expert_indices": top_indices.detach(),
+                "overflow_mask": overflow_mask.detach() if overflow_mask is not None else None,
+                "expert_counts": expert_counts.detach() if expert_counts is not None else None,
+                "router_entropy": float(router_entropy.detach()) if router_entropy is not None else None,
+            }
+            return combined, stats
+        return combined
+
+
+class MoEFeedForwardNoHostSync(MoEFeedForward):
+    """MoEFeedForward variant that avoids host sync in expert dispatch.
+
+    The baseline implementation uses `if mask.any():` inside a Python loop over
+    experts. `mask.any()` produces a CUDA tensor, and converting it to a Python
+    bool triggers a device sync + D2H transfer (performance bug).
+
+    This variant keeps the same algorithm (top-k routing + per-expert MLPs +
+    weighted accumulation) but removes Python boolean control flow by always
+    computing `indices = mask.nonzero(...)` and letting empty tensors no-op.
+    """
+
+    def forward(self, x: torch.Tensor, *, collect_router_stats: bool = False):  # type: ignore[override]
+        batch, seq, hidden = x.shape
+        flat = x.reshape(batch * seq, hidden)
+        logits = self.router(flat)
+        if self.router_noise > 0:
+            logits = logits + torch.randn_like(logits) * self.router_noise
+        probs = torch.softmax(logits, dim=-1)
+        router_entropy = None
+        if collect_router_stats:
+            with torch.no_grad():
+                router_entropy = -(probs * torch.log(probs + 1e-9)).sum(dim=-1).mean()
+        top_scores, top_indices = torch.topk(probs, k=self.top_k, dim=-1)
+
+        drop_mask = None
+        overflow_mask = None
+        expert_counts = None
+        if self.capacity_factor is not None:
+            tokens = flat.shape[0]
+            avg_tokens_per_expert = max(1, math.ceil((tokens * self.top_k) / max(self.num_experts, 1)))
+            capacity = max(1, math.ceil(self.capacity_factor * avg_tokens_per_expert))
+            expert_counts = torch.bincount(top_indices.reshape(-1), minlength=self.num_experts)
+            overloaded = expert_counts > capacity
+            drop_mask = overloaded[top_indices]
+            # Avoid host sync from `if drop_mask.any()`; applying a no-op mask is fine.
+            top_scores = top_scores * (~drop_mask).float()
+            overflow_mask = drop_mask.any(dim=-1)
+
+        combined = torch.zeros_like(flat)
+
+        for k in range(self.top_k):
+            expert_ids = top_indices[:, k]
+            weights = top_scores[:, k].unsqueeze(-1)
+            for expert_id, expert in enumerate(self.experts):
+                mask = expert_ids == expert_id
+                # IMPORTANT: avoid `if mask.any()` (host sync). Empty indices are fine.
+                indices = mask.nonzero(as_tuple=False).squeeze(-1)
+                if indices.numel() == 0:
+                    continue
+                expert_input = flat.index_select(0, indices)
+                expert_out = expert(expert_input)
+                selected_weights = weights.index_select(0, indices)
+                if selected_weights.dim() == 1:
+                    selected_weights = selected_weights.unsqueeze(-1)
+                selected_weights = selected_weights.to(expert_out.dtype)
+                combined.index_add_(0, indices, expert_out * selected_weights)
+
+        combined = combined.view(batch, seq, hidden)
+        if collect_router_stats:
+            stats = {
+                "expert_indices": top_indices.detach(),
+                "overflow_mask": overflow_mask.detach() if overflow_mask is not None else None,
+                "expert_counts": expert_counts.detach() if expert_counts is not None else None,
+                "router_entropy": float(router_entropy.detach()) if router_entropy is not None else None,
+            }
+            return combined, stats
+        return combined
+
+
+class MoEFeedForwardSortedDispatch(MoEFeedForward):
+    """MoEFeedForward that dispatches only active experts via a sorted assignment list.
+
+    Baseline MoEFeedForward scans *every* expert and uses a boolean mask per expert.
+    This variant keeps the same math (top-k gating + expert MLP + weighted sum) but:
+      - flattens token→expert assignments (tokens * top_k)
+      - sorts by expert id once
+      - loops only over experts that appear in the assignment list
+
+    This reduces Python overhead and avoids per-expert mask+any() patterns.
+    """
+
+    def forward(self, x: torch.Tensor, *, collect_router_stats: bool = False):  # type: ignore[override]
+        batch, seq, hidden = x.shape
+        flat = x.reshape(batch * seq, hidden)
+        logits = self.router(flat)
+        if self.router_noise > 0:
+            logits = logits + torch.randn_like(logits) * self.router_noise
+        probs = torch.softmax(logits, dim=-1)
+        router_entropy = None
+        if collect_router_stats:
+            with torch.no_grad():
+                router_entropy = -(probs * torch.log(probs + 1e-9)).sum(dim=-1).mean()
+        top_scores, top_indices = torch.topk(probs, k=self.top_k, dim=-1)
+
+        drop_mask = None
+        overflow_mask = None
+        expert_counts = None
+        if self.capacity_factor is not None:
+            tokens = flat.shape[0]
+            avg_tokens_per_expert = max(1, math.ceil((tokens * self.top_k) / max(self.num_experts, 1)))
+            capacity = max(1, math.ceil(self.capacity_factor * avg_tokens_per_expert))
+            expert_counts = torch.bincount(top_indices.reshape(-1), minlength=self.num_experts)
+            overloaded = expert_counts > capacity
+            drop_mask = overloaded[top_indices]
+            top_scores = top_scores * (~drop_mask).float()
+            overflow_mask = drop_mask.any(dim=-1)
+
+        combined = torch.zeros_like(flat)
+        tokens = flat.shape[0]
+        token_ids = torch.arange(tokens, device=flat.device, dtype=torch.long).repeat_interleave(self.top_k)
+        expert_ids = top_indices.reshape(-1).to(dtype=torch.long)
+        weights = top_scores.reshape(-1).unsqueeze(-1)
+
+        sorted_expert_ids, perm = torch.sort(expert_ids)
+        sorted_token_ids = token_ids.index_select(0, perm)
+        sorted_weights = weights.index_select(0, perm)
+
+        unique_experts, counts = torch.unique_consecutive(sorted_expert_ids, return_counts=True)
+        # Convert small metadata to CPU for efficient Python looping.
+        expert_list = unique_experts.tolist()
+        count_list = counts.tolist()
+
+        offset = 0
+        for expert_id, count in zip(expert_list, count_list):
+            if count <= 0:
+                continue
+            segment_tokens = sorted_token_ids.narrow(0, offset, count)
+            segment_weights = sorted_weights.narrow(0, offset, count)
+            offset += count
+
+            expert_input = flat.index_select(0, segment_tokens)
+            expert_out = self.experts[int(expert_id)](expert_input)
+            segment_weights = segment_weights.to(expert_out.dtype)
+            combined.index_add_(0, segment_tokens, expert_out * segment_weights)
+
         combined = combined.view(batch, seq, hidden)
         if collect_router_stats:
             stats = {

@@ -30,6 +30,7 @@ import argparse
 import json
 import shutil
 import sys
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -136,34 +137,109 @@ def fix_file(
 
     modified = False
     examples = data.get("examples", {})
+    hardware_key = data.get("hardware_key") or "unknown"
+    now_iso = datetime.now().isoformat()
+
+    # Best-effort current git commit (used only when file lacks historical commit)
+    default_git_commit = None
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        default_git_commit = (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, stderr=subprocess.DEVNULL)
+            .decode()
+            .strip()
+        )
+    except Exception:
+        default_git_commit = None
 
     for example_key, entry in examples.items():
         metrics = entry.get("metrics", {})
         metadata = entry.get("metadata", {})
 
+        # Ensure provenance exists for schema v2 files.
+        provenance = entry.get("provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+            entry["provenance"] = provenance
+            modified = True
+        if not provenance.get("git_commit"):
+            provenance["git_commit"] = metadata.get("git_commit") or default_git_commit or "unknown"
+            modified = True
+        if not provenance.get("hardware_key"):
+            provenance["hardware_key"] = hardware_key
+            modified = True
+        if not provenance.get("profile_name"):
+            provenance["profile_name"] = metadata.get("profile_name") or "none"
+            modified = True
+        if not provenance.get("timestamp"):
+            provenance["timestamp"] = metadata.get("updated_at") or now_iso
+            modified = True
+        if "iterations" not in provenance:
+            provenance["iterations"] = 0
+            modified = True
+        if "warmup_iterations" not in provenance:
+            provenance["warmup_iterations"] = 0
+            modified = True
+
         baseline_time = metrics.get("baseline_time_ms", 0.0)
         optimized_time = metrics.get("best_optimized_time_ms", 0.0)
 
-        if baseline_time > 0 and optimized_time > 0:
-            computed_speedup = compute_speedup(baseline_time, optimized_time)
-            stored_speedup = metrics.get("best_speedup")
+        computed_speedup = 1.0
+        if isinstance(baseline_time, (int, float)) and isinstance(optimized_time, (int, float)):
+            if baseline_time > 0 and optimized_time > 0:
+                computed_speedup = compute_speedup(float(baseline_time), float(optimized_time))
 
-            # Check if speedup needs fixing
-            if stored_speedup is None or abs(stored_speedup - computed_speedup) > SPEEDUP_TOLERANCE:
-                if verbose:
-                    print(f"    Fixing {example_key}: {stored_speedup} -> {computed_speedup:.6f}")
-                metrics["best_speedup"] = computed_speedup
-                metrics["best_optimized_speedup"] = computed_speedup
-                metrics["is_regression"] = computed_speedup < 1.0
-                modified = True
+        stored_speedup = metrics.get("best_speedup")
+        if stored_speedup is None or abs(float(stored_speedup) - computed_speedup) > SPEEDUP_TOLERANCE:
+            if verbose:
+                print(f"    Fixing {example_key}: {stored_speedup} -> {computed_speedup:.6f}")
+            metrics["best_speedup"] = computed_speedup
+            metrics["best_optimized_speedup"] = computed_speedup
+            modified = True
 
-            # Fix metadata speedup if needed
-            metadata_speedup = metadata.get("best_optimization_speedup")
-            if metadata_speedup is not None and abs(metadata_speedup - computed_speedup) > SPEEDUP_TOLERANCE:
-                if verbose:
-                    print(f"    Fixing {example_key} metadata: {metadata_speedup} -> {computed_speedup:.6f}")
-                metadata["best_optimization_speedup"] = computed_speedup
-                modified = True
+        # Fix memory savings metrics when present
+        baseline_mem = metrics.get("baseline_memory_mb")
+        optimized_mem = metrics.get("best_optimized_memory_mb")
+        if isinstance(baseline_mem, (int, float)) and isinstance(optimized_mem, (int, float)):
+            if baseline_mem > 0 and optimized_mem > 0:
+                computed_ratio = float(baseline_mem) / float(optimized_mem)
+                computed_pct = ((float(baseline_mem) - float(optimized_mem)) / float(baseline_mem)) * 100.0
+                if (
+                    metrics.get("best_memory_savings_ratio") is None
+                    or abs(float(metrics.get("best_memory_savings_ratio")) - computed_ratio) > SPEEDUP_TOLERANCE
+                ):
+                    metrics["best_memory_savings_ratio"] = computed_ratio
+                    modified = True
+                if (
+                    metrics.get("best_memory_savings_pct") is None
+                    or abs(float(metrics.get("best_memory_savings_pct")) - computed_pct) > SPEEDUP_TOLERANCE
+                ):
+                    metrics["best_memory_savings_pct"] = computed_pct
+                    modified = True
+
+        # Determine regression flag relative to goal (default: speed)
+        goal = (metadata.get("optimization_goal") or "speed").strip().lower()
+        old_is_regression = metrics.get("is_regression")
+        new_is_regression = computed_speedup < 1.0
+        if goal == "memory":
+            baseline_mem = metrics.get("baseline_memory_mb")
+            optimized_mem = metrics.get("best_optimized_memory_mb")
+            if (
+                isinstance(baseline_mem, (int, float))
+                and isinstance(optimized_mem, (int, float))
+                and baseline_mem > 0
+                and optimized_mem > 0
+            ):
+                new_is_regression = (float(baseline_mem) / float(optimized_mem)) < 1.0
+        metrics["is_regression"] = new_is_regression
+        if old_is_regression is None or bool(old_is_regression) != bool(new_is_regression):
+            modified = True
+
+        # Fix metadata speedup if needed
+        metadata_speedup = metadata.get("best_optimization_speedup")
+        if metadata_speedup is None or abs(float(metadata_speedup) - computed_speedup) > SPEEDUP_TOLERANCE:
+            metadata["best_optimization_speedup"] = computed_speedup
+            modified = True
 
     if modified:
         # Update schema version
@@ -200,6 +276,7 @@ def validate_expectations(
     fix: bool = False,
     verbose: bool = False,
     strict: bool = False,
+    backup: bool = True,
 ) -> int:
     """Main validation function.
 
@@ -256,7 +333,7 @@ def validate_expectations(
                 print(format_issue(issue, verbose))
 
             if fix:
-                if fix_file(path, verbose):
+                if fix_file(path, verbose=verbose, backup=backup):
                     files_fixed += 1
                     print(f"    ✓ Fixed {len(report.issues)} issue(s)")
         else:
@@ -349,6 +426,7 @@ Examples:
             fix=args.fix,
             verbose=args.verbose,
             strict=args.strict,
+            backup=not args.no_backup,
         )
         sys.exit(exit_code)
     except KeyboardInterrupt:
@@ -364,9 +442,6 @@ Examples:
 
 if __name__ == "__main__":
     main()
-
-
-
 
 
 

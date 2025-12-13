@@ -1,5 +1,5 @@
 """
-optimized_fp8_perchannel_demo.py - Per-Channel FP8 Scaling (Ch13)
+fp8_perchannel_demo.py - Per-Channel FP8 Scaling (Ch13)
 
 WHAT: Per-channel (per-column) scaling computes a separate scale factor for
 each output channel, rather than one scale for the entire tensor.

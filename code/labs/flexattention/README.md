@@ -13,8 +13,8 @@ Mirrors the FlexAttention CuTe DSL walkthrough: run eager vs compiled FlexAttent
 | Path | Description |
 | --- | --- |
 | `baseline_flex_attention.py`, `optimized_flex_attention.py` | FlexAttention DSL workloads toggling `torch.compile` for fused kernels. |
-| `baseline_flex_attention_cute.py`, `optimized_flex_attention_cute.py` | CuTe/FlashAttention versions for hardware without FlexAttention support. |
-| `flexattention_common.py`, `expectations_gb10.json` | Shared input builders, score modifiers, and regression thresholds. |
+| `flex_attention_cute.py` | CuTe/FlashAttention tool for systems without FlexAttention bindings. |
+| `flexattention_common.py`, `expectations_b200.json` | Shared input builders, score modifiers, and regression thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
@@ -29,7 +29,7 @@ python -m cli.aisp bench run --targets labs/flexattention --profile minimal
 ## Validation Checklist
 - `python -m cli.aisp bench run --targets labs/flexattention:flex_attention --profile minimal` captures the eager vs compiled delta and stores artifacts.
 - `BLOCK_SIZE=64 DOC_SPAN=128 python -m cli.aisp bench run --targets labs/flexattention:flex_attention` demonstrates masked sparsity sweeps.
-- `python -m cli.aisp bench run --targets labs/flexattention:flex_attention_cute` succeeds even on systems missing FlexAttention bindings.
+- `python -m cli.aisp tools flex-attention-cute -- --batch 2 --seq-len 1024` succeeds even on systems missing FlexAttention bindings.
 
 ## Notes
 - Environment variables such as `BLOCK_SIZE`, `DOC_SPAN`, and `TORCH_COMPILE_MODE` are read at runtime for quick experiments.

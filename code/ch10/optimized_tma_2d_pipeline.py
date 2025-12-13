@@ -20,7 +20,7 @@ class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
             binary_name="tma_2d_pipeline_blackwell",
             friendly_name="TMA 2D Pipeline Optimized (Tensor Memory Accelerator)",
             iterations=1,
-            warmup=5,
+            warmup=1,
             timeout_seconds=90,
             run_args=(),
             requires_pipeline_api=True,
@@ -29,9 +29,6 @@ class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
                 "dtype": "float32",
                 "M": 4096,
                 "N": 4096,
-                "tile_n": 128,
-                "chunk_m": 64,
-                "stages": 1,
             },
         )
         self.register_workload_metadata(bytes_per_iteration=1024 * 1024)
@@ -51,9 +48,6 @@ class OptimizedTma2DPipelineBenchmark(CudaBinaryBenchmark):
             dtype="float32",
             M=4096,
             N=4096,
-            tile_n=128,
-            chunk_m=64,
-            stages=1,
         ).to_dict()
 
     def get_output_tolerance(self) -> tuple[float, float]:

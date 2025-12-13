@@ -17,12 +17,21 @@
         "baseline_throughput.tokens_per_s": 11921510400.100618,
         "baseline_time_ms": 0.35182656049728395,
         "best_optimized_p75_ms": 0.08377599716186523,
-        "best_optimized_speedup": 5.424496625376467,
+        "best_optimized_speedup": 4.325169158881477,
         "best_optimized_throughput.latency_ms": 0.08134400010108948,
         "best_optimized_throughput.requests_per_s": 12293.469693613046,
         "best_optimized_throughput.tokens_per_s": 51562549109.79997,
         "best_optimized_time_ms": 0.08134400010108948,
-        "best_speedup": 5.424496625376467
+        "best_speedup": 4.325169158881477,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "9a4c942862319571235df0db76e32ea3bbe75b3e",
+        "hardware_key": "b200",
+        "iterations": 0,
+        "profile_name": "none",
+        "timestamp": "2025-12-11T00:48:49.730818",
+        "warmup_iterations": 0
       },
       "type": "python"
     },
@@ -46,7 +55,16 @@
         "best_optimized_throughput.latency_ms": 968.0018310546875,
         "best_optimized_throughput.requests_per_s": 1.0330558971261954,
         "best_optimized_time_ms": 968.0018310546875,
-        "best_speedup": 20.22016045406035
+        "best_speedup": 20.22016045406035,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "9a4c942862319571235df0db76e32ea3bbe75b3e",
+        "hardware_key": "b200",
+        "iterations": 0,
+        "profile_name": "none",
+        "timestamp": "2025-12-10T17:20:45.126736",
+        "warmup_iterations": 0
       },
       "type": "python"
     },
@@ -55,24 +73,33 @@
       "metadata": {
         "best_optimization": "optimized_memory_transfer",
         "best_optimization_file": "optimized_memory_transfer.py",
-        "best_optimization_speedup": 1.0111802814561008,
-        "best_optimization_time_ms": 0.7581344020366668,
-        "git_commit": "9a4c942862319571235df0db76e32ea3bbe75b3e",
-        "updated_at": "2025-12-10T16:43:32.334603"
+        "best_optimization_speedup": 5.294050315537845,
+        "best_optimization_time_ms": 3.657192274376198,
+        "git_commit": "af6f6af20e3fc675178c7133ea97d20fe831f9c8",
+        "updated_at": "2025-12-13T14:08:00.373019"
       },
       "metrics": {
-        "baseline_p75_ms": 0.7663360238075256,
-        "baseline_throughput.latency_ms": 0.7666105580329895,
-        "baseline_throughput.requests_per_s": 1304.443291996726,
-        "baseline_throughput.tokens_per_s": 13044432919.96726,
-        "baseline_time_ms": 0.7666105580329895,
-        "best_optimized_p75_ms": 0.7582719922065735,
-        "best_optimized_speedup": 1.0111802814561008,
-        "best_optimized_throughput.latency_ms": 0.7581344020366668,
-        "best_optimized_throughput.requests_per_s": 1319.0273351447722,
+        "baseline_p75_ms": 20.783552169799805,
+        "baseline_throughput.latency_ms": 19.36135991414388,
+        "baseline_throughput.requests_per_s": 51.64926453691298,
+        "baseline_throughput.tokens_per_s": 2582463226.845649,
+        "baseline_time_ms": 19.36135991414388,
+        "best_optimized_p75_ms": 3.636672019958496,
+        "best_optimized_speedup": 5.294050315537845,
+        "best_optimized_throughput.latency_ms": 3.657192274376198,
+        "best_optimized_throughput.requests_per_s": 273.43380521894176,
         "best_optimized_throughput.tokens_per_s": 13190273351.447721,
-        "best_optimized_time_ms": 0.7581344020366668,
-        "best_speedup": 1.0111802814561008
+        "best_optimized_time_ms": 3.657192274376198,
+        "best_speedup": 5.294050315537845,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "af6f6af20e3fc675178c7133ea97d20fe831f9c8",
+        "hardware_key": "b200",
+        "iterations": 0,
+        "profile_name": "none",
+        "timestamp": "2025-12-13T14:08:00.373019",
+        "warmup_iterations": 0
       },
       "type": "python"
     },
@@ -94,7 +121,16 @@
         "best_optimized_p90_ms": 6.549,
         "best_optimized_speedup": 12.961929967426709,
         "best_optimized_time_ms": 6.549333333333333,
-        "best_speedup": 12.961929967426709
+        "best_speedup": 12.961929967426709,
+        "is_regression": false
+      },
+      "provenance": {
+        "git_commit": "c0128fe94a287a5d65b3a121f4d33d00b2570fc5",
+        "hardware_key": "b200",
+        "iterations": 0,
+        "profile_name": "none",
+        "timestamp": "2025-12-09T05:24:17.955092",
+        "warmup_iterations": 0
       },
       "type": "cuda"
     }

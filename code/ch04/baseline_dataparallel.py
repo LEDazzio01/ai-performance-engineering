@@ -27,21 +27,14 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class SimpleNet(nn.Module):
-    """Simple neural network for benchmarking."""
+    """Lightweight network to expose DataParallel + H2D overhead."""
     
-    def __init__(self, input_size: int, hidden_size: int):
+    def __init__(self, input_size: int):
         super().__init__()
-        # Deeper network to show DataParallel overhead more clearly
-        self.linear1 = nn.Linear(input_size, hidden_size)
-        self.relu1 = nn.ReLU()
-        self.linear2 = nn.Linear(hidden_size, hidden_size)
-        self.relu2 = nn.ReLU()
-        self.linear3 = nn.Linear(hidden_size, 1)
+        self.linear = nn.Linear(input_size, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.relu1(self.linear1(x))
-        x = self.relu2(self.linear2(x))
-        return self.linear3(x)
+        return self.linear(x)
 
 
 class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -53,9 +46,11 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.optimizer = None
         self.data = None
         self.target = None
-        self.input_size = 1024
-        self.hidden_size = 256
-        self.batch_size = 512
+        self._last_input: Optional[torch.Tensor] = None
+        self._last_target: Optional[torch.Tensor] = None
+        # Large input to make per-iteration H2D copies dominate.
+        self.input_size = 4096
+        self.batch_size = 4096
         self.output: Optional[torch.Tensor] = None
         # Training benchmarks don't support jitter check
         tokens = self.batch_size * self.input_size
@@ -66,16 +61,22 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model, optimizer, and data."""
+        if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
+            raise RuntimeError("SKIPPED: requires >=2 GPUs")
         torch.manual_seed(42)
         
         # Keep input tensors on CPU so DataParallel copies every iteration.
-        model = SimpleNet(self.input_size, self.hidden_size).to(self.device)
-        self.model = nn.DataParallel(model)
+        model = SimpleNet(self.input_size).to(self.device)
+        # IMPORTANT: Force DataParallel to a single device so baseline/optimized
+        # remain comparable even on multi-GPU hosts.
+        device_index = 0 if self.device.index is None else int(self.device.index)
+        self.model = nn.DataParallel(model, device_ids=[device_index], output_device=device_index)
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
-        
-        self.data = torch.randn(self.batch_size, self.input_size)
-        self.target = torch.randn(self.batch_size, 1)
-        
+
+        data_gen = torch.Generator().manual_seed(1234)
+        self.data = torch.randn(self.batch_size, self.input_size, generator=data_gen)
+        self.target = torch.randn(self.batch_size, 1, generator=data_gen)
+
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
@@ -83,6 +84,8 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         with self._nvtx_range("dataparallel"):
             gpu_data = self.data.to(self.device, non_blocking=False)
             gpu_target = self.target.to(self.device, non_blocking=False)
+            self._last_input = gpu_data
+            self._last_target = gpu_target
             output = self.model(gpu_data)
             loss = nn.functional.mse_loss(output, gpu_target)
             loss.backward()
@@ -92,11 +95,11 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
 
     def capture_verification_payload(self) -> None:
-        if self.data is None or self.target is None or self.output is None:
+        if self._last_input is None or self._last_target is None or self.output is None:
             raise RuntimeError("setup() and benchmark_fn() must be called before capture_verification_payload()")
         param_count = sum(p.numel() for p in self.model.parameters()) if self.model is not None else 0
         self._set_verification_payload(
-            inputs={"data": self.data, "target": self.target},
+            inputs={"data": self._last_input, "target": self._last_target},
             output=self.output,
             batch_size=int(self.batch_size),
             parameter_count=param_count,
@@ -156,13 +159,6 @@ class BaselineDataParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         except Exception as e:
             return f"Model forward pass failed: {e}"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        return super().get_verify_output()
-    
-    def get_output_tolerance(self) -> tuple:
-        """Return custom tolerance for training output comparison."""
-        return (1e-3, 1e-3)
 
 
 

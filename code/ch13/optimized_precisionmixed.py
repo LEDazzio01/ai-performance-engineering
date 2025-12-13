@@ -9,7 +9,7 @@ import torch.nn as nn
 from torch.amp import autocast
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32, compile_model
+from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -43,7 +43,7 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets = None
         self.optimizer = None
         self.criterion = None
-        self.batch_size = 128
+        self.batch_size = 512
         self.hidden_dim = 2048
         self.micro_steps = 4
         tokens = self.batch_size * self.hidden_dim
@@ -66,22 +66,23 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             torch.backends.cudnn.deterministic = False
             enable_tf32()
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         
-        model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device)
-        model.train()
-        self.model = compile_model(model, mode="reduce-overhead")
+        # Keep the "precision mixed" story focused: use bf16 autocast + bf16 weights
+        # without introducing torch.compile overhead into this specific benchmark.
+        self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device, dtype=torch.bfloat16).train()
         self.parameter_count = sum(p.numel() for p in self.model.parameters())
         
-        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
-        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float16)
+        self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
+        self.targets = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.bfloat16)
         self._verify_input = self.inputs.detach().clone()
-        self.model = self.model.to(torch.float16)
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.criterion = nn.MSELoss()
         
         for _ in range(3):
             self.optimizer.zero_grad(set_to_none=True)
-            with autocast('cuda', dtype=torch.float16):
+            with autocast("cuda", dtype=torch.bfloat16):
                 outputs = self.model(self.inputs)
                 loss = self.criterion(outputs, self.targets)
             loss.backward()
@@ -97,7 +98,7 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             for _ in range(self.micro_steps):
                 self.optimizer.zero_grad(set_to_none=True)
                 
-                with autocast('cuda', dtype=torch.float16):
+                with autocast("cuda", dtype=torch.bfloat16):
                     outputs = self.model(self.inputs)
                     loss = self.criterion(outputs, self.targets)
                 
@@ -115,8 +116,8 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             batch_size=self._verify_input.shape[0],
             parameter_count=self.parameter_count,
             precision_flags={
-                "fp16": True,
-                "bf16": False,
+                "fp16": False,
+                "bf16": True,
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32,
             },
@@ -144,25 +145,13 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_precision_metrics
-        return compute_precision_metrics(
-            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
-            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
-            precision_type="fp8",
-        )
+        return None
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        # fp16 vs fp32 can have differences
-        return (0.5, 5.0)
-
 
 def get_benchmark() -> OptimizedPrecisionMixedBenchmark:
     """Factory function for harness discovery."""

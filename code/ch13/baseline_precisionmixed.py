@@ -44,7 +44,7 @@ class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets: Optional[torch.Tensor] = None
         self.optimizer: Optional[Optimizer] = None
         self.criterion: Optional[nn.Module] = None
-        self.batch_size = 128
+        self.batch_size = 512
         self.hidden_dim = 2048
         self.micro_steps = 4
         self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
@@ -65,6 +65,7 @@ class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize model and data."""
         torch.manual_seed(42)
         if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
             self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True
@@ -138,24 +139,13 @@ class BaselinePrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return self._workload
     
     def get_custom_metrics(self) -> Optional[dict]:
-        """Return domain-specific metrics using standardized helper."""
-        from core.benchmark.metrics import compute_precision_metrics
-        return compute_precision_metrics(
-            fp32_time_ms=getattr(self, '_fp32_ms', 10.0),
-            reduced_precision_time_ms=getattr(self, '_reduced_ms', 5.0),
-            precision_type="fp8",
-        )
+        return None
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
-
 
 def get_benchmark() -> BaselinePrecisionMixedBenchmark:
     """Factory function for harness discovery."""

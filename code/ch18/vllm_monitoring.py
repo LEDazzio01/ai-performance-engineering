@@ -1,4 +1,8 @@
-"""Optimized vLLM monitoring bundle capturing the full v1 metric surface."""
+"""vLLM monitoring bundle capturing the full v1 metric surface.
+
+This is a chapter tool (not a comparable baseline/optimized benchmark).
+Run via `python -m cli.aisp tools vllm-monitoring -- --outdir ...`.
+"""
 
 from __future__ import annotations
 
@@ -7,21 +11,17 @@ import sys
 import textwrap
 from dataclasses import asdict
 from pathlib import Path
-from typing import List, Optional
-
-import torch
+from typing import List
 
 repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
-from core.benchmark.verification_mixin import VerificationPayloadMixin
 from ch18.monitoring_bundle import MonitoringBundle, write_bundle  # noqa: E402
 from ch18.monitoring_config import MetricNames, AlertThresholds, load_monitoring_overrides  # noqa: E402
 
 
-def build_optimized_bundle(metrics: MetricNames, thresholds: AlertThresholds) -> MonitoringBundle:
+def build_vllm_monitoring_bundle(metrics: MetricNames, thresholds: AlertThresholds) -> MonitoringBundle:
     """
     Full-fidelity bundle: per-model TTFT/prefill/decode, queue churn, KV cache,
     CUDA graph mode, and EngineCore/scheduler error hooks.
@@ -570,7 +570,7 @@ def build_optimized_bundle(metrics: MetricNames, thresholds: AlertThresholds) ->
     }
 
     return MonitoringBundle(
-        name="optimized_vllm_monitoring",
+        name="vllm_monitoring",
         scrape_config=scrape_config,
         recording_rules=recording_rules,
         alerting_rules=alert_rules,
@@ -578,93 +578,12 @@ def build_optimized_bundle(metrics: MetricNames, thresholds: AlertThresholds) ->
     )
 
 
-class OptimizedVLLMMonitoringBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Benchmark wrapper so aisp bench can emit the bundle."""
-
-    def __init__(self, outdir: Optional[Path] = None, config_path: Optional[Path] = None):
-        self._device_override = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        super().__init__()
-        self._outdir = Path(outdir or Path.cwd() / "artifacts" / "vllm_monitoring_optimized")
-        default_cfg = Path(__file__).resolve().parent / "configs" / "vllm_monitoring.yaml"
-        self._config_path = Path(config_path) if config_path else default_cfg
-        self._metrics: Optional[MetricNames] = None
-        self._thresholds: Optional[AlertThresholds] = None
-        self._paths: List[Path] = []
-        self._written = False
-        self._verification_payload = None
-        # Config generation: writes YAML files, no GPU computation to verify
-        self.verification_not_applicable_reason = "Config generation benchmark - writes YAML/Prometheus config, no GPU computation"
-        self.register_workload_metadata(requests_per_iteration=1.0)
-
-    def _resolve_device(self):  # type: ignore[override]
-        return self._device_override
-
-    def setup(self) -> None:
-        self._metrics, self._thresholds = load_monitoring_overrides(self._config_path)
-
-    def benchmark_fn(self) -> None:
-        if self._written:
-            return
-        if self._metrics is None or self._thresholds is None:
-            raise RuntimeError("Monitoring config not loaded")
-        bundle = build_optimized_bundle(self._metrics, self._thresholds)
-        self._paths = write_bundle(bundle, self._outdir)
-        self._written = True
-        total_bytes = sum(p.stat().st_size for p in self._paths if p.exists())
-        thresholds_tensor = torch.tensor(
-            [
-                float(self._thresholds.ttft_p90_warn if self._thresholds else 0.0),
-                float(self._thresholds.ttft_p99_crit if self._thresholds else 0.0),
-                float(self._thresholds.kv_warn if self._thresholds else 0.0),
-                float(self._thresholds.kv_crit if self._thresholds else 0.0),
-            ],
-            device=self._device_override,
-        )
-        output = torch.tensor(
-            [float(len(self._paths)), float(total_bytes)],
-            device=self._device_override,
-        )
-        self.output = output
-        self._payload_thresholds_tensor = thresholds_tensor
-
-    def capture_verification_payload(self) -> None:
-        thresholds_tensor = self._payload_thresholds_tensor
-        self._set_verification_payload(
-            inputs={"thresholds": thresholds_tensor},
-            output=self.output,
-            batch_size=1,
-            parameter_count=0,
-            precision_flags={"fp16": False, "bf16": False, "fp8": False, "tf32": False},
-            output_tolerance=(0.0, 0.0),
-        )
-
-    def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=5)
-
-    def get_custom_metrics(self):
-        if not self._written:
-            return None
-        total_bytes = sum(p.stat().st_size for p in self._paths if p.exists())
-        return {
-            "bundle.files": float(len(self._paths)),
-            "bundle.bytes": float(total_bytes),
-            "ttft_p90_warn": float(self._thresholds.ttft_p90_warn if self._thresholds else 0.0),
-            "ttft_p99_crit": float(self._thresholds.ttft_p99_crit if self._thresholds else 0.0),
-            "kv_warn": float(self._thresholds.kv_warn if self._thresholds else 0.0),
-            "kv_crit": float(self._thresholds.kv_crit if self._thresholds else 0.0),
-        }
-
-
-def get_benchmark() -> BaseBenchmark:
-    return OptimizedVLLMMonitoringBenchmark()
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Emit optimized vLLM monitoring bundle.")
+    parser = argparse.ArgumentParser(description="Emit vLLM monitoring bundle (full v1 surface).")
     parser.add_argument(
         "--outdir",
         type=Path,
-        default=Path.cwd() / "artifacts" / "vllm_monitoring_optimized",
+        default=Path.cwd() / "artifacts" / "vllm_monitoring",
         help="Directory to write Prometheus and Grafana assets.",
     )
     parser.add_argument(
@@ -676,9 +595,9 @@ def main() -> None:
     args = parser.parse_args()
 
     metrics, thresholds = load_monitoring_overrides(args.config)
-    bundle = build_optimized_bundle(metrics, thresholds)
+    bundle = build_vllm_monitoring_bundle(metrics, thresholds)
     paths = write_bundle(bundle, args.outdir)
-    print(f"Wrote optimized monitoring bundle to {args.outdir}")
+    print(f"Wrote monitoring bundle to {args.outdir}")
     print(f"Metric names: {asdict(metrics)}")
     print(f"Thresholds: {asdict(thresholds)}")
     for p in paths:

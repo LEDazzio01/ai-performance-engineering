@@ -412,7 +412,12 @@ def resolve_target_chapters(
         # Collect per-chapter example filters when provided
         if sep:
             slug = chapter_slug(chapter_dir, repo_root, bench_root=primary_root)
-            allowed = {example for _, _, example in discover_benchmarks(chapter_dir)}
+            allowed_python = {example for _, _, example in discover_benchmarks(chapter_dir)}
+            allowed_cuda = {
+                p.stem.replace("baseline_", "", 1)
+                for p in chapter_dir.glob("baseline_*.cu")
+            }
+            allowed = allowed_python | allowed_cuda
             for example in _parse_examples(examples):
                 if allowed and example not in allowed:
                     raise ValueError(

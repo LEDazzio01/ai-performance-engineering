@@ -128,6 +128,9 @@ single_gpu_load_test.json
 *summary.md
 **/summary.md
 
+# Expectations backups
+*.json.bak
+
 # LLM-generated analysis outputs
 llm_analysis/
 **/llm_analysis/

@@ -1,4 +1,4 @@
-"""optimized_roofline.py - Optimized with roofline analysis in GEMM context.
+"""roofline.py - Roofline analysis demo in a GEMM context.
 
 Demonstrates roofline analysis for performance optimization.
 Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
@@ -33,7 +33,7 @@ def resolve_device() -> torch.device:
         raise RuntimeError("CUDA required for ch10")
     return torch.device("cuda")
 
-class OptimizedRooflineBenchmark(VerificationPayloadMixin, BaseBenchmark):
+class RooflineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Optimized: Roofline analysis for performance optimization.
     
     Roofline: Uses roofline analysis to identify compute/memory bottlenecks.
@@ -179,7 +179,7 @@ class OptimizedRooflineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return None
 def get_benchmark() -> BaseBenchmark:
     """Factory function for harness discovery."""
-    return OptimizedRooflineBenchmark()
+    return RooflineBenchmark()
 
 def main() -> None:
     """Standalone execution (for testing)."""
@@ -189,11 +189,12 @@ def main() -> None:
         mode=BenchmarkMode.CUSTOM,
         config=BenchmarkConfig(iterations=50, warmup=5)
     )
-    benchmark = OptimizedRooflineBenchmark()
+    # Note: this is a standalone demo; prefer `aisp profile roofline` for Nsight-based rooflines.
+    benchmark = RooflineBenchmark()
     result = harness.benchmark(benchmark)
     
     print("=" * 70)
-    print(f"Optimized: Roofline")
+    print("Roofline demo")
     print("=" * 70)
     print(f"Average time: {result.timing.mean_ms if result.timing else 0.0:.3f} ms")
     print(f"Median: {result.timing.median_ms if result.timing else 0.0:.3f} ms")

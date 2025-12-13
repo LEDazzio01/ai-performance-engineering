@@ -1,4 +1,9 @@
-"""optimized_kv_cache_management_math.py - Math-only KV cache management."""
+"""kv_cache_management_math.py - Math-only KV cache management.
+
+This is a chapter utility variant (NOT a baseline/optimized comparable benchmark).
+It forces the math SDP backend for environments where flash/mem-efficient kernels
+are unavailable, so it is expected to be slower.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ def _math_sdp_context():
     return sdpa_kernel([backend])
 
 
-class OptimizedKVCacheManagementMathBenchmark(VerificationPayloadMixin, BaseBenchmark):
+class KVCacheManagementMathBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Math-only SDP variant to avoid flash-attn kernel requirements."""
     
     def __init__(self):
@@ -80,7 +85,7 @@ class OptimizedKVCacheManagementMathBenchmark(VerificationPayloadMixin, BaseBenc
     def benchmark_fn(self) -> None:
         assert self.q_proj is not None and self.k_proj is not None and self.v_proj is not None and self.out_proj is not None
         assert self.inputs is not None and self.cache_buffer is not None
-        with self._nvtx_range("optimized_kv_cache_management_math"):
+        with self._nvtx_range("kv_cache_management_math"):
             with torch.no_grad():
                 queries = torch.cat(self.inputs, dim=1)
                 k_cache = torch.cat(self.inputs, dim=1)
@@ -163,4 +168,10 @@ class OptimizedKVCacheManagementMathBenchmark(VerificationPayloadMixin, BaseBenc
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedKVCacheManagementMathBenchmark()
+    return KVCacheManagementMathBenchmark()
+
+
+if __name__ == "__main__":
+    from core.harness.benchmark_harness import benchmark_main
+
+    benchmark_main(get_benchmark)

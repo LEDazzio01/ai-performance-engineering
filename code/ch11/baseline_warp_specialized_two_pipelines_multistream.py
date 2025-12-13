@@ -33,7 +33,8 @@ class BaselineDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def __init__(self) -> None:
         super().__init__()
         self.num_streams = 1
-        self.tiles = 128
+        # Increase tile count so stream-management overhead is amortized.
+        self.tiles = 4096
         self.ext = None  # Loaded lazily in setup()
         self.input_a: torch.Tensor | None = None
         self.input_b: torch.Tensor | None = None
@@ -53,7 +54,7 @@ class BaselineDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
         total_elems = self.tiles * self.tile_elems
         self.input_a = torch.randn(total_elems, device=self.device, dtype=torch.float32)
         self.input_b = torch.randn(total_elems, device=self.device, dtype=torch.float32)
-        self.output = torch.empty_like(self.input_a)
+        self.output = None
         self._synchronize()
         tokens = float(total_elems * 2)  # two inputs processed per iteration
         self.register_workload_metadata(
@@ -70,8 +71,7 @@ class BaselineDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 self.num_streams,
             )
         self._synchronize()
-        if self.output is not None:
-            self.output.copy_(result)
+        self.output = result
         if self.input_a is None or self.input_b is None or self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
@@ -97,7 +97,7 @@ class BaselineDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
-            iterations=30,
+            iterations=10,
             warmup=5,
             measurement_timeout_seconds=120,
             setup_timeout_seconds=120,

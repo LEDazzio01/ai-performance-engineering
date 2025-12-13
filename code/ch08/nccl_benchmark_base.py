@@ -37,7 +37,6 @@ class NcclBenchmarkBase(BaseBenchmark):
             cuda_source_file=str(Path(__file__).with_name("nccl_kernels.cu")),
             extra_cuda_cflags=["-O3", "--use_fast_math", "-lineinfo"],
         )
-        torch.manual_seed(7)
         self.device_chunks = torch.randn(
             self.world_size,
             self.chunk_elems,

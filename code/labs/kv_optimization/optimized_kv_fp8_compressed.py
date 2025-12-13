@@ -177,8 +177,6 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
         num_decode_steps = 100
 
         self._synchronize()
-        if torch.cuda.is_available():
-            torch.cuda.reset_peak_memory_stats(self.device)
         start = time.perf_counter()
 
         for _ in range(num_decode_steps):
@@ -236,6 +234,13 @@ class OptimizedKVFP8Compressed(VerificationPayloadMixin, BaseBenchmark):
     def get_optimization_goal(self) -> str:
         """Memory optimization - lower memory usage is better."""
         return "memory"
+
+    def get_config(self) -> BenchmarkConfig:
+        return BenchmarkConfig(
+            iterations=10,
+            warmup=5,
+            enable_memory_tracking=True,
+        )
 
     def teardown(self):
         """Clean up."""

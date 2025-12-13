@@ -75,7 +75,7 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 class BaselinePersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Benchmark wrapper for baseline persistent matmul TMA."""
 
-    def __init__(self, M: int = 1024, N: int = 1024, K: int = 1024):
+    def __init__(self, M: int = 4096, N: int = 4096, K: int = 4096):
         super().__init__()
         self.M = M
         self.N = N
@@ -149,7 +149,7 @@ class BaselinePersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchma
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5)
+        return BenchmarkConfig(iterations=20, warmup=5)
 
 
 def get_benchmark() -> BaseBenchmark:

@@ -17,7 +17,8 @@ class OptimizedMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.host_data: Optional[torch.Tensor] = None
         self.device_data: Optional[torch.Tensor] = None
-        self.N = 10_000_000
+        # Match baseline (workload must be identical).
+        self.N = 50_000_000
         bytes_per_iter = self.N * 4  # float32 copy
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -45,13 +46,14 @@ class OptimizedMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.device_data.copy_(self.host_data, non_blocking=True)
             self._synchronize()
 
-        verify_output = self.device_data[:1000].detach().clone()
-        self.output = verify_output
+        self.output = self.device_data[:1000].detach()
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"host_data": self.host_data},
-            output=self.output,
+            output=self.output.detach().clone(),
             batch_size=self.N,
             parameter_count=0,
             precision_flags={

@@ -17,8 +17,11 @@ class IssueEntry:
     chapter: str
     example: str
     severity: str
-    best_speedup: float
+    best_improvement: float
+    optimization_goal: str
     baseline_ms: Optional[float]
+    baseline_memory_mb: Optional[float]
+    optimized_memory_mb: Optional[float]
     artifact_dir: str
     notes: str
     optimizations: str
@@ -107,6 +110,33 @@ def _derive_best_speedup(benchmark: Dict) -> float:
     return float(best_speedup)
 
 
+def _derive_best_memory_ratio(benchmark: Dict) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return (baseline_mb, optimized_mb, baseline/optimized) when possible."""
+    baseline_memory_mb = benchmark.get("baseline_memory_mb")
+    if baseline_memory_mb is None:
+        return None, None, None
+
+    optimized_candidates: List[float] = []
+    for opt in benchmark.get("optimizations", []) or []:
+        if (opt.get("status") or "").lower() != "succeeded":
+            continue
+        memory_mb = opt.get("memory_mb")
+        if memory_mb is None:
+            continue
+        try:
+            optimized_candidates.append(float(memory_mb))
+        except (TypeError, ValueError):
+            continue
+
+    if not optimized_candidates:
+        return float(baseline_memory_mb), None, None
+
+    optimized_memory_mb = min(optimized_candidates)
+    if optimized_memory_mb <= 0:
+        return float(baseline_memory_mb), optimized_memory_mb, None
+    return float(baseline_memory_mb), optimized_memory_mb, float(baseline_memory_mb) / optimized_memory_mb
+
+
 def classify_entry(
     chapter_name: str,
     benchmark: Dict,
@@ -120,7 +150,9 @@ def classify_entry(
     severity = None
     notes = (benchmark.get("error") or benchmark.get("skip_reason") or "").strip()
     baseline_ms = benchmark.get("baseline_time_ms")
+    optimization_goal = str(benchmark.get("optimization_goal") or "speed").strip().lower()
     best_speedup = _derive_best_speedup(benchmark)
+    baseline_memory_mb, optimized_memory_mb, best_memory_ratio = _derive_best_memory_ratio(benchmark)
 
     status = (benchmark.get("status") or "").lower()
     if _should_treat_failure_as_skip(benchmark, notes):
@@ -143,6 +175,13 @@ def classify_entry(
         severity = "fail"
     elif status == "skipped":
         severity = "skipped"
+    elif optimization_goal == "memory":
+        if best_memory_ratio is None:
+            severity = "fail"
+            if not notes:
+                notes = "Missing memory metrics for memory-goal benchmark"
+        elif best_memory_ratio < threshold:
+            severity = "needs-work"
     elif best_speedup < threshold:
         severity = "needs-work"
 
@@ -160,8 +199,11 @@ def classify_entry(
         chapter=chapter_name,
         example=example_name,
         severity=severity,
-        best_speedup=best_speedup,
+        best_improvement=best_memory_ratio if optimization_goal == "memory" and best_memory_ratio is not None else best_speedup,
+        optimization_goal=optimization_goal,
         baseline_ms=baseline_ms,
+        baseline_memory_mb=baseline_memory_mb,
+        optimized_memory_mb=optimized_memory_mb,
         artifact_dir=artifact_dir,
         notes=notes,
         optimizations=optimizations,
@@ -242,8 +284,11 @@ def write_csv(issues: List[IssueEntry], output_csv: Path) -> None:
             "chapter",
             "example",
             "severity",
-            "best_speedup",
+            "best_improvement",
+            "optimization_goal",
             "baseline_ms",
+            "baseline_memory_mb",
+            "optimized_memory_mb",
             "artifact_dir",
             "notes",
             "optimizations",
@@ -254,8 +299,11 @@ def write_csv(issues: List[IssueEntry], output_csv: Path) -> None:
                 entry.chapter,
                 entry.example,
                 entry.severity,
-                f"{entry.best_speedup:.2f}",
+                f"{entry.best_improvement:.2f}",
+                entry.optimization_goal,
                 f"{entry.baseline_ms:.3f}" if entry.baseline_ms is not None else "",
+                f"{entry.baseline_memory_mb:.1f}" if entry.baseline_memory_mb is not None else "",
+                f"{entry.optimized_memory_mb:.1f}" if entry.optimized_memory_mb is not None else "",
                 entry.artifact_dir,
                 notes,
                 entry.optimizations,

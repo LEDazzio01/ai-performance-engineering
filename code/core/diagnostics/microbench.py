@@ -1,10 +1,18 @@
-"""Lightweight microbenchmarks for CLI/dashboard exposure."""
+"""Lightweight hardware microbenchmarks for quick diagnostics.
+
+IMPORTANT: These routines are diagnostic tools, not comparable benchmarks.
+They intentionally bypass the benchmark harness and therefore do NOT include
+the 94 validity protections (stream auditing, cache isolation, clock locking,
+etc.). Use them to sanity-check a system, not to claim baseline-vs-optimized
+speedups.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import socket
+import statistics
 import tempfile
 import time
 from pathlib import Path
@@ -12,8 +20,67 @@ from typing import Dict, Any, Optional
 import typer
 
 
+_DIAGNOSTIC_META: Dict[str, Any] = {
+    "diagnostic_only": True,
+    "harness_protections": False,
+    "note": (
+        "Diagnostic-only microbenchmark (bypasses harness protections). "
+        "Do not use for baseline/optimized comparisons."
+    ),
+}
+
+
+def _with_meta(result: Dict[str, Any]) -> Dict[str, Any]:
+    if "_meta" in result:
+        raise RuntimeError("microbench result dict must not already contain '_meta'")
+    return {"_meta": dict(_DIAGNOSTIC_META), **result}
+
+
 def _now() -> float:
     return time.perf_counter()
+
+
+def _summarize_samples(samples_s: list[float]) -> Dict[str, Any]:
+    if not samples_s:
+        return {
+            "samples_completed": 0,
+            "p50_seconds": None,
+            "p90_seconds": None,
+            "mean_seconds": None,
+            "min_seconds": None,
+            "max_seconds": None,
+        }
+    ordered = sorted(samples_s)
+    n = len(ordered)
+
+    def _pct(p: float) -> float:
+        if n == 1:
+            return ordered[0]
+        idx = int(round(p * (n - 1)))
+        return ordered[idx]
+
+    return {
+        "samples_completed": n,
+        "p50_seconds": _pct(0.50),
+        "p90_seconds": _pct(0.90),
+        "mean_seconds": float(statistics.mean(ordered)),
+        "min_seconds": ordered[0],
+        "max_seconds": ordered[-1],
+    }
+
+
+def _gpu_state_payload(before_state: Any, after_state: Any) -> Dict[str, Any]:
+    from dataclasses import asdict
+
+    from core.harness.validity_checks import check_gpu_state_consistency
+
+    consistent, warnings_list = check_gpu_state_consistency(before_state, after_state)
+    return {
+        "gpu_state_before": asdict(before_state),
+        "gpu_state_after": asdict(after_state),
+        "gpu_state_consistent": bool(consistent),
+        "gpu_warnings": warnings_list,
+    }
 
 
 def disk_io_test(
@@ -74,7 +141,7 @@ def disk_io_test(
     except Exception:
         pass
 
-    return {
+    return _with_meta({
         "file_size_mb": file_size_mb,
         "block_size_kb": block_size_kb,
         "write_seconds": write_time,
@@ -86,27 +153,39 @@ def disk_io_test(
         "path": str(tmp_path),
         "timeout_seconds": timeout_seconds,
         "timeout_hit": timeout_hit,
-    }
+    })
 
 
-def pcie_bandwidth_test(size_mb: int = 256, iters: int = 10, timeout_seconds: float | None = None) -> Dict[str, Any]:
+def pcie_bandwidth_test(
+    size_mb: int = 256,
+    iters: int = 10,
+    warmup: int = 3,
+    timeout_seconds: float | None = None,
+) -> Dict[str, Any]:
     """Measure H2D and D2H bandwidth using torch CUDA if available."""
     try:
         import torch
     except ImportError as e:
-        return {"error": f"torch not available: {e}"}
+        return _with_meta({"error": f"torch not available: {e}"})
 
     if not torch.cuda.is_available():
-        return {"error": "CUDA not available"}
+        return _with_meta({"error": "CUDA not available"})
 
     device = torch.device("cuda")
+    device_index = device.index if device.index is not None else 0
     size_bytes = size_mb * 1024 * 1024
     tensor_cpu = torch.empty(size_bytes // 4, dtype=torch.float32, device="cpu")
     tensor_gpu = torch.empty_like(tensor_cpu, device=device)
 
+    from core.harness.validity_checks import capture_gpu_state
+
+    gpu_state_before = capture_gpu_state(device_index)
     deadline = _now() + timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
     timeout_hit = False
 
+    torch.cuda.synchronize()
+    for _ in range(max(0, warmup)):
+        tensor_gpu.copy_(tensor_cpu, non_blocking=True)
     torch.cuda.synchronize()
     # H2D
     start = _now()
@@ -125,6 +204,9 @@ def pcie_bandwidth_test(size_mb: int = 256, iters: int = 10, timeout_seconds: fl
     d2h_time = None
     d2h_iters = 0
     if not timeout_hit:
+        for _ in range(max(0, warmup)):
+            tensor_cpu.copy_(tensor_gpu, non_blocking=True)
+        torch.cuda.synchronize()
         start = _now()
         for _ in range(iters):
             tensor_cpu.copy_(tensor_gpu, non_blocking=True)
@@ -136,55 +218,101 @@ def pcie_bandwidth_test(size_mb: int = 256, iters: int = 10, timeout_seconds: fl
         elapsed_d2h = _now() - start
         d2h_time = elapsed_d2h / max(d2h_iters, 1)
 
-    return {
+    gpu_state_after = capture_gpu_state(device_index)
+    return _with_meta({
         "size_mb": size_mb,
         "iters": iters,
+        "warmup": warmup,
         "h2d_completed": h2d_iters,
         "d2h_completed": d2h_iters,
+        "h2d_seconds_per_iter": h2d_time,
+        "d2h_seconds_per_iter": d2h_time,
         "h2d_gbps": (size_bytes / h2d_time) / 1e9 if h2d_time and h2d_time > 0 else None,
         "d2h_gbps": (size_bytes / d2h_time) / 1e9 if d2h_time and d2h_time > 0 else None,
         "timeout_seconds": timeout_seconds,
         "timeout_hit": timeout_hit,
-    }
+        **_gpu_state_payload(gpu_state_before, gpu_state_after),
+    })
 
 
-def mem_hierarchy_test(size_mb: int = 256, stride: int = 128, timeout_seconds: float | None = None) -> Dict[str, Any]:
+def mem_hierarchy_test(
+    size_mb: int = 256,
+    stride: int = 128,
+    iters: int = 10,
+    warmup: int = 3,
+    timeout_seconds: float | None = None,
+) -> Dict[str, Any]:
     """Crude stride-based bandwidth test on GPU memory."""
     try:
         import torch
     except ImportError as e:
-        return {"error": f"torch not available: {e}"}
+        return _with_meta({"error": f"torch not available: {e}"})
     if not torch.cuda.is_available():
-        return {"error": "CUDA not available"}
+        return _with_meta({"error": "CUDA not available"})
 
     device = torch.device("cuda")
+    device_index = device.index if device.index is not None else 0
     n = (size_mb * 1024 * 1024) // 4
     x = torch.arange(n, device=device, dtype=torch.float32)
+    from core.harness.validity_checks import capture_gpu_state
+
+    gpu_state_before = capture_gpu_state(device_index)
+
+    def _run_once() -> torch.Tensor:
+        # stride access; clone ensures real reads happen
+        return x[::stride].clone()
+
     torch.cuda.synchronize()
-    start = _now()
-    # stride access
-    y = x[::stride].clone()
+    for _ in range(max(0, warmup)):
+        y = _run_once()
     torch.cuda.synchronize()
-    elapsed = _now() - start
-    bytes_moved = y.numel() * 4
-    return {
+
+    samples_s: list[float] = []
+    deadline = _now() + timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+    timeout_hit = False
+    y = None
+    for _ in range(max(0, iters)):
+        start = _now()
+        y = _run_once()
+        torch.cuda.synchronize()
+        samples_s.append(_now() - start)
+        if deadline and _now() > deadline:
+            timeout_hit = True
+            break
+
+    summary = _summarize_samples(samples_s)
+    elapsed = summary["p50_seconds"] if summary["p50_seconds"] is not None else None
+    y_final = y if y is not None else _run_once()
+    bytes_moved = y_final.numel() * 4
+    gpu_state_after = capture_gpu_state(device_index)
+    return _with_meta({
         "size_mb": size_mb,
         "stride": stride,
-        "bandwidth_gbps": (bytes_moved / elapsed) / 1e9 if elapsed > 0 else None,
-        "elements": y.numel(),
+        "iters": iters,
+        "warmup": warmup,
+        "bandwidth_gbps": (bytes_moved / elapsed) / 1e9 if elapsed and elapsed > 0 else None,
+        "elements": y_final.numel(),
+        "timing": summary,
         "timeout_seconds": timeout_seconds,
-        "timeout_hit": timeout_seconds is not None and timeout_seconds > 0 and elapsed > timeout_seconds,
-    }
+        "timeout_hit": timeout_hit,
+        **_gpu_state_payload(gpu_state_before, gpu_state_after),
+    })
 
 
-def tensor_core_bench(size: int = 4096, precision: str = "fp16", timeout_seconds: float | None = None) -> Dict[str, Any]:
+def tensor_core_bench(
+    size: int = 4096,
+    precision: str = "fp16",
+    iters: int = 10,
+    warmup: int = 3,
+    timeout_seconds: float | None = None,
+) -> Dict[str, Any]:
     """Matmul throughput benchmark to stress tensor cores."""
     try:
         import torch
     except ImportError as e:
-        return {"error": f"torch not available: {e}"}
+        return _with_meta({"error": f"torch not available: {e}"})
     if not torch.cuda.is_available():
-        return {"error": "CUDA not available"}
+        return _with_meta({"error": "CUDA not available"})
 
     precision_lower = precision.lower()
     dtype_map = {
@@ -202,60 +330,121 @@ def tensor_core_bench(size: int = 4096, precision: str = "fp16", timeout_seconds
             dtype_map["fp8"] = torch.float16
             placeholder_used = True
     elif precision_lower == "int8":
-        return {"error": "INT8 matmul not supported in this minimal microbench; use fp16/bf16/tf32"}
+        return _with_meta({"error": "INT8 matmul not supported in this minimal microbench; use fp16/bf16/tf32"})
 
     dtype = dtype_map.get(precision_lower)
     if dtype is None:
-        return {"error": f"unsupported precision: {precision}"}
+        return _with_meta({"error": f"unsupported precision: {precision}"})
 
     device = torch.device("cuda")
+    device_index = device.index if device.index is not None else 0
+    from core.harness.validity_checks import capture_gpu_state
+
+    gpu_state_before = capture_gpu_state(device_index)
     a = torch.randn((size, size), device=device, dtype=dtype)
     b = torch.randn((size, size), device=device, dtype=dtype)
     torch.cuda.synchronize()
-    start = _now()
-    c = a @ b
+
+    deadline = _now() + timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+    timeout_hit = False
+
+    for _ in range(max(0, warmup)):
+        c = a @ b
     torch.cuda.synchronize()
-    elapsed = _now() - start
+
+    samples_s: list[float] = []
+    c = None
+    for _ in range(max(0, iters)):
+        start = _now()
+        c = a @ b
+        torch.cuda.synchronize()
+        samples_s.append(_now() - start)
+        if deadline and _now() > deadline:
+            timeout_hit = True
+            break
+
+    summary = _summarize_samples(samples_s)
+    elapsed = summary["p50_seconds"] if summary["p50_seconds"] is not None else None
     flops = 2 * (size ** 3)
-    tflops = (flops / elapsed) / 1e12 if elapsed > 0 else None
-    return {
+    tflops = (flops / elapsed) / 1e12 if elapsed and elapsed > 0 else None
+    gpu_state_after = capture_gpu_state(device_index)
+
+    c_final = c if c is not None else (a @ b)
+    return _with_meta({
         "size": size,
         "precision": precision,
         "tflops": tflops,
         "elapsed_seconds": elapsed,
-        "output_shape": list(c.shape),
+        "iters": iters,
+        "warmup": warmup,
+        "timing": summary,
+        "output_shape": list(c_final.shape),
         "placeholder_used": placeholder_used,
         "timeout_seconds": timeout_seconds,
-        "timeout_hit": timeout_seconds is not None and timeout_seconds > 0 and elapsed > timeout_seconds,
-    }
+        "timeout_hit": timeout_hit,
+        **_gpu_state_payload(gpu_state_before, gpu_state_after),
+    })
 
 
-def sfu_bench(size: int = 64 * 1024 * 1024, timeout_seconds: float | None = None) -> Dict[str, Any]:
+def sfu_bench(
+    size: int = 64 * 1024 * 1024,
+    iters: int = 10,
+    warmup: int = 3,
+    timeout_seconds: float | None = None,
+) -> Dict[str, Any]:
     """SFU-heavy benchmark using sin/cos operations."""
     try:
         import torch
     except ImportError as e:
-        return {"error": f"torch not available: {e}"}
+        return _with_meta({"error": f"torch not available: {e}"})
     if not torch.cuda.is_available():
-        return {"error": "CUDA not available"}
+        return _with_meta({"error": "CUDA not available"})
 
     device = torch.device("cuda")
+    device_index = device.index if device.index is not None else 0
+    from core.harness.validity_checks import capture_gpu_state
+
+    gpu_state_before = capture_gpu_state(device_index)
     x = torch.linspace(0, 10, steps=size, device=device, dtype=torch.float32)
     torch.cuda.synchronize()
-    start = _now()
-    y = torch.sin(x) + torch.cos(x)
+
+    deadline = _now() + timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+    timeout_hit = False
+
+    for _ in range(max(0, warmup)):
+        y = torch.sin(x) + torch.cos(x)
     torch.cuda.synchronize()
-    elapsed = _now() - start
+
+    samples_s: list[float] = []
+    y = None
+    for _ in range(max(0, iters)):
+        start = _now()
+        y = torch.sin(x) + torch.cos(x)
+        torch.cuda.synchronize()
+        samples_s.append(_now() - start)
+        if deadline and _now() > deadline:
+            timeout_hit = True
+            break
+
+    summary = _summarize_samples(samples_s)
+    elapsed = summary["p50_seconds"] if summary["p50_seconds"] is not None else None
     ops = size * 4  # approx operations per element
-    gops = (ops / elapsed) / 1e9 if elapsed > 0 else None
-    return {
+    gops = (ops / elapsed) / 1e9 if elapsed and elapsed > 0 else None
+    gpu_state_after = capture_gpu_state(device_index)
+
+    y_final = y if y is not None else (torch.sin(x) + torch.cos(x))
+    return _with_meta({
         "elements": size,
         "elapsed_seconds": elapsed,
         "gops": gops,
-        "result_sample": float(y[0].item()) if y.numel() > 0 else None,
+        "iters": iters,
+        "warmup": warmup,
+        "timing": summary,
+        "result_sample": float(y_final[0].item()) if y_final.numel() > 0 else None,
         "timeout_seconds": timeout_seconds,
-        "timeout_hit": timeout_seconds is not None and timeout_seconds > 0 and elapsed > timeout_seconds,
-    }
+        "timeout_hit": timeout_hit,
+        **_gpu_state_payload(gpu_state_before, gpu_state_after),
+    })
 
 
 def network_loopback_test(size_mb: int = 64, port: int = 50007, timeout_seconds: float | None = None) -> Dict[str, Any]:
@@ -299,7 +488,7 @@ def network_loopback_test(size_mb: int = 64, port: int = 50007, timeout_seconds:
     cli.close()
     t.join()
     elapsed = _now() - start
-    return {
+    return _with_meta({
         "size_mb": size_mb,
         "elapsed_seconds": elapsed,
         "bytes_sent": sent,
@@ -307,13 +496,16 @@ def network_loopback_test(size_mb: int = 64, port: int = 50007, timeout_seconds:
         "notes": "Loopback TCP only; use iperf for real NIC tests",
         "timeout_seconds": timeout_seconds,
         "timeout_hit": timeout_hit,
-    }
+    })
 
 
 def _print(res: Dict[str, Any], json_out: bool) -> None:
     if json_out:
         typer.echo(json.dumps(res, indent=2, default=str))
     else:
+        note = (res.get("_meta") or {}).get("note")
+        if note:
+            typer.secho(f"WARNING: {note}", fg=typer.colors.YELLOW, err=True)
         typer.echo(res)
 
 # CLI/aisp wrappers (SimpleNamespace args)

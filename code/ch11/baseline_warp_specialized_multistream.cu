@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <vector>
 #include <numeric>
+#include <chrono>
+#include "../core/common/headers/cuda_verify.cuh"
 
 namespace {
 constexpr int TILE = 32;
@@ -59,7 +61,7 @@ __global__ void simple_warp_specialized_kernel(const float* __restrict__ A,
 }
 
 void run_baseline() {
-    constexpr int batches = 32;
+    constexpr int batches = 4096;
     const size_t bytes = TILE_ELEMS * sizeof(float);
 
     std::vector<float> h_A(batches * TILE_ELEMS);
@@ -68,10 +70,8 @@ void run_baseline() {
     std::iota(h_A.begin(), h_A.end(), 0.0f);
     std::iota(h_B.begin(), h_B.end(), 1.0f);
 
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    cudaEventRecord(start);
+    cudaDeviceSynchronize();
+    const auto start = std::chrono::high_resolution_clock::now();
 
     for (int b = 0; b < batches; ++b) {
         float *dA = nullptr, *dB = nullptr, *dC = nullptr;
@@ -90,19 +90,16 @@ void run_baseline() {
         cudaFree(dC);
     }
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, start, stop);
+    cudaDeviceSynchronize();
+    const auto stop = std::chrono::high_resolution_clock::now();
+    const double ms = std::chrono::duration<double, std::milli>(stop - start).count();
 
     double checksum = 0.0;
     for (float v : h_C) checksum += v;
 
-    printf("baseline_warp_specialized_multistream: %.3f ms, checksum %.3f\n",
-           ms, checksum / h_C.size());
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    const float verify_checksum = static_cast<float>(checksum);
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
+    printf("TIME_MS: %.3f\n", ms);
 }
 }  // namespace
 

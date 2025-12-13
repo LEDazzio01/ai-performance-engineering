@@ -114,6 +114,7 @@ class TestSpeedupTimingConsistency:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -141,6 +142,7 @@ class TestSpeedupTimingConsistency:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -167,6 +169,7 @@ class TestSpeedupTimingConsistency:
         original = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -213,6 +216,7 @@ class TestRegressionVisibility:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -245,6 +249,7 @@ class TestRegressionVisibility:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -276,6 +281,7 @@ class TestRegressionVisibility:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -307,6 +313,7 @@ class TestRegressionVisibility:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -402,6 +409,7 @@ class TestExpectationEntry:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -421,6 +429,7 @@ class TestExpectationEntry:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=50.0,
             best_optimized_time_ms=100.0,  # Slower than baseline
             provenance=RunProvenance(
@@ -441,6 +450,7 @@ class TestExpectationEntry:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=0.0,
             provenance=RunProvenance(
@@ -460,6 +470,7 @@ class TestExpectationEntry:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=25.0,
             provenance=RunProvenance(
@@ -484,6 +495,7 @@ class TestExpectationEntry:
         original = ExpectationEntry(
             example="test_example",
             type="cuda",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -593,6 +605,7 @@ class TestAtomicProvenanceConsistency:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=baseline_time,
             best_optimized_time_ms=optimized_time,
             provenance=provenance,
@@ -627,6 +640,7 @@ class TestAtomicProvenanceConsistency:
         entry = ExpectationEntry(
             example="test_example",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=provenance,
@@ -666,6 +680,7 @@ class TestMixedProvenanceRejection:
         entry1 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -684,6 +699,7 @@ class TestMixedProvenanceRejection:
         entry2 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=40.0,  # Better
             provenance=RunProvenance(
@@ -720,6 +736,7 @@ class TestMixedProvenanceRejection:
         entry1 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=provenance,
@@ -731,6 +748,7 @@ class TestMixedProvenanceRejection:
         entry2 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=40.0,
             provenance=RunProvenance(
@@ -757,6 +775,7 @@ class TestMixedProvenanceRejection:
         entry1 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -775,6 +794,7 @@ class TestMixedProvenanceRejection:
         entry2 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=40.0,
             provenance=RunProvenance(
@@ -807,6 +827,7 @@ class TestExpectationsStore:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -833,6 +854,7 @@ class TestExpectationsStore:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=25.0,  # 4x speedup
             provenance=RunProvenance(
@@ -858,6 +880,7 @@ class TestExpectationsStore:
         entry1 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=25.0,  # 4x speedup
             provenance=RunProvenance(
@@ -876,6 +899,7 @@ class TestExpectationsStore:
         entry2 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=100.0,  # 1x speedup - regression!
             provenance=RunProvenance(
@@ -900,6 +924,7 @@ class TestExpectationsStore:
         entry1 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=25.0,
             provenance=RunProvenance(
@@ -917,6 +942,7 @@ class TestExpectationsStore:
         entry2 = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=100.0,
             provenance=RunProvenance(
@@ -946,6 +972,7 @@ class TestExpectationsStore:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -1019,6 +1046,7 @@ class TestValidationDetectsInconsistencies:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -1312,6 +1340,7 @@ class TestCustomMetricsSeparation:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,  # 2x speedup
             provenance=provenance,
@@ -1337,6 +1366,7 @@ class TestCustomMetricsSeparation:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=25.0,  # 4x timing speedup
             provenance=provenance,
@@ -1406,6 +1436,7 @@ class TestEdgeCases:
         entry = ExpectationEntry(
             example="good",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=100.0,
             best_optimized_time_ms=50.0,
             provenance=RunProvenance(
@@ -1474,6 +1505,7 @@ class TestEdgeCases:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=1000000.0,  # 1 second
             best_optimized_time_ms=0.001,  # 1 microsecond
             provenance=RunProvenance(
@@ -1495,6 +1527,7 @@ class TestEdgeCases:
         entry = ExpectationEntry(
             example="test",
             type="python",
+            optimization_goal="speed",
             baseline_time_ms=0.001,  # 1 microsecond
             best_optimized_time_ms=1000000.0,  # 1 second
             provenance=RunProvenance(
@@ -1598,9 +1631,3 @@ class TestEdgeCases:
         # Metadata speedup should be derived from timing, not the passed value
         stored_meta = store._data["examples"]["test_entry"]["metadata"]
         assert abs(stored_meta["best_optimization_speedup"] - 4.0) < SPEEDUP_TOLERANCE
-
-
-
-
-
-

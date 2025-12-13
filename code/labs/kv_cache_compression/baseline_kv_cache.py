@@ -170,7 +170,7 @@ class BaselineKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return None
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5, deterministic=False)
+        return BenchmarkConfig(iterations=10, warmup=5, deterministic=False, enable_memory_tracking=True)
 
 
     def get_custom_metrics(self) -> Optional[dict]:

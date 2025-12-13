@@ -2,7 +2,7 @@
 """Level 4: Multi-Stream Expert Parallelism.
 
 ADDS: Run expert groups on different CUDA streams.
-Based on ch15/optimized_expert_parallelism.py and 
+Based on ch15/expert_parallelism.py and 
 ch15/optimized_moe_shared_expert_overlap.py patterns.
 
 - Overlaps expert computation across streams
@@ -32,6 +32,5 @@ def get_benchmark() -> Level4Parallel:
 
 if __name__ == "__main__":
     run_level(4)
-
 
 

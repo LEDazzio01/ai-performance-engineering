@@ -14,7 +14,7 @@ Establishes the baseline benchmarking discipline: measure goodput, remove Python
 | --- | --- |
 | `baseline_performance.py`, `optimized_performance.py` | Goodput-focused training loop pair that toggles pinned memory, CUDA Graphs, and tensor preallocation. |
 | `baseline_guided_decoding.py`, `optimized_guided_decoding.py`, `baseline_guided_decoding_math.py`, `optimized_guided_decoding_math.py` | Guided decoding microbenchmark plus math-only validator for deterministic correctness checks. |
-| `baseline_ilp_basic.py`, `optimized_ilp_basic.py` | Instruction-level parallelism exercises that expose loop unrolling and register reuse benefits. |
+| `baseline_ilp.py`, `optimized_ilp.py` | Instruction-level parallelism exercises that expose loop unrolling and register reuse benefits. |
 | `baseline_warp_specialization.py`, `optimized_warp_specialization.py` | Warp-specialized producer/consumer example that demonstrates overlapped memory movement. |
 | `baseline_gemm.cu`, `optimized_gemm_batched.cu`, `optimized_gemm_strided.cu` | CUDA GEMM variants (single, batched, strided) used to illustrate launch amortization and memory coalescing. |
 | `compare.py`, `workload_config.py`, `arch_config.py`, `expectations_gb10.json` | Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds. |

@@ -25,14 +25,15 @@ class OptimizedMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBenc
         self._skip_reason = reason or "SKIPPED: tcgen05 matmul unavailable"
         self.module = None
         self.device = torch.device("cuda")
-        # Match baseline for fair comparison (baseline uses n=8192)
-        self.n = 8192
-        self.size = self.n
+        # Match baseline for fair comparison.
+        self.M = 2048
+        self.N = 2048
+        self.K = 64
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
         self.bias: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.register_workload_metadata(bytes_per_iteration=float(self.n * self.n * 2 * 4))
+        self.register_workload_metadata(bytes_per_iteration=float((self.M * self.K + self.N * self.K) * 2))
 
     def setup(self) -> None:
         if not self._tcgen05_available:
@@ -42,10 +43,10 @@ class OptimizedMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBenc
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         dtype = torch.float16
-        self.A = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
-        self.B = torch.randn(self.size, self.size, device=self.device, dtype=dtype)
-        # Bias stored as float16 to match the GEMM inputs; epilogue promotes to float internally.
-        self.bias = torch.randn(self.size, device=self.device, dtype=dtype)
+        self.A = torch.randn(self.M, self.K, device=self.device, dtype=dtype)
+        self.B = torch.randn(self.N, self.K, device=self.device, dtype=dtype)
+        # Avoid an internal dtype conversion in the extension and keep workload equivalent.
+        self.bias = torch.randn(self.N, device=self.device, dtype=torch.float32)
         self._synchronize()
 
     def benchmark_fn(self) -> None:
@@ -68,14 +69,14 @@ class OptimizedMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBenc
         self._set_verification_payload(
             inputs={"A": self.A, "B": self.B, "bias": self.bias},
             output=self.output.detach().float().clone(),
-            batch_size=self.size,
+            batch_size=self.M,
             precision_flags={
                 "fp16": True,
                 "bf16": False,
                 "fp8": False,
                 "tf32": False,
             },
-            output_tolerance=(0.5, 5.0),
+            output_tolerance=(1e-2, 1e-2),
         )
 
     def teardown(self) -> None:

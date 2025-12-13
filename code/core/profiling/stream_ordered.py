@@ -28,3 +28,13 @@ def run_standard_allocator(elements: int, iterations: int = 5) -> None:
 def run_stream_ordered_allocator(elements: int, iterations: int = 5) -> None:
     """Execute the cudaMallocAsync (stream-ordered) workload."""
     _load_module().run_stream_ordered_allocator(int(elements), int(iterations))
+
+
+def run_standard_allocator_capture(elements: int, iterations: int = 5):
+    """Execute the cudaMalloc baseline workload and return a small output slice."""
+    return _load_module().run_standard_allocator_capture(int(elements), int(iterations))
+
+
+def run_stream_ordered_allocator_capture(elements: int, iterations: int = 5):
+    """Execute the cudaMallocAsync workload and return a small output slice."""
+    return _load_module().run_stream_ordered_allocator_capture(int(elements), int(iterations))

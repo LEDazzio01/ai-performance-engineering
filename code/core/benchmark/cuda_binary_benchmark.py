@@ -325,6 +325,12 @@ class CudaBinaryBenchmark(BaseBenchmark):
             device=torch.device("cuda"),
             enable_memory_tracking=False,
             enable_profiling=False,
+            # External binaries report their own timing via TIME_MS.
+            # The Python harness wraps a process launch, so:
+            # - Adaptive iteration scaling would explode (reported TIME_MS is tiny vs process overhead)
+            # - CUDA-event vs wall-clock cross-validation is not meaningful
+            adaptive_iterations=False,
+            cross_validate_timing=False,
         )
     
     def validate_result(self) -> Optional[str]:

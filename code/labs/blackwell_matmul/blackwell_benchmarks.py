@@ -93,7 +93,6 @@ class GraceBlackwellMatmulBenchmark(BaseBenchmark):
     def setup(self) -> None:
         if torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: requires >=2 GPUs")
-        torch.manual_seed(13)
         device = self.device
         self._lhs = torch.randn(
             self._size_m, self._size_k, device=device, dtype=self._dtype

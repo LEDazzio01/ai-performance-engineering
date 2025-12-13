@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from labs.dynamic_router.baseline_router import BaselineRouter, Request
-from labs.dynamic_router.optimized_router import Router, SequenceInfo
+from labs.dynamic_router.router_round_robin import BaselineRouter, Request
+from labs.dynamic_router.router_policy import Router, SequenceInfo
 
 TICK_SECONDS = 0.05  # wall-clock seconds per simulation tick
 

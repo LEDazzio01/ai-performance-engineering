@@ -40,19 +40,12 @@ from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
 class SimpleNet(nn.Module):
-    def __init__(self, input_size: int, hidden_size: int):
+    def __init__(self, input_size: int):
         super().__init__()
-        # Same architecture as baseline for fair comparison
-        self.linear1 = nn.Linear(input_size, hidden_size)
-        self.relu1 = nn.ReLU()
-        self.linear2 = nn.Linear(hidden_size, hidden_size)
-        self.relu2 = nn.ReLU()
-        self.linear3 = nn.Linear(hidden_size, 1)
+        self.linear = nn.Linear(input_size, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.relu1(self.linear1(x))
-        x = self.relu2(self.linear2(x))
-        return self.linear3(x)
+        return self.linear(x)
 
 
 class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -67,9 +60,9 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def __init__(self):
         super().__init__()
-        self.batch_size = 512
-        self.input_size = 1024
-        self.hidden_size = 256
+        # Match baseline shapes for a fair comparison.
+        self.batch_size = 4096
+        self.input_size = 4096
         self.model: Optional[nn.Module] = None
         self.optimizer: Optional[optim.Optimizer] = None
         self.inputs: List[torch.Tensor] = []
@@ -86,36 +79,32 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def setup(self) -> None:
+        if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
+            raise RuntimeError("SKIPPED: requires >=2 GPUs")
         enable_tf32()
         torch.manual_seed(42)
-        
+
         # Direct model on GPU - no DataParallel wrapper
         # Use same precision as baseline (float32) for fair verification comparison
-        self.model = SimpleNet(self.input_size, self.hidden_size).to(self.device)
+        self.model = SimpleNet(self.input_size).to(self.device)
         self.optimizer = optim.SGD(self.model.parameters(), lr=0.01)
-        
-        # Pre-stage data on GPU - create on CPU first (same as baseline), then copy to GPU once
-        # The optimization is that we do the copy once in setup, not every iteration
-        # Use single batch like baseline for fair verification comparison
-        cpu_input = torch.randn(self.batch_size, self.input_size, dtype=torch.float32)
-        cpu_target = torch.randn(self.batch_size, 1, dtype=torch.float32)
+
+        data_gen = torch.Generator().manual_seed(1234)
+        cpu_input = torch.randn(self.batch_size, self.input_size, dtype=torch.float32, generator=data_gen)
+        cpu_target = torch.randn(self.batch_size, 1, dtype=torch.float32, generator=data_gen)
         self.inputs.append(cpu_input.to(self.device))
         self.targets.append(cpu_target.to(self.device))
-        
+
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
-        from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
-
-        config = self.get_config()
-        enable_nvtx = get_nvtx_enabled(config) if config else False
         assert self.model is not None and self.optimizer is not None
         idx = self.batch_idx % len(self.inputs)
         self.batch_idx += 1
         self._last_input = self.inputs[idx]
         self._last_target = self.targets[idx]
         
-        with nvtx_range("optimized_dataparallel", enable=enable_nvtx):
+        with self._nvtx_range("optimized_dataparallel"):
             # Direct forward/backward - no DataParallel overhead
             output = self.model(self._last_input)
             loss = nn.functional.mse_loss(output, self._last_target)
@@ -174,18 +163,6 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if self.model is None:
             return "Model not initialized"
         return None
-
-    def get_input_signature(self) -> dict:
-        """Return workload signature for input verification."""
-        return super().get_input_signature()
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return super().get_verify_output()
-    
-    def get_output_tolerance(self) -> tuple:
-        """Return custom tolerance for training output comparison."""
-        return (1e-3, 1e-3)
 
 
 

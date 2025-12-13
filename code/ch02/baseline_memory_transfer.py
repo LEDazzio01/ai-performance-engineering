@@ -17,7 +17,8 @@ class BaselineMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.host_data: Optional[torch.Tensor] = None
         self.device_data: Optional[torch.Tensor] = None
-        self.N = 10_000_000
+        # Large enough to saturate PCIe/NVLink H2D paths so pinned DMA wins.
+        self.N = 50_000_000
         bytes_per_iter = self.N * 4  # float32 copy
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -31,7 +32,8 @@ class BaselineMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         
-        self.host_data = torch.randn(self.N, dtype=torch.float32, pin_memory=True)
+        # Baseline uses pageable host memory (slower H2D transfers vs pinned DMA).
+        self.host_data = torch.randn(self.N, dtype=torch.float32, pin_memory=False)
         self.device_data = torch.empty(self.N, dtype=torch.float32, device=self.device)
         
         # Copy data and compute checksum for verification
@@ -45,13 +47,14 @@ class BaselineMemoryTransferBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.device_data.copy_(self.host_data, non_blocking=False)
             self._synchronize()
 
-        verify_output = self.device_data[:1000].detach().clone()
-        self.output = verify_output
+        self.output = self.device_data[:1000].detach()
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must run before capture_verification_payload()")
         self._set_verification_payload(
             inputs={"host_data": self.host_data},
-            output=self.output,
+            output=self.output.detach().clone(),
             batch_size=self.N,
             parameter_count=0,
             precision_flags={
