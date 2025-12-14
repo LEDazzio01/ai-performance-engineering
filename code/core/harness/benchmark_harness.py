@@ -716,6 +716,41 @@ class BenchmarkConfig:
             "iterations": self.iterations,
             "min_run_time_ms": self.min_run_time_ms,
         }
+
+    def capture_config_snapshot(self) -> Dict[str, Any]:
+        """Capture a snapshot of all public configuration values.
+
+        Used to detect runtime mutation of BenchmarkConfig during execution.
+        Benchmarks MUST treat harness configuration as immutable once a run starts.
+        """
+        snapshot: Dict[str, Any] = {}
+        for key, value in self.__dict__.items():
+            if str(key).startswith("_"):
+                continue
+            snapshot[str(key)] = _freeze_benchmark_config_value(value)
+        return snapshot
+
+    def verify_config_unchanged(self, snapshot: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """Verify configuration values haven't changed since snapshot.
+
+        Args:
+            snapshot: Dict from capture_config_snapshot()
+
+        Returns:
+            Tuple of (unchanged, error_message)
+        """
+        current = self.capture_config_snapshot()
+        changes: List[str] = []
+        all_keys = set(snapshot.keys()) | set(current.keys())
+        for key in sorted(all_keys):
+            if snapshot.get(key) != current.get(key):
+                changes.append(f"{key}: {snapshot.get(key)!r} -> {current.get(key)!r}")
+        if changes:
+            preview = "; ".join(changes[:10])
+            if len(changes) > 10:
+                preview = f"{preview}; ... (+{len(changes) - 10} more)"
+            return False, f"BenchmarkConfig modified during execution: {preview}"
+        return True, None
     
     def verify_timing_unchanged(self, snapshot: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
         """Verify timing-critical fields haven't changed since snapshot.
@@ -1640,6 +1675,10 @@ class BenchmarkHarness:
                             errors.append(line)
                             if len(seen) >= 3:
                                 break
+
+                    head = stderr_lines[:25]
+                    if head:
+                        errors.append("stderr_head: " + " | ".join(head))
 
                     tail = stderr_lines[-8:]
                     if tail:
@@ -3471,9 +3510,9 @@ class BenchmarkHarness:
         ttft_times_ms: List[float] = []
         tpot_times_ms: List[float] = []
 
-        # Capture timing config snapshot for immutability verification
-        # This protects against benchmarks modifying warmup/iterations during execution
-        timing_snapshot = config.capture_timing_snapshot() if getattr(config, 'enforce_config_immutability', True) else None
+        # Capture config snapshot for immutability verification (Option C: full config).
+        # This protects against benchmarks manipulating harness protections mid-run.
+        config_snapshot = config.capture_config_snapshot() if getattr(config, 'enforce_config_immutability', True) else None
 
         # Some benchmarks (e.g., external CUDA binaries) report their own timing.
         benchmark_obj = getattr(fn, "__self__", None)
@@ -3925,14 +3964,13 @@ class BenchmarkHarness:
                 "tpot_times_ms": tpot_times_ms,
             }
         
-        # Verify timing config wasn't modified during benchmark execution
-        # This protects against benchmarks manipulating warmup/iterations
-        if timing_snapshot is not None:
-            unchanged, error_msg = config.verify_timing_unchanged(timing_snapshot)
+        # Verify harness config wasn't modified during benchmark execution
+        if config_snapshot is not None:
+            unchanged, error_msg = config.verify_config_unchanged(config_snapshot)
             if not unchanged:
                 raise RuntimeError(
-                    f"TIMING CONFIG MANIPULATION DETECTED: {error_msg}. "
-                    "Benchmarks must not modify warmup/iterations during execution. "
+                    f"BENCHMARK CONFIG MANIPULATION DETECTED: {error_msg}. "
+                    "Benchmarks must not mutate harness configuration during execution. "
                     "Set enforce_config_immutability=False to disable this check (not recommended)."
                 )
 

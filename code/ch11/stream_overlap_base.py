@@ -20,6 +20,8 @@ def resolve_device() -> torch.device:
 class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
     """Baseline workload that executes strided copies on a single stream."""
 
+    declare_all_streams = False
+
     def __init__(
         self,
         nvtx_label: str,
@@ -43,6 +45,8 @@ class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
 
     def setup(self) -> None:
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         self.stream = torch.cuda.Stream()
         self.host_input = torch.randn(
             self.N, device="cpu", dtype=torch.float32, pin_memory=True
@@ -122,6 +126,11 @@ class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
             f"{self.label}.expected_overlap_pct": 0.0,
         }
 
+    def get_custom_streams(self) -> List[torch.cuda.Stream]:
+        if self.stream is None:
+            return []
+        return [self.stream]
+
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""
         return super().get_input_signature()
@@ -138,17 +147,21 @@ class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
 class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
     """Optimized workload that splits data across multiple CUDA streams."""
 
+    declare_all_streams = False
+
     def __init__(
         self,
         nvtx_label: str = "concurrent_streams",
         num_elements: int = 24_000_000,
-        num_streams: int = 8,
+        num_segments: int = 16,
+        num_streams: int = 2,
         chunk_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         self.device = resolve_device()
         self.label = nvtx_label
         self.N = num_elements
+        self.num_segments = num_segments
         self.num_streams = num_streams
         self.dtype = chunk_dtype
         self.streams: List[torch.cuda.Stream] | None = None
@@ -158,29 +171,32 @@ class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
         self.host_out_chunks: List[torch.Tensor] | None = None
         self.device_chunks: List[torch.Tensor] | None = None
         # Stream benchmark - fixed dimensions for overlap measurement
-        bytes_transferred = float(num_elements * 4 * 2)  # H2D + D2H
+        element_size = float(torch.empty((), dtype=self.dtype).element_size())
+        bytes_transferred = float(num_elements * element_size * 2)  # H2D + D2H
         self.register_workload_metadata(bytes_per_iteration=bytes_transferred)
 
     def setup(self) -> None:
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
+        if self.num_streams < 1:
+            raise ValueError("num_streams must be >= 1")
+        if self.num_segments < 1:
+            raise ValueError("num_segments must be >= 1")
         self.host_input = torch.randn(
             self.N, dtype=self.dtype, device="cpu", pin_memory=True
         )
         self.host_output = torch.empty_like(self.host_input, pin_memory=True)
-        chunks = torch.chunk(self.host_input, self.num_streams)
-        if len(chunks) < self.num_streams:
+        chunks = torch.chunk(self.host_input, self.num_segments)
+        if len(chunks) < self.num_segments:
             chunks = list(chunks)
-            for _ in range(self.num_streams - len(chunks)):
+            for _ in range(self.num_segments - len(chunks)):
                 empty = torch.empty(0, dtype=self.dtype, device="cpu", pin_memory=True)
                 chunks.append(empty)
         self.host_in_chunks = list(chunks)
         self.host_out_chunks = list(torch.chunk(self.host_output, len(self.host_in_chunks)))
         self.device_chunks = [torch.empty_like(chunk, device=self.device) for chunk in self.host_in_chunks]
-        self.streams = [torch.cuda.Stream() for _ in self.device_chunks]
+        self.streams = [torch.cuda.Stream() for _ in range(self.num_streams)]
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -193,20 +209,25 @@ class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
             assert self.host_out_chunks is not None
             assert self.device_chunks is not None
             with torch.no_grad():
-                for stream, h_in, h_out, d_buf in zip(
-                    self.streams, self.host_in_chunks, self.host_out_chunks, self.device_chunks
+                for idx, (h_in, h_out, d_buf) in enumerate(
+                    zip(self.host_in_chunks, self.host_out_chunks, self.device_chunks)
                 ):
+                    if h_in.numel() == 0:
+                        continue
+                    stream = self.streams[idx % self.num_streams]
                     with torch.cuda.stream(stream):
-                        if h_in.numel() == 0:
-                            continue
                         d_buf.copy_(h_in, non_blocking=True)
                         d_buf.mul_(2.0)
                         d_buf.add_(1.0)
                         d_buf.mul_(1.1)
                         d_buf.add_(0.5)
                         h_out.copy_(d_buf, non_blocking=True)
-                # Let async copies and compute overlap across streams.
-                torch.cuda.synchronize()
+
+                # Join all work back onto the current stream so CUDA-event timing
+                # accounts for multi-stream work (Locus/KernelBench 2025).
+                current = torch.cuda.current_stream(self.device)
+                for stream in self.streams:
+                    current.wait_stream(stream)
         if (
             self.host_input is None
             or self.host_output is None
@@ -255,6 +276,11 @@ class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
             f"{self.label}.bytes_transferred": bytes_transferred,
             f"{self.label}.expected_overlap_pct": min(100.0, (self.num_streams - 1) / self.num_streams * 100),
         }
+
+    def get_custom_streams(self) -> List[torch.cuda.Stream]:
+        if self.streams is None:
+            return []
+        return list(self.streams)
 
     def get_input_signature(self) -> dict:
         """Return workload signature for input verification."""

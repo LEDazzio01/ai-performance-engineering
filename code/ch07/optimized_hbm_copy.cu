@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
 struct alignas(32) Float8 {
@@ -58,6 +59,19 @@ int main() {
     double bw_tbs = (size_bytes * 2 / (avg_ms / 1000.0)) / 1e12;
     
     printf("HBM (Float8, 256-byte bursts): %.2f ms, %.2f TB/s\n", avg_ms, bw_tbs);
+
+#ifdef VERIFY
+    float* h_verify = static_cast<float*>(std::malloc(size_bytes));
+    if (!h_verify) {
+        std::fprintf(stderr, "Host allocation failed\n");
+        return EXIT_FAILURE;
+    }
+    CUDA_CHECK(cudaMemcpy(h_verify, d_dst, size_bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify, static_cast<int>(size_bytes / sizeof(float)), &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+    std::free(h_verify);
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
@@ -66,7 +80,6 @@ int main() {
     
     return 0;
 }
-
 
 
 

@@ -20,7 +20,6 @@ class OptimizedCopyCoalescedBenchmark(CudaBinaryBenchmark):
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         n_elems = 1 << 23
-        random_passes = 64
         repeat = 40
         super().__init__(
             chapter_dir=chapter_dir,
@@ -32,13 +31,12 @@ class OptimizedCopyCoalescedBenchmark(CudaBinaryBenchmark):
             time_regex=r"TIME_MS:\s*([0-9.]+)",
             workload_params={
                 "N": n_elems,
-                "random_passes": random_passes,
                 "repeat": repeat,
                 "dtype": "float32",
             },
         )
         self.register_workload_metadata(
-            bytes_per_iteration=float(n_elems * (random_passes + 1) * 4),
+            bytes_per_iteration=float(n_elems * 8),
         )
 
     def get_custom_metrics(self) -> Optional[dict]:

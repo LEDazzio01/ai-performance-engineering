@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "../core/common/headers/tma_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 #if CUDART_VERSION < 13000
 int main() {
@@ -210,6 +211,11 @@ int main() {
     std::vector<float> h_dst(width * height);
     check_cuda(cudaMemcpy(h_dst.data(), d_dst, bytes, cudaMemcpyDeviceToHost), "copy output");
     std::printf("Output checksum: %.6f\n", checksum(h_dst));
+#ifdef VERIFY
+    float verify_checksum = 0.0f;
+    VERIFY_CHECKSUM(h_dst.data(), static_cast<int>(h_dst.size()), &verify_checksum);
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
     check_cuda(cudaEventDestroy(start), "destroy start");
     check_cuda(cudaEventDestroy(stop), "destroy stop");

@@ -2,11 +2,12 @@
 
 #include <cuda_runtime.h>
 
-#include <algorithm>
-#include <chrono>
+#include <cmath>
 #include <iostream>
 #include <random>
 #include <vector>
+
+#include "../core/common/headers/cuda_verify.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -58,54 +59,50 @@ int main() {
     constexpr int N = 1024;
     constexpr int K = 1024;
     constexpr int kIterations = 5;
-    constexpr int kMicroBatches = 32;
+    constexpr int kBatchCount = 32;
 
     const size_t elements_A = static_cast<size_t>(M) * K;
     const size_t elements_B = static_cast<size_t>(K) * N;
     const size_t elements_C = static_cast<size_t>(M) * N;
-    const size_t size_A = elements_A * sizeof(float);
-    const size_t size_B = elements_B * sizeof(float);
+    const size_t size_A = elements_A * sizeof(float) * kBatchCount;
+    const size_t size_B = elements_B * sizeof(float) * kBatchCount;
     const size_t size_C = elements_C * sizeof(float);
 
-    std::vector<float*> host_batches_A(kMicroBatches);
-    std::vector<float*> host_batches_B(kMicroBatches);
-    for (int batch = 0; batch < kMicroBatches; ++batch) {
-        CUDA_CHECK(cudaMallocHost(&host_batches_A[batch], size_A));
-        CUDA_CHECK(cudaMallocHost(&host_batches_B[batch], size_B));
-    }
-    float* host_result = nullptr;
-    CUDA_CHECK(cudaMallocHost(&host_result, size_C));
+    float* h_A = nullptr;
+    float* h_B = nullptr;
+    float* h_C0 = nullptr;
+    CUDA_CHECK(cudaMallocHost(&h_A, size_A));
+    CUDA_CHECK(cudaMallocHost(&h_B, size_B));
+    CUDA_CHECK(cudaMallocHost(&h_C0, size_C));
 
-    std::mt19937 gen(1337);
+    std::mt19937 gen(42);
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    for (int batch = 0; batch < kMicroBatches; ++batch) {
-        for (size_t i = 0; i < elements_A; ++i) {
-            host_batches_A[batch][i] = dis(gen);
-        }
-        for (size_t i = 0; i < elements_B; ++i) {
-            host_batches_B[batch][i] = dis(gen);
-        }
+    for (size_t i = 0; i < elements_A * kBatchCount; ++i) {
+        h_A[i] = dis(gen);
+    }
+    for (size_t i = 0; i < elements_B * kBatchCount; ++i) {
+        h_B[i] = dis(gen);
     }
 
     float *d_A = nullptr, *d_B = nullptr, *d_C = nullptr;
     CUDA_CHECK(cudaMalloc(&d_A, size_A));
     CUDA_CHECK(cudaMalloc(&d_B, size_B));
-    CUDA_CHECK(cudaMalloc(&d_C, size_C));
+    CUDA_CHECK(cudaMalloc(&d_C, size_C * kBatchCount));
 
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+    CUDA_CHECK(cudaMemcpyAsync(d_A, h_A, size_A, cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(d_B, h_B, size_B, cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemsetAsync(d_C, 0, size_C * kBatchCount, stream));
 
     dim3 block_size(16, 8);
     dim3 grid_size((N + block_size.x - 1) / block_size.x,
                    (M + block_size.y - 1) / block_size.y);
 
-    // Warmup one staged batch.
-    CUDA_CHECK(cudaMemcpyAsync(d_A, host_batches_A[0], size_A, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemcpyAsync(d_B, host_batches_B[0], size_B, cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaMemsetAsync(d_C, 0, size_C, stream));
-    simple_gemm_kernel<<<grid_size, block_size, 0, stream>>>(d_A, d_B, d_C, M, N, K, 1.0f, 0.0f);
+    // Warmup (single batch).
+    simple_gemm_kernel<<<grid_size, block_size, 0, stream>>>(
+        d_A, d_B, d_C, M, N, K, 1.0f, 0.0f);
     CUDA_CHECK_LAST_ERROR();
-    CUDA_CHECK(cudaMemcpyAsync(host_result, d_C, size_C, cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     cudaEvent_t start, stop;
@@ -114,20 +111,20 @@ int main() {
 
     CUDA_CHECK(cudaEventRecord(start, stream));
     for (int iter = 0; iter < kIterations; ++iter) {
-        for (int micro = 0; micro < kMicroBatches; ++micro) {
-            const int batch_idx = (iter + micro) % kMicroBatches;
-            CUDA_CHECK(cudaMemcpyAsync(d_A, host_batches_A[batch_idx], size_A, cudaMemcpyHostToDevice, stream));
-            CUDA_CHECK(cudaMemcpyAsync(
-                d_B,
-                host_batches_B[(batch_idx * 5 + micro) % kMicroBatches],
-                size_B,
-                cudaMemcpyHostToDevice,
-                stream));
-            CUDA_CHECK(cudaMemsetAsync(d_C, 0, size_C, stream));
-            simple_gemm_kernel<<<grid_size, block_size, 0, stream>>>(d_A, d_B, d_C, M, N, K, 1.0f, 0.0f);
+        for (int batch = 0; batch < kBatchCount; ++batch) {
+            const size_t a_off = static_cast<size_t>(batch) * elements_A;
+            const size_t b_off = static_cast<size_t>(batch) * elements_B;
+            const size_t c_off = static_cast<size_t>(batch) * elements_C;
+            simple_gemm_kernel<<<grid_size, block_size, 0, stream>>>(
+                d_A + a_off,
+                d_B + b_off,
+                d_C + c_off,
+                M,
+                N,
+                K,
+                1.0f,
+                0.0f);
             CUDA_CHECK_LAST_ERROR();
-            CUDA_CHECK(cudaMemcpyAsync(host_result, d_C, size_C, cudaMemcpyDeviceToHost, stream));
-            CUDA_CHECK(cudaStreamSynchronize(stream));
         }
     }
     CUDA_CHECK(cudaEventRecord(stop, stream));
@@ -135,9 +132,20 @@ int main() {
 
     float time_total = 0.0f;
     CUDA_CHECK(cudaEventElapsedTime(&time_total, start, stop));
-    const float time_avg = time_total / static_cast<float>(kIterations * kMicroBatches);
-    std::cout << "Host-staged GEMM (baseline): " << time_avg << " ms" << std::endl;
-    std::cout << "Checksum sample: " << host_result[0] << std::endl;
+    const float time_avg = time_total / static_cast<float>(kIterations * kBatchCount);
+    std::cout << "Naive batched GEMM (baseline): " << time_avg << " ms" << std::endl;
+
+    CUDA_CHECK(cudaMemcpyAsync(h_C0, d_C, size_C, cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    std::cout << "Checksum sample: " << h_C0[0] << std::endl;
+
+#ifdef VERIFY
+    double checksum = 0.0;
+    for (size_t i = 0; i < elements_C; ++i) {
+        checksum += std::abs(static_cast<double>(h_C0[i]));
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
@@ -145,11 +153,9 @@ int main() {
     CUDA_CHECK(cudaFree(d_A));
     CUDA_CHECK(cudaFree(d_B));
     CUDA_CHECK(cudaFree(d_C));
-    for (int batch = 0; batch < kMicroBatches; ++batch) {
-        CUDA_CHECK(cudaFreeHost(host_batches_A[batch]));
-        CUDA_CHECK(cudaFreeHost(host_batches_B[batch]));
-    }
-    CUDA_CHECK(cudaFreeHost(host_result));
+    CUDA_CHECK(cudaFreeHost(h_A));
+    CUDA_CHECK(cudaFreeHost(h_B));
+    CUDA_CHECK(cudaFreeHost(h_C0));
 
     return 0;
 }

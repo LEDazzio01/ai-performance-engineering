@@ -13,23 +13,21 @@ Explores NVFP4/FP8 workflows, KV-cache quantization, memory double buffering, an
 | Path | Description |
 | --- | --- |
 | `baseline_nvfp4_training.py`, `optimized_nvfp4_training.py`, `native_fp4_quantization.py`, `native_fp6_quantization.py`, `native_fp8_training.py` | Training and quantization recipes that switch between FP8 and NVFP4 with automatic calibration. |
-| `baseline_mxfp8_moe.py`, `optimized_mxfp8_moe.py`, `mxfp8_moe_common.py` | MXFP8 MoE grouped GEMM benchmarks contrasting unfused block quantization with TE-backed tcgen05 pipelines (`--top-k`/`--cuda-graphs` flags supported). |
 | `baseline_memory_double_buffering.py`, `optimized_memory_double_buffering.py`, `memory_allocator_with_monitoring.py`, `dynamic_memory_allocator.py`, `_allocator_worker.py` | Memory-management helpers covering double buffering, instrumentation, and adaptive worker pools. |
 | `baseline_kv_prefetch_overlap.cu`, `optimized_kv_prefetch_overlap.cu`, `kv_prefetch_overlap_sm121` binaries | CUDA kernels proving that quantized KV prefetch can overlap with compute when using cp.async pipelines. |
 | `baseline_dynamic_quantized_cache.py`, `optimized_dynamic_quantized_cache.py`, `dynamic_quantized_cache.py`, `token_precision_switching.py`, `dynamic_precision_switching.py` | Quantized cache management for dynamically switching between precisions based on accuracy budgets. |
 | `baseline_fp4_hardware_kernel.cu`, `optimized_fp4_hardware_kernel.cu`, `fp8_hardware_kernel.cu`, `custom_allocator_retry.py`, `adaptive_parallelism_strategy.py`, `adaptive_parallelism_worker_pool.py` | Hardware-level kernels and adaptive scheduling helpers for heterogeneous precision fleets. |
-| `compare.py`, `arch_config.py`, `expectations_gb10.json` | Harness entry, architecture toggles, and stored expectation data. |
+| `compare.py`, `arch_config.py`, `expectations_b200.json` | Harness entry, architecture toggles, and stored expectation data. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch19
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch19
-python cli/aisp.py bench run --targets ch19 --profile minimal
+python ch19/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch19
+python -m cli.aisp bench run --targets ch19 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python optimized_nvfp4_training.py --calibrate` warms up with FP8, then switches to NVFP4 and matches the baseline's accuracy thresholds.

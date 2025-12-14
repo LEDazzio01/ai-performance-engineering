@@ -28,21 +28,6 @@ class OptimizedTilingBenchmark(TilingBenchmarkBase):
             self.extension.matmul_tiled(self.matrix_a, self.matrix_b, self.output)
 
 
-    def get_custom_metrics(self) -> Optional[dict]:
-        """Return optimization metrics for tiling."""
-        from core.benchmark.metrics import compute_speedup_metrics
-        return compute_speedup_metrics(
-            baseline_ms=getattr(self, '_baseline_ms', 1.0),
-            optimized_ms=getattr(self, '_last_elapsed_ms', 1.0),
-            name="tiling",
-        )
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
-
 
 def get_benchmark() -> TilingBenchmarkBase:
     """Factory function for harness discovery."""

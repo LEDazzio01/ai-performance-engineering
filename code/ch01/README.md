@@ -17,18 +17,17 @@ Establishes the baseline benchmarking discipline: measure goodput, remove Python
 | `baseline_ilp.py`, `optimized_ilp.py` | Instruction-level parallelism exercises that expose loop unrolling and register reuse benefits. |
 | `baseline_warp_specialization.py`, `optimized_warp_specialization.py` | Warp-specialized producer/consumer example that demonstrates overlapped memory movement. |
 | `baseline_gemm.cu`, `optimized_gemm_batched.cu`, `optimized_gemm_strided.cu` | CUDA GEMM variants (single, batched, strided) used to illustrate launch amortization and memory coalescing. |
-| `compare.py`, `workload_config.py`, `arch_config.py`, `expectations_gb10.json` | Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds. |
+| `compare.py`, `workload_config.py`, `arch_config.py`, `expectations_b200.json` | Harness entrypoint, workload shapes, architecture overrides, and stored expectation thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch01
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch01
-python cli/aisp.py bench run --targets ch01 --profile minimal
+python ch01/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch01
+python -m cli.aisp bench run --targets ch01 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python compare.py` reports optimized_performance achieving >=2x tokens/sec vs the baseline on default microbatch sizes.

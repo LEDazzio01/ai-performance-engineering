@@ -54,7 +54,7 @@ ch*/baseline_*.py  →  ch*/optimized_*.py
 
 **Result**: Run **264 benchmarks** across **20 chapters** with a single command:
 ```bash
-python cli/aisp.py bench run
+python -m cli.aisp bench run
 ```
 
 Use `--accept-regressions` when you intentionally want to refresh expectation files on improvements only, or `--update-expectations` to force-write observed metrics even if they are slower (full refresh). The harness will surface **SKIPPED** for known hardware gaps like DSMEM-only cluster kernels on GB10, NVFP4-only trainers on non-FP4 parts, or TF32 being disabled via the new helper APIs—those no longer count as failures.
@@ -97,7 +97,7 @@ Use `--accept-regressions` when you intentionally want to refresh expectation fi
 - Harness records `world_size`/`launch_via` in results and only parses rank0-style output (duplicate rank logs are deduped).
 - Forward env vars via `--torchrun-env CUDA_VISIBLE_DEVICES=0,1` and per-target overrides with `--target-extra-arg target="--flag value"`.
 - Multi-GPU targets (`multi_gpu_required=True`) return `SKIPPED` instead of hanging when launched with a single process.
-- Example: `PYTHONPATH=. python cli/aisp.py bench run --targets labs/train_distributed:ddp --launch-via torchrun --nproc-per-node 2 --target-extra-arg 'labs/train_distributed:ddp=--compile'`.
+- Example: `PYTHONPATH=. python -m cli.aisp bench run --targets labs/train_distributed:ddp --launch-via torchrun --nproc-per-node 2 --target-extra-arg 'labs/train_distributed:ddp=--compile'`.
 
 ---
 
@@ -460,7 +460,7 @@ class MyBenchmark(BaseBenchmark):
 
 **Single command**:
 ```bash
-python cli/aisp.py bench run
+python -m cli.aisp bench run
 ```
 
 **What happens**:
@@ -564,7 +564,7 @@ with self._nvtx_range("my_operation"):
 ### Example 1: Run Single Chapter
 
 ```bash
-python cli/aisp.py bench run --targets ch13
+python -m cli.aisp bench run --targets ch13
 ```
 
 **Result**: Runs all 23 benchmarks in Chapter 13 (PyTorch Profiling), compares baseline vs optimized, generates report.
@@ -572,7 +572,7 @@ python cli/aisp.py bench run --targets ch13
 ### Example 2: Reproducible Run
 
 ```bash
-python cli/aisp.py bench run --reproducible
+python -m cli.aisp bench run --reproducible
 ```
 
 **Result**: All seeds set to 42, deterministic algorithms enabled; expect matching outputs at the cost of slower kernels and possible op errors if deterministic paths are missing.
@@ -580,7 +580,7 @@ python cli/aisp.py bench run --reproducible
 ### Example 3: Extended Timeouts for Slow Systems
 
 ```bash
-python cli/aisp.py bench run --timeout-multiplier 2.0
+python -m cli.aisp bench run --timeout-multiplier 2.0
 ```
 
 **Result**: All timeouts doubled (30s → 60s setup, 15s → 30s measurement, etc.).
@@ -588,7 +588,7 @@ python cli/aisp.py bench run --timeout-multiplier 2.0
 ### Example 4: Cold Start Measurements
 
 ```bash
-python cli/aisp.py bench run --cold-start
+python -m cli.aisp bench run --cold-start
 ```
 
 **Result**: GPU state reset between benchmarks, additional cleanup, cold start performance measurements.
@@ -596,7 +596,7 @@ python cli/aisp.py bench run --cold-start
 ### Example 5: Profiling Disabled (Faster Runs)
 
 ```bash
-python cli/aisp.py bench run --no-profile
+python -m cli.aisp bench run --no-profile
 ```
 
 **Result**: Timing-only runs (no nsys/ncu/PyTorch profiler), faster execution, still collects timing and memory stats.

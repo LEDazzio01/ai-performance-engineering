@@ -373,7 +373,7 @@ purge_ai_repo_artifacts() {
     if [[ -d "$lab_dir" ]]; then
       while IFS= read -r -d '' path; do
         remove_path "$path"
-      done < <(find "$lab_dir" -name '*expectations_gb10.json' -print0 2>/dev/null)
+      done < <(find "$lab_dir" -name 'expectations_*.json.bak' -print0 2>/dev/null)
     fi
   done
 

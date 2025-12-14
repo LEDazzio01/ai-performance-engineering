@@ -9,6 +9,8 @@
 #include <random>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                     \
     do {                                                                     \
         cudaError_t status = (call);                                         \
@@ -67,27 +69,65 @@ __global__ void gemm_double_buffered_kernel(
     auto stage_async = [&](int stage, int chunk_index) {
         const int chunk_base = chunk_index * CHUNK_K;
         const int valid_k = max(0, min(CHUNK_K, K - chunk_base));
+        pipe.producer_acquire();
         zero_stage(stage);
         block.sync();
-        pipe.producer_acquire();
-        if (chunk_base < K) {
-            for (int row = 0; row < TILE_M; ++row) {
+        auto warp = cg::tiled_partition<32>(block);
+        const int warp_id = warp.meta_group_rank();
+        const int warp_count = warp.meta_group_size();
+
+        if (valid_k > 0) {
+            for (int row = warp_id; row < TILE_M; row += warp_count) {
                 const int global_row = block_row + row;
-                if (global_row < M && valid_k > 0) {
-                    float* dst = A_tiles[stage] + row * CHUNK_K;
-                    const float* src = A + global_row * K + chunk_base;
-                    cuda::memcpy_async(block, dst, src, valid_k * sizeof(float), pipe);
+                if (global_row >= M) {
+                    continue;
                 }
-            }
-            for (int row = 0; row < valid_k; ++row) {
-                const int global_row = chunk_base + row;
-                if (global_row < K && valid_cols > 0) {
-                    float* dst = B_tiles[stage] + row * TILE_N;
-                    const float* src = B + global_row * N + block_col;
-                    cuda::memcpy_async(block, dst, src, valid_cols * sizeof(float), pipe);
+                float* dst = A_tiles[stage] + row * CHUNK_K;
+                const float* src = A + global_row * K + chunk_base;
+                if (valid_k == CHUNK_K) {
+                    cuda::memcpy_async(
+                        warp,
+                        dst,
+                        src,
+                        cuda::aligned_size_t<16>(static_cast<size_t>(CHUNK_K) * sizeof(float)),
+                        pipe);
+                } else {
+                    cuda::memcpy_async(
+                        warp,
+                        dst,
+                        src,
+                        static_cast<size_t>(valid_k) * sizeof(float),
+                        pipe);
                 }
             }
         }
+
+        if (valid_cols > 0) {
+            for (int row = warp_id; row < valid_k; row += warp_count) {
+                const int global_row = chunk_base + row;
+                if (global_row >= K) {
+                    continue;
+                }
+                float* dst = B_tiles[stage] + row * TILE_N;
+                const float* src = B + global_row * N + block_col;
+                if (valid_cols == TILE_N) {
+                    cuda::memcpy_async(
+                        warp,
+                        dst,
+                        src,
+                        cuda::aligned_size_t<16>(static_cast<size_t>(TILE_N) * sizeof(float)),
+                        pipe);
+                } else {
+                    cuda::memcpy_async(
+                        warp,
+                        dst,
+                        src,
+                        static_cast<size_t>(valid_cols) * sizeof(float),
+                        pipe);
+                }
+            }
+        }
+
         pipe.producer_commit();
     };
 
@@ -201,6 +241,7 @@ int main() {
                 avg_ms, iterations);
     std::printf("TIME_MS: %.6f\n", avg_ms);
     std::printf("Checksum: %.6f\n", checksum);
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

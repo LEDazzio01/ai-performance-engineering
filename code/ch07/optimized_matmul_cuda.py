@@ -18,12 +18,10 @@ class OptimizedMatmulCudaBenchmark(CudaBinaryBenchmark):
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
-        m = n = k = 1024
-        micro_batches = 16
-        iterations = 6
-        bytes_a = m * k * 4
-        bytes_b = k * n * 4
-        bytes_c = m * n * 4
+        n = 1024
+        bytes_a = n * n * 4
+        bytes_b = n * n * 4
+        bytes_c = n * n * 4
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="optimized_matmul_tiled",
@@ -33,11 +31,7 @@ class OptimizedMatmulCudaBenchmark(CudaBinaryBenchmark):
             timeout_seconds=180,
             time_regex=r"TIME_MS:\s*([0-9.]+)",
             workload_params={
-                "M": m,
                 "N": n,
-                "K": k,
-                "micro_batches": micro_batches,
-                "iterations": iterations,
                 "dtype": "float32",
             },
         )

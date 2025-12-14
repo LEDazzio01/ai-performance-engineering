@@ -1,5 +1,5 @@
-// optimized_memory_access.cu -- Tiled streaming copy with register blocking.
-// CUDA 13 + Blackwell: Uses Float8 (32-byte aligned) for 256-bit loads
+// optimized_memory_access.cu -- 256-bit (32B) vectorized copy with register blocking.
+// CUDA 13 + Blackwell: Uses Float8 (32-byte aligned) for 256-bit loads/stores.
 
 #include <cuda_runtime.h>
 #include <cmath>
@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 // CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads
 struct alignas(32) Float8 {
@@ -79,7 +80,7 @@ int main() {
 
   std::vector<float> h_src(N), h_dst(N, 0.0f);
   for (int i = 0; i < N; ++i) {
-    h_src[i] = static_cast<float>((i % 1024) - 512) / 128.0f;
+    h_src[i] = static_cast<float>((i % 2048) - 1024) / 256.0f;
   }
 
   float *d_src = nullptr, *d_dst = nullptr;
@@ -121,6 +122,11 @@ int main() {
 
   CUDA_CHECK(cudaMemcpy(h_dst.data(), d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
   std::printf("Checksum: %.6f, Max diff: %.6e\n", checksum(h_dst), max_abs_diff(h_src, h_dst));
+#ifdef VERIFY
+  float verify_checksum = 0.0f;
+  VERIFY_CHECKSUM(h_dst.data(), N, &verify_checksum);
+  VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

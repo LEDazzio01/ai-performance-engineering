@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -55,6 +57,19 @@ int main() {
     double bandwidth_tbs = bandwidth_gbs / 1024.0;
     
     printf("Baseline copy: %.2f ms, %.2f TB/s\n", elapsed_ms / iterations, bandwidth_tbs);
+
+#ifdef VERIFY
+    float* h_verify = static_cast<float*>(malloc(n * sizeof(float)));
+    if (!h_verify) {
+        fprintf(stderr, "Host allocation failed\n");
+        return EXIT_FAILURE;
+    }
+    CUDA_CHECK(cudaMemcpy(h_verify, d_dst, n * sizeof(float), cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify, static_cast<int>(n), &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+    free(h_verify);
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
@@ -63,7 +78,6 @@ int main() {
     
     return 0;
 }
-
 
 
 

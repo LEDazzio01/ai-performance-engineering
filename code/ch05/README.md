@@ -17,18 +17,17 @@ Focuses on feeding GPUs efficiently: tune DataLoader workers, vectorize preproce
 | `baseline_ai.py`, `optimized_ai.py`, `storage_io_optimization.py` | LLM-style token pipelines showcasing overlapping compute with streaming reads and prefetch. |
 | `baseline_distributed.py`, `optimized_distributed.py` | Multi-node reader pair demonstrating sharded datasets and rendezvous barriers. |
 | `gds_cufile_minimal.py`, `gpudirect_storage_example.py` | GPUDirect Storage samples for verifying cuFile setup, buffer alignment, and throughput. |
-| `compare.py`, `requirements.txt`, `expectations_gb10.json` | Harness entrypoint plus expectation baselines for spotting regressions. |
+| `compare.py`, `requirements.txt`, `expectations_b200.json` | Harness entrypoint plus expectation baselines for spotting regressions. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch05
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch05
-python cli/aisp.py bench run --targets ch05 --profile minimal
+python ch05/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch05
+python -m cli.aisp bench run --targets ch05 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python baseline_storage_cpu.py --inspect` exposes CPU wait time > GPU time; `optimized_storage_cpu.py` reverses the ratio with >=80% GPU utilization.

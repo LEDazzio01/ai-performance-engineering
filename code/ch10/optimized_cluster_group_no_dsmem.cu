@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "cluster_group_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -132,6 +133,20 @@ int main() {
     const float avg_ms = elapsed_ms / static_cast<float>(kIterations);
     printf("Optimized (block-level reduction, no DSMEM): %.3f ms\n", avg_ms);
     printf("TIME_MS: %.6f\n", avg_ms);
+
+#ifdef VERIFY
+    std::vector<float> h_sum(chunks, 0.0f);
+    std::vector<float> h_squares(chunks, 0.0f);
+    CUDA_CHECK(cudaMemcpy(h_sum.data(), d_sum, result_bytes, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(h_squares.data(), d_sq, result_bytes, cudaMemcpyDeviceToHost));
+
+    double checksum = 0.0;
+    for (int i = 0; i < chunks; ++i) {
+        checksum += static_cast<double>(h_sum[i]) + static_cast<double>(h_squares[i]);
+    }
+    checksum /= static_cast<double>(chunks);
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

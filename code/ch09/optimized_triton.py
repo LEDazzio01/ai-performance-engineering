@@ -71,6 +71,7 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.input = None
         self.output = None
+        self._output_buffer: Optional[torch.Tensor] = None
         self.N = 1_000_000
         # Triton benchmark - fixed N for kernel comparison
         self._workload = WorkloadMetadata(
@@ -80,17 +81,10 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tensors."""
-        
-        # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
-        # Optimization: Triton kernels
-        # Triton provides a Python-like language for writing GPU kernels
-        
+
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self._output_buffer = torch.empty(self.N, device=self.device, dtype=torch.float32)
         self._synchronize()
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
@@ -99,7 +93,7 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Triton kernel operations."""
-        assert self.input is not None and self.output is not None
+        assert self.input is not None and self._output_buffer is not None
         with self._nvtx_range("triton"):
             if TRITON_AVAILABLE:
                 # Optimization: Triton kernel
@@ -107,16 +101,15 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 # Triton: Python-like syntax for GPU kernel programming
                 grid = lambda meta: (triton.cdiv(self.N, meta['BLOCK_SIZE']),)
                 triton_kernel[grid](
-                    self.output,
+                    self._output_buffer,
                     self.input,
                     self.N,
                     BLOCK_SIZE=1024,
                 )
             else:
                 # Fallback: Use optimized PyTorch operations
-                # Triton would provide more efficient kernels if available
-                # Simulate Triton benefit with optimized PyTorch
-                self.output = self.input * 2.0 + 1.0
+                self._output_buffer.copy_(self.input * 2.0 + 1.0)
+            self.output = self._output_buffer
         self._synchronize()
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
@@ -147,6 +140,7 @@ class OptimizedTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Teardown: Clean up resources."""
         self.input = None
         self.output = None
+        self._output_buffer = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:

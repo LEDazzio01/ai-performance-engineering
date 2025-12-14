@@ -49,7 +49,7 @@
 #
 # After running this script, you can:
 #   - Run examples: python3 ch01/performance_basics.py
-#   - Drive the benchmark suite: python cli/aisp.py bench run
+#   - Drive the benchmark suite: python -m cli.aisp bench run
 #   - Capture peak performance: python core/benchmark/benchmark_peak.py
 #
 

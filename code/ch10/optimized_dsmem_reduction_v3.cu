@@ -15,6 +15,8 @@
 #include <vector>
 #include <numeric>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call) do { \
@@ -238,6 +240,9 @@ int main() {
     printf("  Sum: %.0f (expected: %d) %s\n", total, N, 
            (fabs(total - N) < 0.01f * N) ? "✓" : "✗");
     printf("  Bandwidth: %.2f GB/s\n", (N * sizeof(float)) / (avg_ms * 1e6));
+
+    const float verify_checksum = total;
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -247,4 +252,3 @@ int main() {
     
     return 0;
 }
-

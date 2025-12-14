@@ -17,7 +17,7 @@ BASE_TARGETS := $(STANDALONE_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
 VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean test compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all run test-gds demo help $(VERIFY_TARGETS)
+.PHONY: all clean test compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all run test-gds demo help
 
 all: $(TARGETS)
 	@echo "Building all Chapter 10 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
@@ -63,10 +63,10 @@ optimized_cluster_group_single_cta$(SUFFIX): optimized_cluster_group_single_cta.
 optimized_cluster_group_single_cta_verify$(SUFFIX): optimized_cluster_group_single_cta.cu cluster_group_common.cuh $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
 
-optimized_tma_multicast$(SUFFIX): optimized_tma_multicast.cu $(COMMON_HEADERS)
+tma_multicast_cluster$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true $(INCLUDES) -o $@ $<
 
-optimized_tma_multicast_verify$(SUFFIX): optimized_tma_multicast.cu $(COMMON_HEADERS)
+tma_multicast_cluster_verify$(SUFFIX): tma_multicast_cluster.cu $(COMMON_HEADERS)
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 $(INCLUDES) -o $@ $<
 
 optimized_dsmem_reduction$(SUFFIX): optimized_dsmem_reduction.cu $(COMMON_HEADERS)

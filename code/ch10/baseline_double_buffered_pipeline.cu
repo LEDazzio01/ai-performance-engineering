@@ -7,6 +7,8 @@
 #include <random>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                     \
     do {                                                                     \
         cudaError_t status = (call);                                         \
@@ -28,13 +30,12 @@ __global__ void gemm_naive_kernel(
         return;
     }
 
-    double sum = 0.0;
+    float sum = 0.0f;
     // Standard global memory GEMM - read A and B rows/columns from global memory
     for (int kk = 0; kk < K; ++kk) {
-        sum += static_cast<double>(A[row * K + kk]) *
-               static_cast<double>(B[kk * N + col]);
+        sum += A[row * K + kk] * B[kk * N + col];
     }
-    C[row * N + col] = static_cast<float>(sum);
+    C[row * N + col] = sum;
 }
 
 int main() {
@@ -89,6 +90,7 @@ int main() {
     std::printf("Baseline GEMM (global memory): %.3f ms (avg over %d iters)\n", avg_ms, iterations);
     std::printf("TIME_MS: %.6f\n", avg_ms);
     std::printf("Checksum: %.6f\n", checksum);
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

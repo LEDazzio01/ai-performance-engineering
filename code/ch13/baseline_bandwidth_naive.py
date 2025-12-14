@@ -9,6 +9,7 @@ Implements BaseBenchmark for harness integration.
 from __future__ import annotations
 
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 repo_root = Path(__file__).parent.parent
@@ -28,6 +29,20 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
+from core.utils.extension_loader_template import load_cuda_extension_v2
+
+
+_EXT_NAME = "ch13_bandwidth_naive_ext"
+
+
+@lru_cache(maxsize=1)
+def _load_extension():
+    return load_cuda_extension_v2(
+        name=_EXT_NAME,
+        sources=[Path(__file__).with_name("bandwidth_naive_extension.cu")],
+        extra_cflags=["-O3"],
+        extra_cuda_cflags=["-O3"],
+    )
 
 
 class BaselineBandwidthNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -35,27 +50,36 @@ class BaselineBandwidthNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def __init__(self):
         super().__init__()
-        self.A = None
-        self.B = None
-        self.C = None
-        self.size = 10_000_000  # Large vector for bandwidth measurement
+        self.A: torch.Tensor | None = None
+        self.B: torch.Tensor | None = None
+        self.C: torch.Tensor | None = None
+
+        self.rows = 4096
+        self.cols = 4096
+        self.size = self.rows * self.cols  # 2**24 (required by CUDA kernel)
+        self.passes = 16
+        self.stride = 8191  # odd -> permutation over power-of-two domain
+        bytes_per_iter = float(self.size * 4 * 3 * self.passes)  # read A/B, write C
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
-            tokens_per_iteration=float(self.size),
-            bytes_per_iteration=float(self.size * 4 * 3),  # read A/B, write C
+            tokens_per_iteration=float(self.size * self.passes),
+            bytes_per_iteration=bytes_per_iter,
         )
     
     def setup(self) -> None:
         """Setup: Initialize large tensors."""
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         
         # Large tensors for bandwidth measurement
         self.A = torch.randn(self.size, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.size, device=self.device, dtype=torch.float32)
         self.C = torch.empty_like(self.A)
+        self.ext = _load_extension()
         
         # Warmup
-        self.C = self.A + self.B
+        self.ext.bandwidth_add_mul(self.A, self.B, self.C, int(self.stride), 1)
         self._synchronize()
         self.register_workload_metadata(
             requests_per_iteration=self._workload.requests_per_iteration,
@@ -67,16 +91,8 @@ class BaselineBandwidthNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Function to benchmark - naive bandwidth usage."""
         assert self.A is not None and self.B is not None and self.C is not None
         with self._nvtx_range("baseline_bandwidth_naive"):
-            # Naive pattern: uncoalesced access via strided operations
-            # This pattern results in poor bandwidth utilization
-            for i in range(0, self.size, 1024):  # Strided access
-                self.C[i:i+1024] = self.A[i:i+1024] + self.B[i:i+1024]
-            
-            # Additional unnecessary memory transfers
-            temp = self.C.clone()  # Unnecessary copy
-            self.C = temp * 0.5    # Write back
-        self._synchronize()
-        if self.A is None or self.B is None or self.C is None:
+            self.ext.bandwidth_add_mul(self.A, self.B, self.C, int(self.stride), int(self.passes))
+        if self.C is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
 
     def capture_verification_payload(self) -> None:
@@ -96,7 +112,9 @@ class BaselineBandwidthNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def teardown(self) -> None:
         """Cleanup."""
-        del self.A, self.B, self.C
+        self.A = None
+        self.B = None
+        self.C = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -119,15 +137,9 @@ class BaselineBandwidthNaiveBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def validate_result(self) -> Optional[str]:
         """Validate benchmark result."""
-        if self.A is None:
-            return "A not initialized"
+        if self.A is None or self.B is None or self.C is None:
+            return "Tensors not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.C is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.C
 
 
 def get_benchmark() -> BaseBenchmark:

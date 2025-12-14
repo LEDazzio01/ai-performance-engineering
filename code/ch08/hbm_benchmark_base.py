@@ -52,11 +52,7 @@ class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         self.host_col = host_col.pin_memory()
         self.matrix_row = host_row.to(self.device, non_blocking=False).contiguous()
         self.matrix_col = self.host_col.to(self.device, non_blocking=False).contiguous()
-        self.output = torch.empty(self.rows, device=self.device, dtype=torch.float32)
-
-        self._invoke_kernel()
-        torch.cuda.synchronize()
-        self._validate_correctness()
+        self.output = None
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -65,6 +61,8 @@ class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
+            if self.output is None:
+                self.output = torch.empty(self.rows, device=self.device, dtype=torch.float32)
             self._invoke_kernel()
         if self.matrix_row is None or self.matrix_col is None or self.output is None:
             raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")

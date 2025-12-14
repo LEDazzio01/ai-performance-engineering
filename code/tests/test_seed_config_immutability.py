@@ -141,9 +141,9 @@ def test_seed_mutation_is_detected_in_torchrun_runs(tmp_path: Path):
 
     script = tmp_path / "seed_mutate_script.py"
     script.write_text(
-        "import torch\\n"
-        "torch.manual_seed(123)\\n"
-        "print('done')\\n",
+        "import torch\n"
+        "torch.manual_seed(123)\n"
+        "print('done')\n",
         encoding="utf-8",
     )
 

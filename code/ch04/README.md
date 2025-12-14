@@ -18,18 +18,17 @@ Demonstrates how to scale training and inference across multiple Blackwell GPUs 
 | `baseline_continuous_batching_multigpu.py`, `optimized_continuous_batching_multigpu.py`, `baseline_disaggregated.py`, `optimized_disaggregated.py` | Continuous batching + disaggregated inference demos that showcase NVLink pooling and remote KV reuse. |
 | `baseline_nvshmem_pipeline_parallel_multigpu.py`, `optimized_nvshmem_pipeline_parallel_multigpu.py`, `baseline_nvshmem_training_example_multigpu.py`, `optimized_nvshmem_training_example_multigpu.py` | NVSHMEM pipeline and training samples highlighting device-driven synchronization benefits. |
 | `baseline_symmetric_memory_multigpu.py`, `optimized_symmetric_memory_multigpu.py`, `baseline_symmetric_memory_perf.py`, `optimized_symmetric_memory_perf.py` | Symmetric memory utilities for distributed KV cache and optimizer shards. |
-| `compare.py`, `requirements.txt`, `expectations_gb10.json`, `bandwidth_benchmark_suite_multigpu.py`, `nccl_benchmark.py` | Harness driver plus standalone NCCL/NVLink sweepers for topology bring-up. |
+| `compare.py`, `requirements.txt`, `expectations_b200.json`, `bandwidth_benchmark_suite_multigpu.py`, `nccl_benchmark.py` | Harness driver plus standalone NCCL/NVLink sweepers for topology bring-up. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch04
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch04
-python cli/aisp.py bench run --targets ch04 --profile minimal
+python ch04/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch04
+python -m cli.aisp bench run --targets ch04 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python compare.py --examples dataparallel` shows the optimized pair overlapping compute and communication with lower latency.
@@ -39,23 +38,3 @@ python cli/aisp.py bench run --targets ch04 --profile minimal
 ## Notes
 - `symmetric_memory_*` helpers hold user-space allocators for pooling KV-cache lines across GPUs without NVSwitch penalties.
 - Use `nccl_blackwell_config.py` to seed NCCL env vars (min NRings, IB mapping) before launching multi-node tests.
-- `baseline_nvshmem_ibgda_microbench.py` / `optimized_nvshmem_ibgda_microbench.py` wrap the C++ IBGDA microbenchmark; run with `python cli/aisp.py bench run --targets ch04:nvshmem_ibgda_microbench --profile none` once NVSHMEM is installed.
-
-### NVSHMEM IBGDA (GPUDirect Async) quick reference
-- Why: lets SMs ring NIC doorbells directly, removing the CPU proxy; blog data shows up to 9.5× higher throughput for sub-1 KiB puts and ~180 MOPS for register-level `nvshmem_p`.
-- Enable (InfiniBand + NVSHMEM 2.7+):
-  ```bash
-  export NVSHMEM_IB_ENABLE_IBGDA=1
-  export NVSHMEM_IBGDA_NIC_HANDLER=gpu
-  export NVSHMEM_IBGDA_FORCE_NIC_BUF_MEMTYPE=gpumem
-  # optional: NVSHMEM_IBGDA_ENABLE_MULTI_PORT=1 NVSHMEM_IBGDA_NUM_REQUESTS_IN_BATCH=1
-  # optional: NVSHMEM_DEBUG=INFO NVSHMEM_INFO=1
-  ```
-- Try it here: compare NCCL vs NVSHMEM symmetric memory with/without IBGDA:
-  ```bash
-  cd /mnt/dev-fin-03/ai-performance-engineering/code
-  NVSHMEM_IB_ENABLE_IBGDA=1 NVSHMEM_DEBUG=INFO NVSHMEM_INFO=1 \
-    torchrun --nproc_per_node=8 ch04/nvshmem_vs_nccl_benchmark.py \
-    --min-bytes 1024 --max-bytes 1048576 --steps 4
-  ```
-- Expect NVSHMEM columns to improve for ≤16 KiB payloads when IBGDA is active; if not, verify NVSHMEM version, IB firmware/driver, and GPUDirect RDMA.

@@ -1,4 +1,4 @@
-// baseline_tma_multicast.cu - Standard GEMM without TMA Multicast (Ch10)
+// tma_multicast_baseline.cu - Standard GEMM without TMA Multicast (Ch10)
 //
 // WHAT: Standard tiled GEMM where each CTA independently loads its tiles.
 // No cluster coordination or multicast.
@@ -8,7 +8,7 @@
 //   - N× memory bandwidth for N CTAs that need same data
 //   - No benefit from cluster-level data sharing
 //
-// COMPARE WITH: optimized_tma_multicast.cu
+// COMPARE WITH: tma_multicast_cluster.cu
 //   - Optimized uses TMA multicast to broadcast shared tiles
 //   - Single load serves all cluster CTAs
 //   - Significant bandwidth savings
@@ -18,6 +18,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+
+#include "../core/common/headers/cuda_verify.cuh"
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -214,7 +216,17 @@ int main() {
     printf("  Avg time: %.3f ms\n", avg_ms);
     printf("  TFLOPS: %.2f\n", tflops);
     printf("\nNote: Each block loads B tiles independently.\n");
-    printf("Compare with optimized_tma_multicast for cluster-based sharing.\n");
+    printf("Compare with tma_multicast_cluster.cu for cluster-based sharing.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_C(M * N);
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_C) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -225,6 +237,3 @@ int main() {
     
     return 0;
 }
-
-
-

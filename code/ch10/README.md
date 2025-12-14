@@ -23,13 +23,12 @@ Applies tensor-core friendly scheduling on Blackwell: warp specialization, TMA-p
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch10
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch10
-python cli/aisp.py bench run --targets ch10 --profile minimal
+python ch10/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch10
+python -m cli.aisp bench run --targets ch10 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - Cluster-enabled kernels fail fast on hardware without DSMEM support, while DSMEM-free variants still execute-use this to confirm cluster capability flags.

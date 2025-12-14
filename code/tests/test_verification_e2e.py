@@ -38,12 +38,25 @@ class TestCh11StreamsVerification:
         
         baseline = get_baseline()
         optimized = get_optimized()
+
+        # Keep this test fast: shrink workload before setup() allocates buffers.
+        for bench in (baseline, optimized):
+            if hasattr(bench, "N"):
+                bench.N = 2048
+            if hasattr(bench, "num_chunks"):
+                bench.num_chunks = 4
         
         # Setup both benchmarks
         baseline.setup()
         optimized.setup()
         
         try:
+            # Payload-based signatures are only available after a run.
+            baseline.benchmark_fn()
+            baseline.capture_verification_payload()
+            optimized.benchmark_fn()
+            optimized.capture_verification_payload()
+
             # Extract and compare signatures
             runner = VerifyRunner(
                 cache_dir=temp_env["cache_dir"],

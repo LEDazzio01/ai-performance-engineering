@@ -1,4 +1,4 @@
-"""Ch7 optimized memory access benchmark (coalesced float4 copy)."""
+"""Ch7 optimized memory access benchmark (256-bit coalesced copy)."""
 
 from __future__ import annotations
 from typing import Optional
@@ -20,7 +20,6 @@ class OptimizedMemoryAccessBenchmark(CudaBinaryBenchmark):
         chapter_dir = Path(__file__).parent
         n_elems = 1 << 24
         repeat = 50
-        perm_stride = 97
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="optimized_memory_access",
@@ -32,12 +31,11 @@ class OptimizedMemoryAccessBenchmark(CudaBinaryBenchmark):
             workload_params={
                 "N": n_elems,
                 "repeat": repeat,
-                "perm_stride": perm_stride,
                 "dtype": "float32",
             },
         )
         self.register_workload_metadata(
-            bytes_per_iteration=float(n_elems * 16),
+            bytes_per_iteration=float(n_elems * 8),
         )
 
     def get_custom_metrics(self) -> Optional[dict]:

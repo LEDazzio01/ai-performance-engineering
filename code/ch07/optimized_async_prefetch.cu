@@ -9,6 +9,8 @@
 #include <vector>
 #include <cmath>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call) \
@@ -156,6 +158,11 @@ int main() {
     printf("Pipelined async prefetch (optimized): %.3f ms\n", avg_ms);
     printf("TIME_MS: %.6f\n", avg_ms);
     printf("Checksum: %.6f\n", checksum);
+#ifdef VERIFY
+    float verify_checksum = 0.0f;
+    VERIFY_CHECKSUM(h_out.data(), N, &verify_checksum);
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

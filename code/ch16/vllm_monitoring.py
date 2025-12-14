@@ -17,8 +17,8 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from ch18.monitoring_bundle import MonitoringBundle, write_bundle  # noqa: E402
-from ch18.monitoring_config import MetricNames, AlertThresholds, load_monitoring_overrides  # noqa: E402
+from ch16.monitoring_bundle import MonitoringBundle, write_bundle  # noqa: E402
+from ch16.monitoring_config import MetricNames, AlertThresholds, load_monitoring_overrides  # noqa: E402
 
 
 def build_vllm_monitoring_bundle(metrics: MetricNames, thresholds: AlertThresholds) -> MonitoringBundle:

@@ -72,6 +72,8 @@ class OptimizedDockerBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets: List[torch.Tensor] = []
         self.prefetcher: Optional[Prefetcher] = None
         self.output: Optional[torch.Tensor] = None
+        self._payload_inputs: Optional[torch.Tensor] = None
+        self._payload_targets: Optional[torch.Tensor] = None
         # Training benchmarks don't support jitter check - outputs change due to weight updates
         # Larger transfers to make H2D optimization measurable on high-bandwidth GPUs
         # The prefetcher benefit is proportional to (H2D time / compute time)
@@ -130,10 +132,14 @@ class OptimizedDockerBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         # Store output for verification
         self.output = out.detach()
+        self._payload_inputs = inputs
+        self._payload_targets = targets
 
     def capture_verification_payload(self) -> None:
+        if self._payload_inputs is None or self._payload_targets is None:
+            raise RuntimeError("benchmark_fn() must be called before capture_verification_payload()")
         self._set_verification_payload(
-            inputs={"data": inputs, "target": targets},
+            inputs={"data": self._payload_inputs, "target": self._payload_targets},
             output=self.output,
             batch_size=self.batch_size,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
@@ -153,6 +159,8 @@ class OptimizedDockerBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets = []
         self.prefetcher = None
         self.output = None
+        self._payload_inputs = None
+        self._payload_targets = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

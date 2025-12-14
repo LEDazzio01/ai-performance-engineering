@@ -5,6 +5,7 @@
 #include <cstdlib>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 // Baseline: Scalar copy (very inefficient)
 __global__ void scalar_copy_kernel(float* dst, const float* src, size_t n) {
@@ -49,6 +50,19 @@ int main() {
     double bw = (size_bytes * 2 / (avg_ms / 1000.0)) / 1e9;
     
     printf("Scalar copy (baseline): %.2f ms, %.2f GB/s\n", avg_ms, bw);
+
+#ifdef VERIFY
+    float* h_verify = static_cast<float*>(std::malloc(size_bytes));
+    if (!h_verify) {
+        std::fprintf(stderr, "Host allocation failed\n");
+        return EXIT_FAILURE;
+    }
+    CUDA_CHECK(cudaMemcpy(h_verify, d_dst, size_bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify, static_cast<int>(n_floats), &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+    std::free(h_verify);
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
@@ -57,7 +71,6 @@ int main() {
     
     return 0;
 }
-
 
 
 

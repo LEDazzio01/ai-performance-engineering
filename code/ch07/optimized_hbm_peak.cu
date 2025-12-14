@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call) \
     do { \
         cudaError_t err = call; \
@@ -68,6 +70,19 @@ int main() {
     
     printf("HBM peak (Float8): %.2f ms, %.2f TB/s\n", elapsed_ms / iterations, bandwidth_tbs);
     printf("Expected: 7-8 TB/s (B200), 8-9 TB/s (B300)\n");
+
+#ifdef VERIFY
+    float* h_verify = static_cast<float*>(malloc(target_bytes));
+    if (!h_verify) {
+        fprintf(stderr, "Host allocation failed\n");
+        return EXIT_FAILURE;
+    }
+    CUDA_CHECK(cudaMemcpy(h_verify, d_dst, target_bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify, static_cast<int>(n_floats), &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+    free(h_verify);
+#endif
     
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
@@ -76,7 +91,6 @@ int main() {
     
     return 0;
 }
-
 
 
 

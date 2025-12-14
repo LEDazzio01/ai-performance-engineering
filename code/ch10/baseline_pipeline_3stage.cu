@@ -18,6 +18,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -122,6 +124,16 @@ int main() {
     printf("  Time: %.3f ms\n", avg_ms);
     printf("\nNote: Kernels execute sequentially, no overlap.\n");
     printf("Compare with optimized_pipeline_3stage for stream parallelism.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_output(N);
+    CUDA_CHECK(cudaMemcpy(h_output.data(), d_output, N * sizeof(float), cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_output) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

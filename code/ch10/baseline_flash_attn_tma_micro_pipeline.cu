@@ -9,6 +9,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
+
+#include "../core/common/headers/cuda_verify.cuh"
 
 #ifndef CHECK_CUDA
 #define CHECK_CUDA(call)                                                     \
@@ -43,6 +46,7 @@ __global__ void flash_attn_baseline_kernel(
     float* smem_v = smem_k + TILE_KV * d_head;
 
     const int tid = threadIdx.x;
+    __shared__ float score_smem[THREADS];
 
     // Load Q row into registers.
     float q_reg[D_HEAD];
@@ -84,21 +88,27 @@ __global__ void flash_attn_baseline_kernel(
                 score += q_reg[d] * k_row[d];
             }
 
-            // Naive block-wide reduction (single warp tree).
-            __shared__ float score_smem[THREADS];
             score_smem[tid] = score;
             __syncthreads();
             if (tid < 64) score_smem[tid] += score_smem[tid + 64];
             __syncthreads();
             if (tid < 32) score_smem[tid] += score_smem[tid + 32];
-            __syncthreads();
-            float weight = score_smem[0];
+            __syncwarp();
+            if (tid < 16) score_smem[tid] += score_smem[tid + 16];
+            __syncwarp();
+            if (tid < 8) score_smem[tid] += score_smem[tid + 8];
+            __syncwarp();
+            if (tid < 4) score_smem[tid] += score_smem[tid + 4];
+            __syncwarp();
+            if (tid < 2) score_smem[tid] += score_smem[tid + 2];
+            __syncwarp();
             if (tid == 0) {
-                weight = fminf(fmaxf(weight, -10.f), 10.f);
-                score_smem[0] = __expf(weight) * 1e-3f;
+                float s = score_smem[0] + score_smem[1];
+                s = fminf(fmaxf(s, -10.f), 10.f);
+                score_smem[0] = __expf(s) * 1e-3f;
             }
             __syncthreads();
-            weight = score_smem[0];
+            float weight = score_smem[0];
 
             for (int d = tid; d < d_head; d += blockDim.x) {
                 o_reg[d] += weight * v_row[d];
@@ -136,9 +146,18 @@ int main() {
     CHECK_CUDA(cudaMalloc(&d_v, bytes));
     CHECK_CUDA(cudaMalloc(&d_o, bytes));
 
-    CHECK_CUDA(cudaMemset(d_q, 0, bytes));
-    CHECK_CUDA(cudaMemset(d_k, 0, bytes));
-    CHECK_CUDA(cudaMemset(d_v, 0, bytes));
+    // Deterministic non-zero initialization (outside timed region).
+    std::vector<float> h_q(seq_len * d_head);
+    std::vector<float> h_k(seq_len * d_head);
+    std::vector<float> h_v(seq_len * d_head);
+    for (int i = 0; i < seq_len * d_head; ++i) {
+        h_q[i] = (static_cast<float>((i % 13) - 6)) * 0.01f;
+        h_k[i] = (static_cast<float>((i % 17) - 8)) * 0.01f;
+        h_v[i] = (static_cast<float>((i % 19) - 9)) * 0.01f;
+    }
+    CHECK_CUDA(cudaMemcpy(d_q, h_q.data(), bytes, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_k, h_k.data(), bytes, cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_v, h_v.data(), bytes, cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemset(d_o, 0, bytes));
 
     cudaStream_t stream;
@@ -174,6 +193,16 @@ int main() {
     float avg_ms = total_ms / ITERS;
     CHECK_CUDA(cudaEventDestroy(start));
     CHECK_CUDA(cudaEventDestroy(stop));
+
+#ifdef VERIFY
+    std::vector<float> h_o(seq_len * d_head);
+    CHECK_CUDA(cudaMemcpy(h_o.data(), d_o, bytes, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_o) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CHECK_CUDA(cudaStreamDestroy(stream));
     CHECK_CUDA(cudaFree(d_q));

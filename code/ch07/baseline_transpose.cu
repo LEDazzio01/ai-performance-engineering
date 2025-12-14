@@ -1,41 +1,38 @@
-// baseline_transpose.cu -- naive matrix transpose with strided accesses.
+// baseline_transpose.cu -- shared-memory transpose with bank conflicts (Chapter 7 baseline).
 
 #include <cuda_runtime.h>
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 constexpr int WIDTH = 4096;
-constexpr int BLOCK_X = 32;
-constexpr int BLOCK_Y = 8;
-constexpr int RANDOM_SWEEPS = 256;
-constexpr int WRITE_REPEATS = 8;
+constexpr int TILE_DIM = 32;
+constexpr int BLOCK_ROWS = 8;
+constexpr int REPEAT = 200;
 
-__device__ __forceinline__ int permute_coord(int coord, int pass, int width) {
-  return (coord + pass * 37) & (width - 1);
-}
+__global__ void transpose_naive(const float* __restrict__ idata, float* __restrict__ odata, int width) {
+  __shared__ float tile[TILE_DIM][TILE_DIM];
 
-__global__ void transpose_naive(const float* __restrict__ in,
-                                float* __restrict__ out,
-                                int width) {
-  const int x = blockIdx.x * blockDim.x + threadIdx.x;
-  const int y = blockIdx.y * blockDim.y + threadIdx.y;
-  if (x < width && y < width) {
-    float scratch = 0.0f;
-#pragma unroll 4
-    for (int sweep = 0; sweep < RANDOM_SWEEPS; ++sweep) {
-      const int src_x = permute_coord(x, sweep + threadIdx.y, width);
-      const int src_y = permute_coord(y, sweep + threadIdx.x, width);
-      scratch = __ldg(in + src_x * width + src_y);
+  int x = blockIdx.x * TILE_DIM + threadIdx.x;
+  int y = blockIdx.y * TILE_DIM + threadIdx.y;
+
+  for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
+    if (x < width && (y + j) < width) {
+      tile[threadIdx.y + j][threadIdx.x] = idata[(y + j) * width + x];
     }
-    scratch = __fmaf_rn(scratch, 1.0009765625f, -scratch);
-    const float value = in[x * width + y];
-    volatile float* out_vol = out;
-#pragma unroll
-    for (int repeat = 0; repeat < WRITE_REPEATS; ++repeat) {
-      out_vol[y * width + x] = value + scratch;
+  }
+  __syncthreads();
+
+  x = blockIdx.y * TILE_DIM + threadIdx.x;
+  y = blockIdx.x * TILE_DIM + threadIdx.y;
+
+  for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
+    if (x < width && (y + j) < width) {
+      odata[(y + j) * width + x] = tile[threadIdx.x][threadIdx.y + j];
     }
   }
 }
@@ -48,36 +45,34 @@ float checksum(const std::vector<float>& data) {
 
 int main() {
   const size_t bytes = static_cast<size_t>(WIDTH) * WIDTH * sizeof(float);
-  std::vector<float> h_in(WIDTH * WIDTH);
-  for (int i = 0; i < WIDTH * WIDTH; ++i) {
+
+  std::vector<float> h_in(static_cast<size_t>(WIDTH) * WIDTH);
+  std::vector<float> h_out(static_cast<size_t>(WIDTH) * WIDTH, 0.0f);
+
+  for (size_t i = 0; i < h_in.size(); ++i) {
     h_in[i] = static_cast<float>((i % 1024) - 512) / 128.0f;
   }
-  std::vector<float> h_out(WIDTH * WIDTH, 0.0f);
 
-  float *d_in = nullptr, *d_tmp = nullptr, *d_out = nullptr;
+  float *d_in = nullptr, *d_out = nullptr;
   CUDA_CHECK(cudaMalloc(&d_in, bytes));
-  CUDA_CHECK(cudaMalloc(&d_tmp, bytes));
   CUDA_CHECK(cudaMalloc(&d_out, bytes));
   CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), bytes, cudaMemcpyHostToDevice));
 
-  dim3 block(BLOCK_X / 2, BLOCK_Y / 2);
-  dim3 grid((WIDTH + block.x - 1) / block.x / 2, (WIDTH + block.y - 1) / block.y / 2);
+  dim3 block(TILE_DIM, BLOCK_ROWS);
+  dim3 grid((WIDTH + TILE_DIM - 1) / TILE_DIM, (WIDTH + TILE_DIM - 1) / TILE_DIM);
 
-  // Warmup run includes the follow-up global copy to simulate a two-pass baseline.
-  transpose_naive<<<grid, block>>>(d_in, d_tmp, WIDTH);
+  // Warmup.
+  transpose_naive<<<grid, block>>>(d_in, d_out, WIDTH);
   CUDA_CHECK_LAST_ERROR();
-  CUDA_CHECK(cudaMemcpyAsync(d_out, d_tmp, bytes, cudaMemcpyDeviceToDevice));
   CUDA_CHECK(cudaDeviceSynchronize());
 
   cudaEvent_t start, stop;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
 
-  constexpr int kIterations = 400;
   CUDA_CHECK(cudaEventRecord(start));
-  for (int i = 0; i < kIterations; ++i) {
-    transpose_naive<<<grid, block>>>(d_in, d_tmp, WIDTH);
-    CUDA_CHECK(cudaMemcpyAsync(d_out, d_tmp, bytes, cudaMemcpyDeviceToDevice));
+  for (int i = 0; i < REPEAT; ++i) {
+    transpose_naive<<<grid, block>>>(d_in, d_out, WIDTH);
   }
   CUDA_CHECK_LAST_ERROR();
   CUDA_CHECK(cudaEventRecord(stop));
@@ -85,16 +80,21 @@ int main() {
 
   float total_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
-  const float avg_ms = total_ms / kIterations;
-  std::printf("Naive transpose (baseline): %.3f ms\n", avg_ms);
+  const float avg_ms = total_ms / static_cast<float>(REPEAT);
+  std::printf("Transpose (bank conflicts, baseline): %.3f ms\n", avg_ms);
+  std::printf("TIME_MS: %.6f\n", avg_ms);
 
   CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, bytes, cudaMemcpyDeviceToHost));
   std::printf("Output checksum: %.6f\n", checksum(h_out));
+#ifdef VERIFY
+  float verify_checksum = 0.0f;
+  VERIFY_CHECKSUM(h_out.data(), static_cast<int>(h_out.size()), &verify_checksum);
+  VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaFree(d_in));
-  CUDA_CHECK(cudaFree(d_tmp));
   CUDA_CHECK(cudaFree(d_out));
   return 0;
 }

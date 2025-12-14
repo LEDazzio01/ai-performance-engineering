@@ -55,6 +55,7 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         self._load_extension()
 
         torch.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
         self.matrix_a = torch.randn(
             self.matrix_rows,
             self.shared_dim,
@@ -67,19 +68,7 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             device=self.device,
             dtype=self.tensor_dtype,
         )
-        self.output = torch.empty(
-            self.matrix_rows,
-            self.matrix_cols,
-            device=self.device,
-            dtype=self.tensor_dtype,
-        )
-
-        # Warm up + trigger first-time compilation outside measurement.
-        self._invoke_kernel()
-        torch.cuda.synchronize()
-
-        # Validate correctness once so benchmark iterations can skip it.
-        self._validate_correctness()
+        self.output = None
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -88,6 +77,14 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
 
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
+
+        if self.output is None:
+            self.output = torch.empty(
+                self.matrix_rows,
+                self.matrix_cols,
+                device=self.device,
+                dtype=self.tensor_dtype,
+            )
 
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
             self._invoke_kernel()

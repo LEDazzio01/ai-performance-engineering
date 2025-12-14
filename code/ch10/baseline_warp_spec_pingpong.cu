@@ -20,6 +20,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -239,6 +241,16 @@ int main() {
     printf("  Time: %.3f ms (%.2f TFLOPS)\n", avg_ms, tflops);
     printf("\nNote: Wasteful global memory round-trip between GEMM and epilogue.\n");
     printf("Compare with optimized_warp_spec_pingpong for fused approach.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_out(M * N);
+    CUDA_CHECK(cudaMemcpy(h_out.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_out) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

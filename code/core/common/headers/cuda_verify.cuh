@@ -29,6 +29,8 @@
 #ifndef CUDA_VERIFY_CUH
 #define CUDA_VERIFY_CUH
 
+#include <cmath>
+#include <cstring>
 #include <cstdio>
 
 // =============================================================================
@@ -172,7 +174,6 @@ inline bool compare_checksums(float baseline, float optimized,
 }  // namespace cuda_verify
 
 #endif  // CUDA_VERIFY_CUH
-
 
 
 

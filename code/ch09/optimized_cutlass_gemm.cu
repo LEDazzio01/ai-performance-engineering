@@ -4,8 +4,11 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
+#include <cmath>
 #include <iostream>
 #include <random>
+
+#include "../core/common/headers/cuda_verify.cuh"
 
 #define CUDA_CHECK(call)                                                         \
   do {                                                                           \
@@ -223,6 +226,14 @@ int main() {
 
     CUDA_CHECK(cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost));
     std::cout << "Checksum sample: " << h_C[0] << std::endl;
+
+#ifdef VERIFY
+    double checksum = 0.0;
+    for (size_t i = 0; i < elems_C; ++i) {
+        checksum += std::abs(static_cast<double>(h_C[i]));
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

@@ -50,11 +50,7 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             dtype=torch.float32,
         ).contiguous()
         self.weights = torch.randn(self.cols, device=self.device, dtype=torch.float32).contiguous()
-        self.output = torch.empty(self.rows, device=self.device, dtype=torch.float32)
-
-        self._invoke_kernel()
-        torch.cuda.synchronize()
-        self._validate_correctness()
+        self.output = None
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
@@ -63,6 +59,8 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
+            if self.output is None:
+                self.output = torch.empty(self.rows, device=self.device, dtype=torch.float32)
             self._invoke_kernel()
 
     def capture_verification_payload(self) -> None:

@@ -1139,7 +1139,8 @@ class VerifyRunner:
         # Check compliance
         issues = check_benchmark_compliance(baseline)
         if issues:
-            reason = issues[0]  # Report first issue
+            reason_obj = issues[0]  # Report first issue
+            reason = reason_obj.value if isinstance(reason_obj, QuarantineReason) else str(reason_obj)
             return VerifyResult(
                 passed=False,
                 reason=reason,
@@ -1167,7 +1168,7 @@ class VerifyRunner:
             except Exception as exc:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE,
+                    reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE.value,
                     details={"error": str(exc)},
                     timestamp=datetime.now(),
                 )
@@ -1175,7 +1176,7 @@ class VerifyRunner:
             if not outputs:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.MISSING_VERIFY_OUTPUT,
+                    reason=QuarantineReason.MISSING_VERIFY_OUTPUT.value,
                     details={"error": "Baseline produced no extractable outputs"},
                     timestamp=datetime.now(),
                 )
@@ -1229,7 +1230,8 @@ class VerifyRunner:
         # Check compliance
         issues = check_benchmark_compliance(optimized)
         if issues:
-            reason = issues[0]
+            reason_obj = issues[0]
+            reason = reason_obj.value if isinstance(reason_obj, QuarantineReason) else str(reason_obj)
             return VerifyResult(
                 passed=False,
                 reason=reason,
@@ -1252,7 +1254,7 @@ class VerifyRunner:
             if golden is None:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.SIGNATURE_MISMATCH,
+                    reason=QuarantineReason.SIGNATURE_MISMATCH.value,
                     signature_hash=sig_hash,
                     details={
                         "error": (
@@ -1274,7 +1276,7 @@ class VerifyRunner:
                 except Exception as exc:
                     return VerifyResult(
                         passed=False,
-                        reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE,
+                        reason=QuarantineReason.MISSING_OUTPUT_TOLERANCE.value,
                         details={"error": str(exc)},
                         timestamp=datetime.now(),
                     )
@@ -1315,7 +1317,7 @@ class VerifyRunner:
             if not comparison.passed:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.OUTPUT_MISMATCH,
+                    reason=QuarantineReason.OUTPUT_MISMATCH.value,
                     signature_hash=sig_hash,
                     comparison_details=comparison,
                 )
@@ -1330,7 +1332,7 @@ class VerifyRunner:
                 if not metrics_match:
                     return VerifyResult(
                         passed=False,
-                        reason=QuarantineReason.WORKLOAD_MISMATCH,
+                        reason=QuarantineReason.WORKLOAD_MISMATCH.value,
                         signature_hash=sig_hash,
                         workload_delta=deltas,
                     )
@@ -1346,7 +1348,7 @@ class VerifyRunner:
             if not fresh_passed:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.FRESH_INPUT_FAIL,
+                    reason=QuarantineReason.FRESH_INPUT_FAIL.value,
                     signature_hash=sig_hash,
                     details={"error": fresh_msg},
                     timestamp=datetime.now(),
@@ -1354,7 +1356,7 @@ class VerifyRunner:
             if not jitter_passed:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.JITTER_FAIL,
+                    reason=QuarantineReason.JITTER_FAIL.value,
                     signature_hash=sig_hash,
                     details={"error": jitter_msg},
                     timestamp=datetime.now(),
@@ -1434,7 +1436,7 @@ class VerifyRunner:
             if not timing_valid:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.TIMING_CONFIG_MISMATCH,
+                    reason=QuarantineReason.TIMING_CONFIG_MISMATCH.value,
                     details={"timing_mismatch": timing_error},
                     timestamp=datetime.now(),
                 )
@@ -1510,7 +1512,7 @@ class VerifyRunner:
         if not executed:
             return VerifyResult(
                 passed=False,
-                reason=QuarantineReason.DISTRIBUTED_VERIFY_FAIL,
+                reason=QuarantineReason.DISTRIBUTED_VERIFY_FAIL.value,
                 details={"rank_error": exec_error, "rank": rank},
                 timestamp=datetime.now(),
             )
@@ -1531,7 +1533,7 @@ class VerifyRunner:
             if not dist_result.all_ranks_executed:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.DISTRIBUTED_VERIFY_FAIL,
+                    reason=QuarantineReason.DISTRIBUTED_VERIFY_FAIL.value,
                     details={"error": dist_result.error_message},
                     timestamp=datetime.now(),
                 )
@@ -1539,7 +1541,7 @@ class VerifyRunner:
             if not dist_result.outputs_consistent:
                 return VerifyResult(
                     passed=False,
-                    reason=QuarantineReason.DISTRIBUTED_VERIFY_FAIL,
+                    reason=QuarantineReason.DISTRIBUTED_VERIFY_FAIL.value,
                     details={
                         "error": dist_result.error_message,
                         "inconsistent_ranks": dist_result.inconsistent_ranks,

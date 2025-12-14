@@ -25,6 +25,7 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model: nn.Sequential | None = None
         self.input_flat: torch.Tensor | None = None
         self.inputs_chunked: torch.Tensor | None = None
+        self._output_buffer: torch.Tensor | None = None
         self.output: torch.Tensor | None = None
         self.workload = WORKLOAD
         self.micro_batch_size = self.workload.baseline_micro_batch_size
@@ -67,21 +68,23 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.micro_batch_size,
             self.hidden_dim,
         )
-        # Pre-allocate output buffer
-        self.output = torch.empty(self.total_batch_size, self.hidden_dim, device=self.device)
+        # Pre-allocate output buffer (output itself is set during benchmark_fn for harness validity)
+        self._output_buffer = torch.empty(self.total_batch_size, self.hidden_dim, device=self.device)
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with small batch size (multiple kernel launches)."""
-        if self.model is None or self.inputs_chunked is None or self.output is None:
+        if self.model is None or self.inputs_chunked is None or self._output_buffer is None:
             raise RuntimeError("Benchmark not configured")
+        output = self._output_buffer
         with self._nvtx_range("batch_baseline"):
             with torch.no_grad():
                 # Process each micro-batch separately (many small kernel launches)
                 for idx in range(self.micro_batches):
                     start = idx * self.micro_batch_size
                     end = start + self.micro_batch_size
-                    self.output[start:end] = self.model(self.inputs_chunked[idx])
+                    output[start:end] = self.model(self.inputs_chunked[idx])
+        self.output = output
         self._synchronize()
         if self.output is None or self.input_flat is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
@@ -106,6 +109,7 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model = None
         self.input_flat = None
         self.inputs_chunked = None
+        self._output_buffer = None
         self.output = None
         super().teardown()
     

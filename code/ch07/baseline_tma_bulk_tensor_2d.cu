@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                     \
   do {                                                                       \
     cudaError_t status = (call);                                             \
@@ -65,8 +67,7 @@ __global__ void baseline_bulk_copy_kernel(const float* __restrict__ src,
         for (int c = threadIdx.x; c < TILE_N; c += blockDim.x) {
             const int g_col = tile_col + c;
             if (g_col < width) {
-                const float v = tile[r][c];
-                dst_row[g_col] = v * 1.0001f + 0.0001f;
+                dst_row[g_col] = tile[r][c];
             }
         }
     }
@@ -82,7 +83,7 @@ int main() {
 
     std::vector<float> h_src(width * height);
     for (int i = 0; i < width * height; ++i) {
-        h_src[i] = static_cast<float>((i % 113) - 57) * 0.01f;
+        h_src[i] = static_cast<float>((i % 127) - 63) * 0.01f;
     }
 
     float* d_src = nullptr;
@@ -116,6 +117,13 @@ int main() {
     CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
     const float avg_ms = total_ms / static_cast<float>(ITERATIONS);
     std::printf("Baseline 2D tensor copy: %.3f ms\n", avg_ms);
+#ifdef VERIFY
+    std::vector<float> h_verify(width * height);
+    CUDA_CHECK(cudaMemcpy(h_verify.data(), d_dst, bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify.data(), static_cast<int>(h_verify.size()), &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

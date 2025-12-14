@@ -33,6 +33,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -164,6 +166,14 @@ int main() {
     printf("  float4 loads saturate HBM bandwidth.\n");
     printf("  4x fewer instructions than scalar → higher throughput.\n");
     printf("  Wider loads (float8) don't help further - HBM is the bottleneck.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_verify(N);
+    CUDA_CHECK(cudaMemcpy(h_verify.data(), d_c, bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify.data(), N, &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

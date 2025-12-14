@@ -18,18 +18,17 @@ Covers modern CUDA Graph capabilities-conditional capture, graph memory tuning, 
 | `baseline_work_queue.{py,cu}`, `optimized_work_queue.{py,cu}`, `work_queue_common.cuh` | GPU work queues for irregular batch sizes, including NVTX instrumentation. |
 | `baseline_uneven_partition.cu`, `optimized_uneven_partition.cu`, `baseline_uneven_static.cu`, `optimized_uneven_static.cu` | Uneven workload partitioners that rebalance CTA assignments at runtime. |
 | `baseline_kernel_fusion.py`, `optimized_kernel_fusion.py`, `kernel_fusion_cuda_demo.cu` | Kernel fusion exercises within graph capture so you can remove CPU synchronization entirely. (`kernel_fusion_cuda_demo.cu` is a standalone tool; not a benchmark target.) |
-| `compare.py`, `cuda_extensions/`, `expectations_gb10.json` | Harness entry, extension stubs, and expectation thresholds. |
+| `compare.py`, `cuda_extensions/`, `expectations_b200.json` | Harness entry, extension stubs, and expectation thresholds. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch12
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch12
-python cli/aisp.py bench run --targets ch12 --profile minimal
+python ch12/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch12
+python -m cli.aisp bench run --targets ch12 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python optimized_cuda_graphs.py --iterations 100` should report lower wall-clock time than the baseline while matching outputs.

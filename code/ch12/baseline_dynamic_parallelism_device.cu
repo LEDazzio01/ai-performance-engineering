@@ -5,6 +5,10 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include <vector>
+
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                      \
   do {                                                                        \
     cudaError_t status = (call);                                              \
@@ -81,6 +85,16 @@ int main() {
     CUDA_CHECK(cudaMemcpy(&launches, d_launch_count, sizeof(int), cudaMemcpyDeviceToHost));
     std::printf("Device child launches (baseline): %d\n", launches);
     std::printf("Elapsed_ms: %.6f ms\n", elapsed_ms);
+
+#ifdef VERIFY
+    std::vector<float> h_data(N);
+    CUDA_CHECK(cudaMemcpy(h_data.data(), d_data, N * sizeof(float), cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_data) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

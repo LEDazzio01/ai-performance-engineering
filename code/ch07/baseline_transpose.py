@@ -20,8 +20,6 @@ class BaselineTransposeBenchmark(CudaBinaryBenchmark):
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         width = 4096
-        random_sweeps = 256
-        write_repeats = 8
         matrix_bytes = width * width * 4
         super().__init__(
             chapter_dir=chapter_dir,
@@ -32,12 +30,10 @@ class BaselineTransposeBenchmark(CudaBinaryBenchmark):
             timeout_seconds=90,
             workload_params={
                 "width": width,
-                "random_sweeps": random_sweeps,
-                "write_repeats": write_repeats,
                 "dtype": "float32",
             },
         )
-        self.register_workload_metadata(bytes_per_iteration=float(matrix_bytes * 3))
+        self.register_workload_metadata(bytes_per_iteration=float(matrix_bytes * 2))
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return memory access metrics."""

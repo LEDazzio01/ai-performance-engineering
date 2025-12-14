@@ -1,4 +1,4 @@
-// optimized_tma_multicast.cu - TMA Multicast for CTA Clusters (Ch10)
+// tma_multicast_cluster.cu - TMA Multicast for CTA Clusters (Ch10)
 //
 // WHAT: TMA multicast broadcasts data from global memory to ALL CTAs
 // in a thread block cluster simultaneously.
@@ -27,6 +27,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call)                                                       \
@@ -44,19 +46,19 @@ constexpr int TILE_M = 64;
 constexpr int TILE_N = 64;
 constexpr int TILE_K = 32;
 
-// Cluster configuration: 2x2 = 4 CTAs per cluster
-constexpr int CLUSTER_M = 2;
-constexpr int CLUSTER_N = 2;
+// Cluster configuration: 4x1 = 4 CTAs per cluster (M-split, shares B tiles).
+constexpr int CLUSTER_M = 4;
+constexpr int CLUSTER_N = 1;
 
 //============================================================================
 // TMA Multicast Kernel
 //============================================================================
 // This kernel demonstrates the concept of TMA multicast where:
 // - CTA (0,0) in each cluster loads the K-tile
-// - The tile is multicast to all 4 CTAs in the cluster via DSMEM
+// - The tile is multicast to the other CTAs in the cluster via DSMEM
 //============================================================================
 
-__global__ __launch_bounds__(256, 1)
+__global__ __cluster_dims__(CLUSTER_M, CLUSTER_N, 1) __launch_bounds__(256, 1)
 void tma_multicast_gemm_kernel(
     const float* __restrict__ A,  // [M, K]
     const float* __restrict__ B,  // [K, N]
@@ -69,18 +71,15 @@ void tma_multicast_gemm_kernel(
     cg::cluster_group cluster = cg::this_cluster();
     
     const int cluster_rank = cluster.block_rank();
-    const int cluster_m = cluster_rank / CLUSTER_N;  // 0 or 1
-    const int cluster_n = cluster_rank % CLUSTER_N;  // 0 or 1
     
-    // Global tile indices
-    const int tile_m = blockIdx.x * CLUSTER_M + cluster_m;
-    const int tile_n = blockIdx.y * CLUSTER_N + cluster_n;
-    
-    if (tile_m * TILE_M >= M || tile_n * TILE_N >= N) return;
+    // Global tile indices (blockIdx indexes blocks; cluster groups them).
+    const int tile_m = blockIdx.x;
+    const int tile_n = blockIdx.y;
+    const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
     
     // Shared memory for tiles
     // A_tile: Each CTA has its own M-slice
-    // B_tile: SHARED via multicast - only loaded once per cluster
+    // B_tile: shared via multicast - loaded once per cluster (same tile_n across cluster)
     __shared__ alignas(128) float A_smem[TILE_M][TILE_K + 4];  // +4 for bank conflicts
     __shared__ alignas(128) float B_smem[TILE_K][TILE_N + 4];
     
@@ -99,17 +98,26 @@ void tma_multicast_gemm_kernel(
         if (cluster_rank == 0) {
             // Only the "leader" CTA loads B_tile
             // In real TMA, this would use cp.async.bulk.tensor with mcast
+            auto b_rank0 = B_smem;
+            auto b_rank1 = cluster.map_shared_rank(B_smem, 1);
+            auto b_rank2 = cluster.map_shared_rank(B_smem, 2);
+            auto b_rank3 = cluster.map_shared_rank(B_smem, 3);
             for (int i = tid; i < TILE_K * TILE_N; i += blockDim.x) {
                 int kk = i / TILE_N;
                 int nn = i % TILE_N;
                 int global_k = k_base + kk;
                 int global_n = tile_n * TILE_N + nn;
-                
+
+                float value = 0.0f;
                 if (global_k < K && global_n < N) {
-                    B_smem[kk][nn] = B[global_k * N + global_n];
-                } else {
-                    B_smem[kk][nn] = 0.0f;
+                    value = B[global_k * N + global_n];
                 }
+
+                // Software emulation of multicast: single global load + DSMEM stores
+                b_rank0[kk][nn] = value;
+                b_rank1[kk][nn] = value;
+                b_rank2[kk][nn] = value;
+                b_rank3[kk][nn] = value;
             }
         }
         
@@ -120,7 +128,7 @@ void tma_multicast_gemm_kernel(
             int global_m = tile_m * TILE_M + mm;
             int global_k = k_base + kk;
             
-            if (global_m < M && global_k < K) {
+            if (tile_valid && global_m < M && global_k < K) {
                 A_smem[mm][kk] = A[global_m * K + global_k];
             } else {
                 A_smem[mm][kk] = 0.0f;
@@ -132,22 +140,7 @@ void tma_multicast_gemm_kernel(
         //====================================================================
         // After leader loads B_tile, sync cluster and broadcast via DSMEM
         cluster.sync();
-        
-        // Non-leader CTAs read B_tile from leader's shared memory via DSMEM
-        // map_shared_rank returns a pointer to the same array type as B_smem
-        auto leader_B_smem = cluster.map_shared_rank(B_smem, 0);
-        
-        // Copy from leader to local (simulating TMA multicast result)
-        if (cluster_rank != 0) {
-            for (int i = tid; i < TILE_K * TILE_N; i += blockDim.x) {
-                int kk = i / TILE_N;
-                int nn = i % TILE_N;
-                B_smem[kk][nn] = leader_B_smem[kk][nn];
-            }
-        }
-        
-        block.sync();
-        
+
         //====================================================================
         // COMPUTE: Standard GEMM tile computation
         //====================================================================
@@ -190,7 +183,7 @@ void tma_multicast_gemm_kernel(
             int global_m = tile_m * TILE_M + thread_m + i;
             int global_n = tile_n * TILE_N + thread_n + j;
             
-            if (global_m < M && global_n < N) {
+            if (tile_valid && global_m < M && global_n < N) {
                 C[global_m * N + global_n] = acc[i][j];
             }
         }
@@ -287,16 +280,43 @@ int main() {
     
     // Launch configuration
     dim3 block(256);
-    dim3 grid((M + TILE_M * CLUSTER_M - 1) / (TILE_M * CLUSTER_M),
-              (N + TILE_N * CLUSTER_N - 1) / (TILE_N * CLUSTER_N));
+    dim3 grid((M + TILE_M - 1) / TILE_M,
+              (N + TILE_N - 1) / TILE_N);
     
-    // For SM90+, we would set cluster size via launch attributes
-    // cudaLaunchAttribute attrs[1];
-    // attrs[0].id = cudaLaunchAttributeClusterDimension;
-    // attrs[0].val.clusterDim = {CLUSTER_M, CLUSTER_N, 1};
+    // Cluster launch attributes (SM90+/Blackwell).
+    cudaLaunchAttribute attrs[2]{};
+    int attr_count = 0;
+#ifdef cudaLaunchAttributeClusterDimension
+    attrs[attr_count].id = cudaLaunchAttributeClusterDimension;
+    attrs[attr_count].val.clusterDim.x = CLUSTER_M;
+    attrs[attr_count].val.clusterDim.y = CLUSTER_N;
+    attrs[attr_count].val.clusterDim.z = 1;
+    ++attr_count;
+#endif
+#ifdef cudaLaunchAttributeNonPortableClusterSizeAllowed
+    attrs[attr_count].id = cudaLaunchAttributeNonPortableClusterSizeAllowed;
+    attrs[attr_count].val.nonPortableClusterSizeAllowed = 1;
+    ++attr_count;
+#endif
+    CUDA_CHECK(cudaFuncSetAttribute(
+        tma_multicast_gemm_kernel,
+        cudaFuncAttributeNonPortableClusterSizeAllowed,
+        1));
+
+    cudaLaunchConfig_t config{};
+    config.gridDim = grid;
+    config.blockDim = block;
+    config.dynamicSmemBytes = 0;
+    config.stream = 0;
+    config.attrs = attr_count ? attrs : nullptr;
+    config.numAttrs = attr_count;
     
     // Warmup
-    tma_multicast_gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+    if (prop.major >= 9) {
+        CUDA_CHECK(cudaLaunchKernelEx(&config, tma_multicast_gemm_kernel, d_A, d_B, d_C, M, N, K));
+    } else {
+        tma_multicast_gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+    }
     CUDA_CHECK(cudaDeviceSynchronize());
     
     // Benchmark
@@ -307,7 +327,11 @@ int main() {
     const int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
-        tma_multicast_gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+        if (prop.major >= 9) {
+            CUDA_CHECK(cudaLaunchKernelEx(&config, tma_multicast_gemm_kernel, d_A, d_B, d_C, M, N, K));
+        } else {
+            tma_multicast_gemm_kernel<<<grid, block>>>(d_A, d_B, d_C, M, N, K);
+        }
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
@@ -325,6 +349,16 @@ int main() {
     printf("  TFLOPS: %.2f\n", tflops);
     printf("\nNote: Full TMA multicast requires cluster launch attributes.\n");
     printf("This example demonstrates the DSMEM-based multicast pattern.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_C(M * N);
+    CUDA_CHECK(cudaMemcpy(h_C.data(), d_C, bytes_C, cudaMemcpyDeviceToHost));
+    double checksum = 0.0;
+    for (float v : h_C) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -335,7 +369,3 @@ int main() {
     
     return 0;
 }
-
-
-
-

@@ -38,8 +38,9 @@ class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize tensors and perform autotuning."""
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        self.optimal_chunk = self._autotune_chunk_size()
+        self.output = None
+        scratch = torch.empty_like(self.input)
+        self.optimal_chunk = self._autotune_chunk_size(scratch)
         self._synchronize()
 
     def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
@@ -47,7 +48,7 @@ class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         out = out.add(0.1)
         return F.silu(out)
 
-    def _autotune_chunk_size(self) -> int:
+    def _autotune_chunk_size(self, scratch: torch.Tensor) -> int:
         """Benchmark several staging chunk sizes using baseline timers."""
         best = None
         best_time = float("inf")
@@ -60,7 +61,7 @@ class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
                     span = min(chunk, self.N - offset)
                     window = self.input[offset : offset + span]
                     transformed = self._transform(window)
-                    self.output[offset : offset + span].copy_(transformed)
+                    scratch[offset : offset + span].copy_(transformed)
                 self._synchronize()
                 total_ms += self._record_stop(start)
             avg_ms = total_ms / trials
@@ -73,7 +74,9 @@ class OptimizedAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with autotuned parameters."""
-        assert self.input is not None and self.output is not None and self.optimal_chunk is not None
+        assert self.input is not None and self.optimal_chunk is not None
+        if self.output is None or self.output.shape != self.input.shape:
+            self.output = torch.empty_like(self.input)
         with self._nvtx_range("optimized_autotuning"):
             chunk = self.optimal_chunk
             for offset in range(0, self.N, chunk):

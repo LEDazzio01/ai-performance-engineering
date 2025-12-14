@@ -54,9 +54,6 @@ class BaselineClusterGroupSingleCtaBenchmark(CudaBinaryBenchmark):
             chunk_elems=2048,
         ).to_dict()
 
-    def get_output_tolerance(self) -> tuple[float, float]:
-        return (0.0, 0.0)
-
 def get_benchmark() -> BaselineClusterGroupSingleCtaBenchmark:
     return BaselineClusterGroupSingleCtaBenchmark()
 

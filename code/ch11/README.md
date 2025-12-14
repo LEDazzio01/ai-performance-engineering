@@ -17,18 +17,17 @@ Explains how to overlap compute, memory, and communication on Blackwell using CU
 | `baseline_gemm_streams.py`, `optimized_gemm_streams.py`, `baseline_tensor_cores_streams.py`, `optimized_tensor_cores_streams.py` | GEMM pipelines that schedule tensor-core kernels across multiple streams to decouple math vs IO phases. |
 | `baseline_distributed_streams.py`, `optimized_distributed_streams.py`, `baseline_adaptive_streams.py`, `optimized_adaptive_streams.py` | Adaptive streaming controllers that balance NCCL, compute, and IO tasks on large systems. |
 | `baseline_warp_specialization_multistream.*`, `optimized_warp_specialized_multistream.*`, `warp_specialized_cluster_pipeline_multistream.cu` | Warp-specialized multistream kernels demonstrating DSMEM usage and per-stream specialization. |
-| `compare.py`, `Makefile`, `expectations_gb10.json` | Harness driver plus expectation data for concurrency regressions. |
+| `compare.py`, `Makefile`, `expectations_b200.json` | Harness driver plus expectation data for concurrency regressions. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch11
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch11
-python cli/aisp.py bench run --targets ch11 --profile minimal
+python ch11/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch11
+python -m cli.aisp bench run --targets ch11 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python optimized_streams.py --trace` captures overlapping NVTX ranges in Nsight Systems, proving concurrency is active.

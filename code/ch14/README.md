@@ -17,18 +17,17 @@ Highlights compiler-driven acceleration: `torch.compile` workflows, Triton kerne
 | `baseline_flex_attention.py`, `optimized_flex_attention.py`, `test_flex_attention.py` | FlexAttention workloads that validate custom score mods, masks, and compile speedups. |
 | `baseline_nccl_quantization.py`, `optimized_nccl_quantization.py`, `deepseek_innovation_l2_bypass.py` | Quantization-aware communication and the DeepSeek-inspired L2 bypass experiment. |
 | `baseline_regional_triton.py`, `optimized_regional_triton.py`, `inspect_compiled_code.py`, `benchmark_tma_configs.py` | Regional compilation and TMA parameter sweeps for auto-tuning generated kernels. |
-| `compare.py`, `requirements.txt`, `expectations_gb10.json`, `train.py`, `transformer.py` | Harness entry plus model definitions and dependency pins. |
+| `compare.py`, `requirements.txt`, `expectations_b200.json`, `train.py`, `transformer.py` | Harness entry plus model definitions and dependency pins. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch14
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch14
-python cli/aisp.py bench run --targets ch14 --profile minimal
+python ch14/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch14
+python -m cli.aisp bench run --targets ch14 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python optimized_model_eager.py --profile minimal` produces compile-time summaries followed by steady-state throughput gains vs the baseline.

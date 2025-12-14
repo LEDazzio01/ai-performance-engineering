@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "cluster_group_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -30,10 +31,9 @@ __global__ void cluster_dual_kernel(const float* __restrict__ input,
     cg::cluster_group cluster = cg::this_cluster();
     cg::thread_block block = cg::this_thread_block();
 
-    // Static shared memory: tile (2048 floats) + reductions (256 floats) = 9216 bytes
-    __shared__ float shared[kElementsPerBlock + kThreadsPerBlock];
-    float* tile = shared;
-    float* reductions = shared + kElementsPerBlock;
+    // Static shared memory required for DSMEM on Blackwell B200.
+    __shared__ float tile[kElementsPerBlock];
+    __shared__ float reductions[kThreadsPerBlock];
 
     const int chunk_id = blockIdx.x / kClusterBlocks;
     const int cluster_rank = cluster.block_rank();
@@ -51,7 +51,7 @@ __global__ void cluster_dual_kernel(const float* __restrict__ input,
     }
 
     cluster.sync();
-    const float* source_tile = (cluster_rank == 0) ? tile : cluster.map_shared_rank(tile, 0);
+    const float* source_tile = cluster.map_shared_rank(tile, 0);
 
     float local = 0.0f;
     for (int i = threadIdx.x; i < valid; i += blockDim.x) {
@@ -75,6 +75,9 @@ __global__ void cluster_dual_kernel(const float* __restrict__ input,
             chunk_sq[chunk_id] = reductions[0];
         }
     }
+
+    // Ensure rank 0 keeps DSMEM tile alive until all ranks finish reading it.
+    cluster.sync();
 }
 
 // Probe kernel WITHOUT __cluster_dims__ attribute - use runtime specification only.
@@ -198,25 +201,20 @@ int main() {
     // Using static shared memory now, so dynamicSmemBytes = 0
     const size_t shared_bytes = 0;
 
-    cudaLaunchAttribute attrs[2]{};
+    cudaLaunchAttribute attrs[1]{};
     int attr_count = 0;
-#ifdef cudaLaunchAttributeClusterDimension
+#if defined(__CUDACC_VER_MAJOR__) && (__CUDACC_VER_MAJOR__ >= 13)
     attrs[attr_count].id = cudaLaunchAttributeClusterDimension;
     attrs[attr_count].val.clusterDim.x = kClusterBlocks;
     attrs[attr_count].val.clusterDim.y = 1;
     attrs[attr_count].val.clusterDim.z = 1;
     ++attr_count;
-#endif
-#ifdef cudaLaunchAttributeNonPortableClusterSizeAllowed
-    attrs[attr_count].id = cudaLaunchAttributeNonPortableClusterSizeAllowed;
-    attrs[attr_count].val.nonPortableClusterSizeAllowed = 1;
-    ++attr_count;
-#endif
 
     CUDA_CHECK(cudaFuncSetAttribute(
         cluster_dual_kernel,
         cudaFuncAttributeNonPortableClusterSizeAllowed,
         1));
+#endif
 
     cudaLaunchConfig_t config{};
     config.gridDim = grid;
@@ -230,17 +228,13 @@ int main() {
     int total_elements = kTotalElements;
     void* args[] = {&d_input, &d_sum, &d_sq, &elems_per_block, &total_elements};
 
-    cudaKernel_t kernel;
-    CUDA_CHECK(cudaGetKernel(&kernel, cluster_dual_kernel));
-    void* func = reinterpret_cast<void*>(kernel);
-
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
 
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < kIterations; ++i) {
-        CUDA_CHECK(cudaLaunchKernelExC(&config, func, args));
+        CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)cluster_dual_kernel, args));
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));
@@ -254,7 +248,7 @@ int main() {
     // Single run for verification
     CUDA_CHECK(cudaMemset(d_sum, 0, result_bytes));
     CUDA_CHECK(cudaMemset(d_sq, 0, result_bytes));
-    CUDA_CHECK(cudaLaunchKernelExC(&config, func, args));
+    CUDA_CHECK(cudaLaunchKernelExC(&config, (void*)cluster_dual_kernel, args));
     CUDA_CHECK(cudaDeviceSynchronize());
 
     std::vector<float> h_sum(chunks, 0.0f);
@@ -278,6 +272,13 @@ int main() {
     printf("Verification (optimized): max |sum diff|=%.6f, |sq diff|=%.6f\n",
            max_diff(h_sum, ref_sum),
            max_diff(h_squares, ref_squares));
+
+    double checksum = 0.0;
+    for (int i = 0; i < chunks; ++i) {
+        checksum += static_cast<double>(h_sum[i]) + static_cast<double>(h_squares[i]);
+    }
+    checksum /= static_cast<double>(chunks);
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

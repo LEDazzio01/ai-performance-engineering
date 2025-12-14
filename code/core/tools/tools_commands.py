@@ -66,8 +66,23 @@ TOOLS: Dict[str, ToolSpec] = {
     ),
     "roofline": ToolSpec(
         name="roofline",
-        script_path=REPO_ROOT / "ch10" / "roofline" / "roofline.py",
-        description="Run the roofline tool (chapter utility, not a benchmark pair).",
+        script_path=REPO_ROOT / "ch08" / "roofline.py",
+        description="Run the roofline analysis tool (chapter utility, not a benchmark pair).",
+    ),
+    "occupancy-tuning": ToolSpec(
+        name="occupancy-tuning",
+        script_path=REPO_ROOT / "ch08" / "occupancy_tuning_tool.py",
+        description="Run the occupancy tuning sweep tool (chapter utility, not a benchmark pair).",
+    ),
+    "tma-multicast": ToolSpec(
+        name="tma-multicast",
+        script_path=REPO_ROOT / "ch10" / "tma_multicast_tool.py",
+        description="Run the Chapter 10 TMA multicast demo (tool, not a benchmark pair).",
+    ),
+    "tmem-triple-overlap": ToolSpec(
+        name="tmem-triple-overlap",
+        script_path=REPO_ROOT / "ch10" / "tmem_triple_overlap_tool.py",
+        description="Run the Blackwell TMEM triple-overlap demo (CUDA 13 TMA 2D pipeline).",
     ),
     "dynamic-router-eval": ToolSpec(
         name="dynamic-router-eval",
@@ -76,7 +91,7 @@ TOOLS: Dict[str, ToolSpec] = {
     ),
     "vllm-monitoring": ToolSpec(
         name="vllm-monitoring",
-        script_path=REPO_ROOT / "ch18" / "vllm_monitoring.py",
+        script_path=REPO_ROOT / "ch16" / "vllm_monitoring.py",
         description="Emit Prometheus/Grafana monitoring bundle for vLLM v1 metrics.",
     ),
     "spec-config-sweep": ToolSpec(

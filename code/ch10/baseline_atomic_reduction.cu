@@ -20,6 +20,8 @@
 #include <vector>
 #include <numeric>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -202,6 +204,9 @@ int main() {
     printf("\nBottlenecks:\n");
     printf("  - 2 kernel launches per iteration\n");
     printf("  - Global memory round-trip for partial sums\n");
+
+    const float verify_checksum = total;
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -212,5 +217,4 @@ int main() {
     
     return 0;
 }
-
 

@@ -16,12 +16,11 @@ Benchmarks a KV-cache heavy attention block using Transformer Engine 2.10 (CUDA 
 | `optimized_kv_cache_nvfp4.py` | NVFP4 path with FP8 calibration and automatic fallback. |
 | `kv_cache_common.py` | Shared shapes/utilities for both paths. |
 | `tma_prefetch_extension.py`, `tma_prefetch_ext.cu` | TMA async prefetch demo for KV cache tiles. |
-| `expectations_gb10.json`, `__init__.py` | Regression thresholds and harness target exports. |
+| `expectations_b200.json`, `__init__.py` | Regression thresholds and harness target exports. |
 
 ## Running the Benchmarks
 Use the benchmark harness to pick targets explicitly.
 ```bash
-cd ai-performance-engineering
 python -m cli.aisp bench list-targets --chapter labs/kv_cache_compression
 python -m cli.aisp bench run --targets labs/kv_cache_compression:kv_cache --profile minimal
 python -m cli.aisp bench run --targets labs/kv_cache_compression:kv_cache_nvfp4 --profile minimal
@@ -31,7 +30,7 @@ python -m cli.aisp bench run --targets labs/kv_cache_compression:kv_cache_nvfp4 
 ## Validation Checklist
 - Baseline MXFP8 target runs without requiring FP4 support.
 - NVFP4 target either reports FP4 tensor-core usage or cleanly falls back to MXFP8 with a log message.
-- Harness artifacts align with `expectations_gb10.json`; mismatches flag regression risk.
+- Harness artifacts align with `expectations_b200.json`; mismatches flag regression risk.
 
 ## Notes
 - FP4 path requires Blackwell-class NVFP4 support; tensor dimensions stay multiples of 16 for FP4/FP8 GEMM kernels.

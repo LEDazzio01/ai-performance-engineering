@@ -2092,10 +2092,7 @@ class PerformanceCore(http.server.SimpleHTTPRequestHandler):
         optimized_cu = list(directory.glob("optimized_*.cu"))
         
         # Check for expectations
-        has_expectations = (
-            (directory / 'expectations_b200.json').exists() or
-            (directory / 'expectations_gb10.json').exists()
-        )
+        has_expectations = any(directory.glob("expectations_*.json"))
         
         # Check for profiles
         rel_path = Path(self._relative_to_bench_root(directory))

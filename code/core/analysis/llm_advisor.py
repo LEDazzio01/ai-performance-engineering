@@ -449,7 +449,7 @@ Provide your analysis in the following JSON format:
                 "priority": "medium",
                 "expected_speedup": "20-40%",
                 "description": "Tensor Memory Accelerator with multicast for efficient SM cluster broadcast",
-                "implementation": "See ch10/optimized_tma_multicast.py for Triton implementation",
+                "implementation": "See ch10/tma_multicast_cluster.cu + ch10/tma_multicast_tool.py for the CUDA multicast demo",
                 "considerations": "Best for compute-bound kernels"
             })
         
@@ -815,4 +815,3 @@ def analyze_profile(
     )
     
     return advisor.analyze_bottlenecks(context, focus_area)
-

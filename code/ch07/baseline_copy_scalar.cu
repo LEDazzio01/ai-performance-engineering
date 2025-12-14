@@ -11,6 +11,8 @@
 #include <cuda_runtime.h>
 #include <cstdio>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -90,6 +92,15 @@ int main() {
     printf("  Time: %.3f ms\n", ms);
     printf("  Bandwidth: %.1f GB/s\n", bandwidth_gb);
     printf("TIME_MS: %.6f\n", ms);
+
+#ifdef VERIFY
+    float* h_verify = new float[NUM_FLOATS];
+    CUDA_CHECK(cudaMemcpy(h_verify, d_out, bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify, NUM_FLOATS, &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+    delete[] h_verify;
+#endif
     
     // Cleanup
     delete[] h_data;

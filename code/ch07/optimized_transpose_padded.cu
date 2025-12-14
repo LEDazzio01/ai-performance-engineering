@@ -1,85 +1,38 @@
-// optimized_transpose_padded.cu -- tiled transpose with shared-memory padding.
-// CUDA 13 Update: Note on vector types - transpose operations benefit from float4
-// Float8 could be used but requires careful alignment handling for transpose patterns
+// optimized_transpose_padded.cu -- shared-memory transpose with padding (Chapter 7 optimized).
 
 #include <cuda_runtime.h>
 
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
-
-// CUDA 13 + Blackwell: 32-byte aligned type for 256-bit loads (available but not used in transpose)
-// Transpose operations use float4 for optimal shared memory bank conflict avoidance
-struct alignas(32) Float8 {
-    float elems[8];
-};
-static_assert(sizeof(Float8) == 32, "Float8 must be 32 bytes");
-static_assert(alignof(Float8) == 32, "Float8 must be 32-byte aligned");
+#include "../core/common/headers/cuda_verify.cuh"
 
 constexpr int WIDTH = 4096;
-constexpr int TILE_DIM = 64;
-constexpr int ELEMENTS_PER_THREAD = 4;  // Using float4 for optimal transpose pattern
-constexpr int BLOCK_ROWS = 16;
-constexpr int BLOCK_COLS = TILE_DIM / ELEMENTS_PER_THREAD;
+constexpr int TILE_DIM = 32;
+constexpr int BLOCK_ROWS = 8;
+constexpr int REPEAT = 200;
 
-static_assert(TILE_DIM % BLOCK_ROWS == 0, "Tile rows must be divisible by block rows");
-static_assert(TILE_DIM % ELEMENTS_PER_THREAD == 0, "Tile dim must be divisible by vector length");
-
-__global__ void transpose_padded(const float* __restrict__ in,
-                                 float* __restrict__ out,
-                                 int width) {
+__global__ void transpose_padded(const float* __restrict__ idata, float* __restrict__ odata, int width) {
   __shared__ float tile[TILE_DIM][TILE_DIM + 1];
 
-  const int thread_col = threadIdx.x * ELEMENTS_PER_THREAD;
-  const int thread_row = threadIdx.y;
+  int x = blockIdx.x * TILE_DIM + threadIdx.x;
+  int y = blockIdx.y * TILE_DIM + threadIdx.y;
 
-  const int block_col = blockIdx.x * TILE_DIM;
-  const int block_row = blockIdx.y * TILE_DIM;
-
-#pragma unroll
-  for (int row_offset = 0; row_offset < TILE_DIM; row_offset += BLOCK_ROWS) {
-    const int global_row = block_row + thread_row + row_offset;
-    if (global_row >= width) {
-      continue;
-    }
-    const int global_col = block_col + thread_col;
-    float* shared_dst = &tile[thread_row + row_offset][thread_col];
-    if (global_col + ELEMENTS_PER_THREAD <= width) {
-      const float4 loaded = *reinterpret_cast<const float4*>(
-          in + static_cast<size_t>(global_row) * width + global_col);
-      shared_dst[0] = loaded.x;
-      shared_dst[1] = loaded.y;
-      shared_dst[2] = loaded.z;
-      shared_dst[3] = loaded.w;
-    } else {
-#pragma unroll
-      for (int elem = 0; elem < ELEMENTS_PER_THREAD; ++elem) {
-        const int col = global_col + elem;
-        shared_dst[elem] =
-            (col < width) ? in[static_cast<size_t>(global_row) * width + col] : 0.0f;
-      }
+  for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
+    if (x < width && (y + j) < width) {
+      tile[threadIdx.y + j][threadIdx.x] = idata[(y + j) * width + x];
     }
   }
   __syncthreads();
 
-  const int trans_block_col = blockIdx.y * TILE_DIM;
-  const int trans_block_row = blockIdx.x * TILE_DIM;
+  x = blockIdx.y * TILE_DIM + threadIdx.x;
+  y = blockIdx.x * TILE_DIM + threadIdx.y;
 
-#pragma unroll
-  for (int row_offset = 0; row_offset < TILE_DIM; row_offset += BLOCK_ROWS) {
-    const int global_row = trans_block_row + thread_row + row_offset;
-    if (global_row >= width) {
-      continue;
-    }
-    const int global_col = trans_block_col + thread_col;
-#pragma unroll
-    for (int elem = 0; elem < ELEMENTS_PER_THREAD; ++elem) {
-      const int col = global_col + elem;
-      if (col < width) {
-        out[static_cast<size_t>(global_row) * width + col] =
-            tile[thread_col + elem][thread_row + row_offset];
-      }
+  for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
+    if (x < width && (y + j) < width) {
+      odata[(y + j) * width + x] = tile[threadIdx.x][threadIdx.y + j];
     }
   }
 }
@@ -92,20 +45,23 @@ float checksum(const std::vector<float>& data) {
 
 int main() {
   const size_t bytes = static_cast<size_t>(WIDTH) * WIDTH * sizeof(float);
-  std::vector<float> h_in(WIDTH * WIDTH);
-  for (int i = 0; i < WIDTH * WIDTH; ++i) {
-    h_in[i] = static_cast<float>((i % 2048) - 1024) / 256.0f;
+
+  std::vector<float> h_in(static_cast<size_t>(WIDTH) * WIDTH);
+  std::vector<float> h_out(static_cast<size_t>(WIDTH) * WIDTH, 0.0f);
+
+  for (size_t i = 0; i < h_in.size(); ++i) {
+    h_in[i] = static_cast<float>((i % 1024) - 512) / 128.0f;
   }
-  std::vector<float> h_out(WIDTH * WIDTH, 0.0f);
 
   float *d_in = nullptr, *d_out = nullptr;
   CUDA_CHECK(cudaMalloc(&d_in, bytes));
   CUDA_CHECK(cudaMalloc(&d_out, bytes));
   CUDA_CHECK(cudaMemcpy(d_in, h_in.data(), bytes, cudaMemcpyHostToDevice));
 
-  dim3 block(BLOCK_COLS, BLOCK_ROWS);
+  dim3 block(TILE_DIM, BLOCK_ROWS);
   dim3 grid((WIDTH + TILE_DIM - 1) / TILE_DIM, (WIDTH + TILE_DIM - 1) / TILE_DIM);
 
+  // Warmup.
   transpose_padded<<<grid, block>>>(d_in, d_out, WIDTH);
   CUDA_CHECK_LAST_ERROR();
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -114,9 +70,8 @@ int main() {
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
 
-  constexpr int kIterations = 400;
   CUDA_CHECK(cudaEventRecord(start));
-  for (int i = 0; i < kIterations; ++i) {
+  for (int i = 0; i < REPEAT; ++i) {
     transpose_padded<<<grid, block>>>(d_in, d_out, WIDTH);
   }
   CUDA_CHECK_LAST_ERROR();
@@ -125,11 +80,17 @@ int main() {
 
   float total_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
-  const float avg_ms = total_ms / kIterations;
-  std::printf("Shared-memory transpose (optimized): %.3f ms\n", avg_ms);
+  const float avg_ms = total_ms / static_cast<float>(REPEAT);
+  std::printf("Transpose (padded, optimized): %.3f ms\n", avg_ms);
+  std::printf("TIME_MS: %.6f\n", avg_ms);
 
   CUDA_CHECK(cudaMemcpy(h_out.data(), d_out, bytes, cudaMemcpyDeviceToHost));
   std::printf("Output checksum: %.6f\n", checksum(h_out));
+#ifdef VERIFY
+  float verify_checksum = 0.0f;
+  VERIFY_CHECKSUM(h_out.data(), static_cast<int>(h_out.size()), &verify_checksum);
+  VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

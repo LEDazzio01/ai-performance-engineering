@@ -21,12 +21,6 @@ class OptimizedHBMBenchmark(HBMBenchmarkBase):
         assert self.output is not None
         self.extension.hbm_optimized(self.matrix_row, self.output)
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.output is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.output
-
 
 
 def get_benchmark() -> HBMBenchmarkBase:

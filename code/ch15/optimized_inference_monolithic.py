@@ -59,10 +59,7 @@ class OptimizedInferenceDisaggregatedBenchmark(VerificationPayloadMixin, BaseBen
             torch.backends.cudnn.deterministic = False
         self.decode_model = SimpleLLM(hidden_dim=1024, num_layers=12).to(self.device).to(torch.bfloat16).eval()
         self.kv_cache = torch.randn(self.batch, 1, 1024, device=self.device, dtype=torch.bfloat16)
-        
-        with torch.no_grad():
-            for _ in range(5):
-                self.output = self.decode_model.decode(self.kv_cache, num_tokens=self.num_tokens)
+        self.output = None
         self._synchronize()
         self._verify_kv = self.kv_cache.detach()
     

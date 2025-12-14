@@ -9,8 +9,9 @@ SUFFIX = $(TARGET_SUFFIX)
 CUDA_SOURCES = $(wildcard *.cu)
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS = $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
-.PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS)
+.PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all
 
 all: $(TARGETS)
 	@echo "Building Chapter 9 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
@@ -28,6 +29,19 @@ $(addsuffix $(SUFFIX), $(BASE_TARGETS)): %$(SUFFIX): %.cu
 		$(NVCC) $(NVCC_FLAGS) -lcublas -lcublasLt -lcuda -o $@ $<; \
 	else \
 		$(NVCC) $(NVCC_FLAGS) -lcuda -o $@ $<; \
+	fi
+
+$(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu
+	@echo "Building $@ (verify)..."
+	@if [ "$*" = "cutlass_gemm_example" ] || [ "$*" = "micro_tiling_matmul" ]; then \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcuda -o $@ $<; \
+	elif [ "$*" = "baseline_cutlass_gemm" ] || [ "$*" = "optimized_cutlass_gemm" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp16" ] || [ "$*" = "optimized_cutlass_gemm_fp16" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp8" ] || [ "$*" = "optimized_cutlass_gemm_fp8" ] || \
+	     [ "$*" = "baseline_cutlass_gemm_fp4" ] || [ "$*" = "optimized_cutlass_gemm_fp4" ]; then \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcublas -lcublasLt -lcuda -o $@ $<; \
+	else \
+		$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -lcuda -o $@ $<; \
 	fi
 
 compare: clean
@@ -81,5 +95,5 @@ profile-all: $(TARGETS)
 	nsys profile --force-overwrite=true -t cuda,nvtx,osrt,cudnn,cublas,nccl -o comprehensive_hta_$(ARCH) ./$(firstword $(TARGETS))
 
 clean:
-	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) *.o *.so *.a
+	rm -f *_sm100 *_sm103 *_sm120 *_sm121 *_sm122 *_sm123 *.o *.so *.a
 	rm -f nsys_profile_* ncu_profile_* hta_profile_* perf.data_* comprehensive_*

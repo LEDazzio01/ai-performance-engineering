@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 constexpr int N = 1 << 20;
 
@@ -69,6 +70,11 @@ int main() {
   CUDA_CHECK(cudaMemcpy(h_out, d_out, N * sizeof(float), cudaMemcpyDeviceToHost));
   printf("out[0]=%.1f\n", h_out[0]);
   printf("TIME_MS: %.4f\n", avg_ms);
+#ifdef VERIFY
+  float checksum = 0.0f;
+  VERIFY_CHECKSUM(h_out, N, &checksum);
+  VERIFY_PRINT_CHECKSUM(checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

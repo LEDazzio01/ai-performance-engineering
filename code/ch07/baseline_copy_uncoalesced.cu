@@ -1,4 +1,4 @@
-// baseline_copy_uncoalesced.cu -- multi-pass scattered copy baseline for Chapter 7.
+// baseline_copy_uncoalesced.cu -- uncoalesced identity copy baseline for Chapter 7.
 
 #include <cuda_runtime.h>
 
@@ -7,40 +7,23 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 constexpr int N = 1 << 23;           // 32 MB footprint
-constexpr int RANDOM_PASSES = 64;
 constexpr int REPEAT = 40;
-constexpr int BLOCK_SIZE = 128;
-constexpr int GRID_DIVISOR = 16;     // throttle occupancy to exaggerate stalls
+constexpr int BLOCK_THREADS = 256;
+constexpr int PERMUTE_MULT = 1315423911;  // odd => invertible mod 2^k
 
-__device__ __forceinline__ int permute_index(int idx, int mask) {
-  return (idx * 1315423911 + 2654435761) & mask;
-}
-
-__global__ void scattered_copy(const float* __restrict__ in,
-                               float* __restrict__ out,
-                               int n,
-                               int mask) {
-  __shared__ float staging[BLOCK_SIZE];
-  const int lane = threadIdx.x & (BLOCK_SIZE - 1);
-  const int global_tid = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void uncoalesced_copy(const float* __restrict__ in,
+                                 float* __restrict__ out,
+                                 int n,
+                                 int mask) {
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
   const int stride = gridDim.x * blockDim.x;
 
-  for (int idx = global_tid; idx < n; idx += stride) {
-    int gather_idx = permute_index(idx, mask);
-    float accum = 0.0f;
-#pragma unroll 4
-    for (int pass = 0; pass < RANDOM_PASSES; ++pass) {
-      gather_idx = permute_index(gather_idx + pass * 17, mask);
-      const float sample = __ldg(in + gather_idx);
-      staging[(lane + pass) & (BLOCK_SIZE - 1)] = sample;
-      __syncthreads();
-      const int neighbor = (lane + pass * 3) & (BLOCK_SIZE - 1);
-      accum = __fmaf_rn(staging[neighbor], 0.9985f, accum * 0.0015f + 1e-6f);
-      __syncthreads();
-    }
-    out[idx] = accum;
+  for (int i = tid; i < n; i += stride) {
+    const int idx = (i * PERMUTE_MULT) & mask;
+    out[idx] = in[idx];
   }
 }
 
@@ -69,12 +52,12 @@ int main() {
   CUDA_CHECK(cudaMalloc(&d_dst, N * sizeof(float)));
   CUDA_CHECK(cudaMemcpy(d_src, h_src.data(), N * sizeof(float), cudaMemcpyHostToDevice));
 
-  dim3 block(BLOCK_SIZE);
-  dim3 grid((N + block.x * GRID_DIVISOR - 1) / (block.x * GRID_DIVISOR));
+  dim3 block(BLOCK_THREADS);
+  dim3 grid((N + block.x - 1) / block.x);
   const int mask = N - 1;
 
   // Warmup to stabilize caches and residency.
-  scattered_copy<<<grid, block>>>(d_src, d_dst, N, mask);
+  uncoalesced_copy<<<grid, block>>>(d_src, d_dst, N, mask);
   CUDA_CHECK_LAST_ERROR();
   CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -84,7 +67,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < REPEAT; ++iter) {
-    scattered_copy<<<grid, block>>>(d_src, d_dst, N, mask);
+    uncoalesced_copy<<<grid, block>>>(d_src, d_dst, N, mask);
   }
   CUDA_CHECK_LAST_ERROR();
   CUDA_CHECK(cudaEventRecord(stop));
@@ -93,12 +76,17 @@ int main() {
   float total_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
   const float avg_ms = total_ms / static_cast<float>(REPEAT);
-  std::printf("Uncoalesced scatter-gather (baseline): %.3f ms\n", avg_ms);
+  std::printf("Uncoalesced copy (baseline): %.3f ms\n", avg_ms);
   std::printf("TIME_MS: %.6f\n", avg_ms);
 
   CUDA_CHECK(cudaMemcpy(h_dst.data(), d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
   std::printf("Output checksum: %.6f\n", checksum(h_dst));
   std::printf("Max abs diff vs src: %.6e\n", max_abs_diff(h_src, h_dst));
+#ifdef VERIFY
+  float verify_checksum = 0.0f;
+  VERIFY_CHECKSUM(h_dst.data(), N, &verify_checksum);
+  VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

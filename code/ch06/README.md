@@ -18,18 +18,17 @@ Moves from Python into CUDA C++: write first kernels, reason about occupancy, co
 | `baseline_bank_conflicts.cu`, `optimized_bank_conflicts.cu`, `baseline_launch_bounds*.{py,cu}`, `optimized_launch_bounds*.{py,cu}` | Bank conflict and launch-bound exercises to highlight shared memory layouts and CTA sizing. |
 | `baseline_autotuning.py`, `optimized_autotuning.py`, `memory_pool_tuning.cu`, `stream_ordered_allocator/` | Autotuning harness plus allocator experiments for controlling fragmentation and stream ordering. |
 | `unified_memory.cu`, `occupancy_api.cu`, `baseline_quantization_ilp.py`, `optimized_quantization_ilp.py` | Unified memory demo, occupancy calculator sample, and quantization-focused ILP workloads. |
-| `compare.py`, `Makefile`, `expectations_gb10.json`, `workload_config.py` | Harness entry, build scripts, expectation baselines, and workload settings. |
+| `compare.py`, `Makefile`, `expectations_b200.json`, `workload_config.py` | Harness entry, build scripts, expectation baselines, and workload settings. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch06
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch06
-python cli/aisp.py bench run --targets ch06 --profile minimal
+python ch06/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch06
+python -m cli.aisp bench run --targets ch06 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `nvcc -o baseline_add_sm121 baseline_add.cu` vs the optimized vectorized version shows a clear bandwidth delta when inspected with Nsight Compute.

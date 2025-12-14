@@ -59,6 +59,8 @@ class OptimizedArithmeticIntensityBenchmark(VerificationPayloadMixin, BaseBenchm
             # Enable TF32 for faster matmul on Ampere+ GPUs
             enable_tf32()
         torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
         
         # Smaller tensors but with high compute intensity
         self.A = torch.randn(self.M, self.K, device=self.device, dtype=torch.float32)
@@ -105,7 +107,9 @@ class OptimizedArithmeticIntensityBenchmark(VerificationPayloadMixin, BaseBenchm
 
     def teardown(self) -> None:
         """Cleanup."""
-        del self.A, self.B, self.C
+        self.A = None
+        self.B = None
+        self.C = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -130,12 +134,6 @@ class OptimizedArithmeticIntensityBenchmark(VerificationPayloadMixin, BaseBenchm
         if self.A is None or self.B is None or self.C is None:
             return "Matrices not initialized"
         return None
-
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        if self.C is None:
-            raise RuntimeError("Output not available - run benchmark first")
-        return self.C
 
 
 def get_benchmark() -> BaseBenchmark:

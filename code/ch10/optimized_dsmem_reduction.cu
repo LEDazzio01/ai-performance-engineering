@@ -32,6 +32,8 @@
 #include <vector>
 #include <numeric>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 namespace cg = cooperative_groups;
 
 #define CUDA_CHECK(call)                                                       \
@@ -369,6 +371,9 @@ int main() {
     
     printf("  Time: %.3f ms\n", avg_dsmem);
     printf("  Sum: %.0f (expected: %d)\n", total_dsmem, N);
+
+    const float verify_checksum = total_dsmem;
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
     
     //========================================================================
     // Summary
@@ -395,6 +400,5 @@ int main() {
     
     return 0;
 }
-
 
 

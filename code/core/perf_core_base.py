@@ -250,10 +250,7 @@ class PerformanceCoreBase:
             }
             info["benchmarks"].append(benchmark_info)
 
-        info["has_expectations"] = (
-            (directory / "expectations_b200.json").exists()
-            or (directory / "expectations_gb10.json").exists()
-        )
+        info["has_expectations"] = any(directory.glob("expectations_*.json"))
         rel_path = Path(self._relative_to_bench_root(directory))
         profile_dir = self.bench_root / "benchmark_profiles" / rel_path
         info["has_profiles"] = profile_dir.exists() and any(profile_dir.iterdir()) if profile_dir.exists() else False

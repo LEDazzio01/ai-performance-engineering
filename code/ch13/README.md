@@ -18,24 +18,22 @@ Focuses on PyTorch-centric optimizations: compiled autograd, memory profiling, F
 | `context_parallelism.py`, `fsdp_example.py` | Context and FSDP sharding demos for scaling beyond a single GPU. (Tools; not benchmark targets.) |
 | `baseline_precisionfp8*.py`, `optimized_precisionfp8*.py`, `baseline_precisionmixed.py`, `optimized_precisionmixed.py`, `compiled_autograd.py` | Precision-management suites covering Transformer Engine and compiled autograd recipes. |
 | `baseline_quantization.py`, `optimized_quantization.py`, `baseline_kv_cache_naive.py`, `optimized_kv_cache.py` | Quantization and KV-cache pipelines for inference/training memory savings. |
-| `compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_gb10.json`, `workload_config.py` | Harness entry, performance comparison helper, dependencies, and regression baselines. |
+| `compare.py`, `compare_perf.py`, `requirements.txt`, `expectations_b200.json`, `workload_config.py` | Harness entry, performance comparison helper, dependencies, and regression baselines. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch13
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch13
-python cli/aisp.py bench run --targets ch13 --profile minimal
+python ch13/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch13
+python -m cli.aisp bench run --targets ch13 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python compare.py --examples training_standard` shows optimized training runs producing higher goodput with identical metrics.
 - `python optimized_precisionfp8_te.py --validate` confirms Transformer Engine calibration plus NVFP8 execution with max error tolerances enforced.
 - `python memory_profiling.py --dump` and the optimized variant demonstrate allocator fragmentation dropping after applying the recommended knobs.
-- `torchrun --nproc_per_node 4 ch13/context_parallelism.py --sequence-length 131072` shreds a long context across four GPUs; adjust `--sequence-length` to mirror TorchTitan-style CP tuning.
 
 ## Notes
 - `custom_allocator.py` contains a standalone torch allocator shim that can be re-used in other chapters when debugging fragmentation.

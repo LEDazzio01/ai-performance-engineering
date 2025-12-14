@@ -84,7 +84,9 @@ class OptimizedEndToEndBandwidthBenchmark(VerificationPayloadMixin, BaseBenchmar
             self.model = compile_model(eager, mode="max-autotune")
             self._used_compiled_model = True
 
-            test_input = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
+            # IMPORTANT: Avoid consuming RNG state before generating the real benchmark inputs.
+            # Baseline generates inputs immediately after model init; keep the same RNG sequence.
+            test_input = torch.zeros(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
             for _ in range(3):
                 with torch.no_grad():
                     _ = self.model(test_input)

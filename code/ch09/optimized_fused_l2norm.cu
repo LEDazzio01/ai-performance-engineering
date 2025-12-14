@@ -4,6 +4,8 @@
 #include <iostream>
 #include <chrono>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 // Fused implementation: single kernel (higher arithmetic intensity)
 __global__ void fusedL2Norm(const float *a, const float *b, float *out, int N) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -71,6 +73,15 @@ int main() {
     float time_avg = time_total / iterations;
     
     printf("Fused L2 norm (single kernel, optimized): %.3f ms\n", time_avg);
+
+#ifdef VERIFY
+    cudaMemcpy(h_out, d_out, bytes, cudaMemcpyDeviceToHost);
+    double checksum = 0.0;
+    for (int i = 0; i < N; ++i) {
+        checksum += static_cast<double>(h_out[i]);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
     
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
@@ -83,4 +94,3 @@ int main() {
     
     return 0;
 }
-

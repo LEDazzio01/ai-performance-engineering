@@ -44,6 +44,7 @@ class BaselineTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         super().__init__()
         self.input: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
+        self._output_buffer: Optional[torch.Tensor] = None
         self.N = 1_000_000
         # Triton benchmark - fixed N for kernel comparison
         tokens = self.N
@@ -55,14 +56,17 @@ class BaselineTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self._output_buffer = torch.empty(self.N, device=self.device, dtype=torch.float32)
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range("baseline_triton", enable=enable_nvtx):
-            baseline_elementwise(self.input, self.output)
+            if self._output_buffer is None:
+                raise RuntimeError("setup() must initialize _output_buffer")
+            baseline_elementwise(self.input, self._output_buffer)
+            self.output = self._output_buffer
             torch.cuda.synchronize(self.device)
         if self.output is None:
             raise RuntimeError("benchmark_fn() must produce output for verification")
@@ -85,6 +89,7 @@ class BaselineTritonBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         self.input = None
         self.output = None
+        self._output_buffer = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

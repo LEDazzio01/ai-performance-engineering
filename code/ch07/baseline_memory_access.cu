@@ -1,4 +1,4 @@
-// baseline_memory_access.cu -- Two-pass permuted copy with uncoalesced traffic.
+// baseline_memory_access.cu -- scalar coalesced copy baseline (Chapter 7).
 
 #include <cuda_runtime.h>
 
@@ -7,38 +7,17 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
-constexpr int N = 1 << 24;               // 64 MB footprint
-constexpr int REPEAT = 50;               // match harness iterations
-constexpr int PERM_STRIDE = 97;          // odd multiplier => invertible permutation
-constexpr int BLOCK_SIZE = 128;
-constexpr int GRID_DIVISOR = 4;          // intentionally limit parallelism
+constexpr int N = 1 << 24;  // 64 MB footprint (float32)
+constexpr int REPEAT = 50;
+constexpr int BLOCK_THREADS = 256;
 
-__device__ __forceinline__ int permute_index(int idx, int mask) {
-  return (idx * PERM_STRIDE + 131) & mask;
-}
-
-__global__ void scatter_permuted(const float* __restrict__ src,
-                                 float* __restrict__ staging,
-                                 int n,
-                                 int mask) {
-  const int global_tid = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void scalar_copy(const float* __restrict__ src, float* __restrict__ dst, int n) {
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
   const int stride = gridDim.x * blockDim.x;
-  for (int i = global_tid; i < n; i += stride) {
-    const int permuted = permute_index(i, mask);
-    staging[permuted] = src[i];  // sequential read, scattered write
-  }
-}
-
-__global__ void gather_permuted(const float* __restrict__ staging,
-                                float* __restrict__ dst,
-                                int n,
-                                int mask) {
-  const int global_tid = blockIdx.x * blockDim.x + threadIdx.x;
-  const int stride = gridDim.x * blockDim.x;
-  for (int i = global_tid; i < n; i += stride) {
-    const int permuted = permute_index(i, mask);
-    dst[i] = staging[permuted];  // scattered read, sequential write
+  for (int i = tid; i < n; i += stride) {
+    dst[i] = src[i];
   }
 }
 
@@ -62,19 +41,16 @@ int main() {
     h_src[i] = static_cast<float>((i % 2048) - 1024) / 256.0f;
   }
 
-  float *d_src = nullptr, *d_tmp = nullptr, *d_dst = nullptr;
+  float *d_src = nullptr, *d_dst = nullptr;
   CUDA_CHECK(cudaMalloc(&d_src, N * sizeof(float)));
-  CUDA_CHECK(cudaMalloc(&d_tmp, N * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_dst, N * sizeof(float)));
   CUDA_CHECK(cudaMemcpy(d_src, h_src.data(), N * sizeof(float), cudaMemcpyHostToDevice));
 
-  dim3 block(BLOCK_SIZE);
-  dim3 grid((N + block.x * GRID_DIVISOR - 1) / (block.x * GRID_DIVISOR));
-  const int mask = N - 1;
+  dim3 block(BLOCK_THREADS);
+  dim3 grid((N + block.x - 1) / block.x);
 
-  // Warmup: execute the two-pass pipeline once to populate caches.
-  scatter_permuted<<<grid, block>>>(d_src, d_tmp, N, mask);
-  gather_permuted<<<grid, block>>>(d_tmp, d_dst, N, mask);
+  // Warmup.
+  scalar_copy<<<grid, block>>>(d_src, d_dst, N);
   CUDA_CHECK_LAST_ERROR();
   CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -84,8 +60,7 @@ int main() {
 
   CUDA_CHECK(cudaEventRecord(start));
   for (int iter = 0; iter < REPEAT; ++iter) {
-    scatter_permuted<<<grid, block>>>(d_src, d_tmp, N, mask);
-    gather_permuted<<<grid, block>>>(d_tmp, d_dst, N, mask);
+    scalar_copy<<<grid, block>>>(d_src, d_dst, N);
   }
   CUDA_CHECK_LAST_ERROR();
   CUDA_CHECK(cudaEventRecord(stop));
@@ -94,17 +69,21 @@ int main() {
   float total_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&total_ms, start, stop));
   const float avg_ms = total_ms / static_cast<float>(REPEAT);
-  std::printf("Permuted two-pass copy (baseline): %.3f ms\n", avg_ms);
+  std::printf("Scalar coalesced copy (baseline): %.3f ms\n", avg_ms);
   std::printf("TIME_MS: %.6f\n", avg_ms);
 
   CUDA_CHECK(cudaMemcpy(h_dst.data(), d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
   std::printf("Output checksum: %.6f\n", checksum(h_dst));
   std::printf("Max abs diff vs src: %.6e\n", max_abs_diff(h_src, h_dst));
+#ifdef VERIFY
+  float verify_checksum = 0.0f;
+  VERIFY_CHECKSUM(h_dst.data(), N, &verify_checksum);
+  VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaFree(d_src));
-  CUDA_CHECK(cudaFree(d_tmp));
   CUDA_CHECK(cudaFree(d_dst));
   return 0;
 }

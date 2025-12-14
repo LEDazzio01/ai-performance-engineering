@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 constexpr int N = 1 << 23;
 constexpr int REPEAT = 40;
@@ -100,6 +101,11 @@ int main() {
   CUDA_CHECK(cudaMemcpy(h_dst.data(), d_dst, N * sizeof(float), cudaMemcpyDeviceToHost));
   std::printf("Output checksum: %.6f\n", checksum(h_dst));
   std::printf("Max abs diff vs src: %.6e\n", max_abs_diff(h_src, h_dst));
+#ifdef VERIFY
+  float verify_checksum = 0.0f;
+  VERIFY_CHECKSUM(h_dst.data(), N, &verify_checksum);
+  VERIFY_PRINT_CHECKSUM(verify_checksum);
+#endif
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

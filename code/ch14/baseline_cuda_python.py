@@ -92,7 +92,7 @@ class BaselineCudaPythonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.mask = torch.rand(self.batch, self.seq_len, device=self.device) > 0.3
         
         # Output buffer
-        self.output = torch.zeros_like(self.input)
+        self.output = None
         
         # Calculate FLOPs for LayerNorm + GELU
         # LayerNorm: 5n (mean, var, normalize, scale, shift)

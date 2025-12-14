@@ -20,10 +20,11 @@ class OptimizedBankConflictsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output: Optional[torch.Tensor] = None
         self.N = 8_000_000
         self._extension = None
+        self.repeats = 8
         # Bank conflicts benchmark - fixed input size to demonstrate shared memory patterns
         self._workload = WorkloadMetadata(
-            requests_per_iteration=1.0,
-            tokens_per_iteration=float(self.N),
+            requests_per_iteration=float(self.repeats),
+            tokens_per_iteration=float(self.N * self.repeats),
         )
     
     def setup(self) -> None:
@@ -32,21 +33,17 @@ class OptimizedBankConflictsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        self._synchronize()
-        # Warm up optimized padded kernel before timing.
-        self._extension.bank_conflicts_padded(self.output, self.input)
-        self._synchronize()
-        torch.manual_seed(42)
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: padding eliminates bank conflicts."""
-        assert self._extension is not None and self.output is not None and self.input is not None
+        assert self._extension is not None and self.input is not None
+        if self.output is None or self.output.shape != self.input.shape:
+            self.output = torch.empty_like(self.input)
         with self._nvtx_range("bank_conflicts_optimized"):
-            self._extension.bank_conflicts_padded(self.output, self.input)
+            for _ in range(self.repeats):
+                self._extension.bank_conflicts_padded(self.output, self.input)
             self._synchronize()
 
     def capture_verification_payload(self) -> None:

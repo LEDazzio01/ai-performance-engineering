@@ -39,23 +39,23 @@ class OptimizedQuantizationILPBenchmark(VerificationPayloadMixin, BaseBenchmark)
         torch.manual_seed(42)
         # FP16 uses half the memory bandwidth - key for memory-bound ops
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float16).contiguous()
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float16).contiguous()
+        self.output = None
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: FP16 element-wise operations (2x less memory traffic)."""
-        assert self.input is not None and self.output is not None
+        assert self.input is not None
         with self._nvtx_range("optimized_quantization_ilp"):
             # Simple multiply-add in FP16 - half the memory bandwidth
             self.output = self.input * 2.0 + 1.0
             self._synchronize()
-        verify_output = self.output.float().detach() if self.output is not None else None
-        self.output = verify_output
 
     def capture_verification_payload(self) -> None:
+        if self.output is None:
+            raise RuntimeError("benchmark_fn() must produce output for verification")
         self._set_verification_payload(
             inputs={"input": self.input},
-            output=self.output,
+            output=self.output.float(),
             batch_size=self.N,
             parameter_count=0,
             output_tolerance=(1e-3, 1e-3),

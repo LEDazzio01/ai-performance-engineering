@@ -14,8 +14,10 @@ HELPER_SOURCES := $(wildcard helper_*.cu)
 STANDALONE_SOURCES := $(filter-out $(HELPER_SOURCES),$(CUDA_SOURCES))
 BASE_TARGETS := $(STANDALONE_SOURCES:.cu=)
 TARGETS := $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS := $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
 $(TARGETS): $(CUDA_NVTX_DEPS)
+$(VERIFY_TARGETS): $(CUDA_NVTX_DEPS)
 
 .PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all
 
@@ -28,18 +30,34 @@ all: $(TARGETS)
 %$(SUFFIX): %.cu
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< $(NVCC_LIBS)
 
+# Verify binaries build with -DVERIFY=1 for harness checksum parsing
+%_verify$(SUFFIX): %.cu
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< $(NVCC_LIBS)
+
 # Special rules for files needing -rdc=true (dynamic parallelism / device-side launch)
 optimized_uneven_static$(SUFFIX): optimized_uneven_static.cu
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
 
+optimized_uneven_static_verify$(SUFFIX): optimized_uneven_static.cu
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
+
 optimized_dynamic_parallelism_host$(SUFFIX): optimized_dynamic_parallelism_host.cu
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+
+optimized_dynamic_parallelism_host_verify$(SUFFIX): optimized_dynamic_parallelism_host.cu
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
 
 baseline_dynamic_parallelism_device$(SUFFIX): baseline_dynamic_parallelism_device.cu
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
 
+baseline_dynamic_parallelism_device_verify$(SUFFIX): baseline_dynamic_parallelism_device.cu
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
+
 optimized_dynamic_parallelism_device$(SUFFIX): optimized_dynamic_parallelism_device.cu
 	$(NVCC) $(NVCC_FLAGS) -rdc=true -o $@ $< -lcudadevrt $(NVCC_LIBS)
+
+optimized_dynamic_parallelism_device_verify$(SUFFIX): optimized_dynamic_parallelism_device.cu
+	$(NVCC) $(NVCC_FLAGS) -rdc=true -DVERIFY=1 -o $@ $< -lcudadevrt $(NVCC_LIBS)
 
 # Architecture targets
 b200: ARCH=sm_100

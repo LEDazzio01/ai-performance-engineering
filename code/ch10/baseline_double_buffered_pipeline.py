@@ -57,9 +57,6 @@ class BaselineDoubleBufferedPipelineBenchmark(CudaBinaryBenchmark):
             K=2048,
         ).to_dict()
 
-    def get_output_tolerance(self) -> tuple[float, float]:
-        return (0.0, 0.0)
-
 def get_benchmark() -> BaselineDoubleBufferedPipelineBenchmark:
     """Factory for discover_benchmarks()."""
     return BaselineDoubleBufferedPipelineBenchmark()

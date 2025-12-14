@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 constexpr int ELEMENTS = 1 << 24;          // 16M elements (~64 MB)
 constexpr int ITERATIONS = 40;
@@ -106,6 +107,7 @@ int main() {
   std::printf("Baseline cooperative pipeline: %.3f ms (%d iterations)\n", avg_ms, ITERATIONS);
   std::printf("TIME_MS: %.6f\n", avg_ms);
   std::printf("Checksum: %.6f\n", chk);
+  VERIFY_PRINT_CHECKSUM(static_cast<float>(chk));
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));

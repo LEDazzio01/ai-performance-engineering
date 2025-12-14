@@ -30,7 +30,7 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize tensors."""
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None
         self._synchronize()
 
     def _transform(self, tensor: torch.Tensor) -> torch.Tensor:
@@ -40,7 +40,9 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def benchmark_fn(self) -> None:
         """Benchmark: Operations with fixed parameters."""
-        assert self.input is not None and self.output is not None
+        assert self.input is not None
+        if self.output is None or self.output.shape != self.input.shape:
+            self.output = torch.empty_like(self.input)
         with self._nvtx_range("baseline_autotuning"):
             for start in range(0, self.N, self.block_size):
                 end = min(start + self.block_size, self.N)

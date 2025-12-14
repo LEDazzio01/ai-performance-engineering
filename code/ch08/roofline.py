@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Roofline Analysis Tool for Blackwell B200 and Grace-Blackwell GB10.
+"""Roofline analysis tool for Blackwell B200 and Grace-Blackwell GB10.
 
 Analyzes kernel performance to determine if compute-bound or memory-bound.
 Provides actionable insights for optimization.

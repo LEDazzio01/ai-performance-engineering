@@ -9,6 +9,7 @@ CUDA_SOURCES = $(wildcard *.cu)
 BASE_TARGETS = $(CUDA_SOURCES:.cu=)
 
 TARGETS = $(addsuffix $(SUFFIX), $(BASE_TARGETS))
+VERIFY_TARGETS = $(addsuffix _verify$(SUFFIX), $(BASE_TARGETS))
 
 .PHONY: baseline_hbmcopy$(SUFFIX) optimized_hbmcopy$(SUFFIX) baseline_hbmpeak$(SUFFIX) optimized_hbmpeak$(SUFFIX)
 .PHONY: optimized_scalar_copy$(SUFFIX) optimized_uncoalesced_copy$(SUFFIX) optimized_transpose$(SUFFIX) optimized_matmul_cuda$(SUFFIX)
@@ -38,7 +39,7 @@ optimized_transpose$(SUFFIX): optimized_transpose_padded$(SUFFIX)
 optimized_matmul_cuda$(SUFFIX): optimized_matmul_tiled$(SUFFIX)
 	@ln -sf $< $@
 
-.PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS)
+.PHONY: all clean compare b200 gb10 b300 gb300 profile-nsys profile-ncu profile-hta profile-perf profile-all $(TARGETS) $(VERIFY_TARGETS)
 
 all: $(TARGETS)
 	@echo "Building Chapter 7 examples with $(ARCH) (CUDA $(CUDA_VERSION))"
@@ -48,6 +49,11 @@ all: $(TARGETS)
 $(TARGETS): %$(SUFFIX): %.cu
 	@echo "Compiling $@..."
 	$(NVCC) $(NVCC_FLAGS) -o $@ $< -lcuda
+
+# Verify binaries build with -DVERIFY=1 for harness checksum parsing
+$(VERIFY_TARGETS): %_verify$(SUFFIX): %.cu
+	@echo "Compiling verify binary $@..."
+	$(NVCC) $(NVCC_FLAGS) -DVERIFY=1 -o $@ $< -lcuda
 
 compare: clean
 	@echo "========================================"
@@ -114,6 +120,7 @@ profile-all: all
 
 clean:
 	rm -f $(addsuffix _sm100,$(BASE_TARGETS)) $(addsuffix _sm121,$(BASE_TARGETS)) \
+		$(addsuffix _verify_sm100,$(BASE_TARGETS)) $(addsuffix _verify_sm121,$(BASE_TARGETS)) $(addsuffix _verify_sm103,$(BASE_TARGETS)) \
 		baseline_hbmcopy$(SUFFIX) optimized_hbmcopy$(SUFFIX) baseline_hbmpeak$(SUFFIX) optimized_hbmpeak$(SUFFIX) \
 		optimized_scalar_copy$(SUFFIX) optimized_uncoalesced_copy$(SUFFIX) optimized_transpose$(SUFFIX) optimized_matmul_cuda$(SUFFIX) \
 		*.o *.so *.a

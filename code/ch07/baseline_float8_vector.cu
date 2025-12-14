@@ -30,6 +30,8 @@
 #include <cstdlib>
 #include <vector>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -141,6 +143,14 @@ int main() {
     printf("  Scalar loads are instruction-limited, not bandwidth-limited.\n");
     printf("  Many small loads → high instruction overhead.\n");
     printf("  See optimized_float8_vector.cu for vectorized loads.\n");
+
+#ifdef VERIFY
+    std::vector<float> h_verify(N);
+    CUDA_CHECK(cudaMemcpy(h_verify.data(), d_c, bytes, cudaMemcpyDeviceToHost));
+    float checksum = 0.0f;
+    VERIFY_CHECKSUM(h_verify.data(), N, &checksum);
+    VERIFY_PRINT_CHECKSUM(checksum);
+#endif
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));

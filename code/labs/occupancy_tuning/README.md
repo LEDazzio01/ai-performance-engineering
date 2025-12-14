@@ -19,7 +19,6 @@ Sweeps Triton matmul schedules for ProtonNet-style workloads on Blackwell, compa
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ai-performance-engineering
 python -m cli.aisp bench list-targets --chapter labs/occupancy_tuning
 python -m cli.aisp bench run --targets labs/occupancy_tuning --profile minimal
 ```
@@ -33,4 +32,4 @@ python -m cli.aisp bench run --targets labs/occupancy_tuning --profile minimal
 
 ## Notes
 - Add new schedules to `triton_matmul_schedules.py` and regenerate the harness targets by rerunning the sweep script.
-- `expectations_gb10.json` records FLOP/s per schedule so improvements show up in CI.
+- `expectations_b200.json` records FLOP/s per schedule so improvements show up in CI.

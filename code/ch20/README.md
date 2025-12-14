@@ -17,18 +17,17 @@ Combines kernel, memory, pipeline, and inference optimizations into holistic cas
 | `baseline_integrated_kv_cache.py`, `optimized_integrated_kv_cache.py` | Integrated KV-cache demos that merge allocator, overlap, and NVLink pooling tricks. |
 | `baseline_memory_standard.py`, `optimized_memory_standard.py` | Memory-focused harness verifying allocator changes at system level. |
 | `baseline_training_single.py`, `optimized_training_single.py`, `test.cu`, `Makefile` | Single-device training case study plus CUDA kernels used in the final report. |
-| `compare.py`, `arch_config.py`, `expectations_gb10.json` | Harness driver, architecture settings, and expectation baselines. |
+| `compare.py`, `arch_config.py`, `expectations_b200.json` | Harness driver, architecture settings, and expectation baselines. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch20
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch20
-python cli/aisp.py bench run --targets ch20 --profile minimal
+python ch20/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch20
+python -m cli.aisp bench run --targets ch20 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python compare.py` emits per-stage summaries that show each optimized variant meeting or exceeding stored expectations.

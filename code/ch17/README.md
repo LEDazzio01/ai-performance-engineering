@@ -16,25 +16,24 @@ Blends router design, disaggregated inference, and profiling discipline so Black
 | `baseline_inference_full.py`, `optimized_inference_full.py`, `baseline_prefill_decode_disagg.py`, `optimized_prefill_decode_disagg.py`, `baseline_prefill_decode_disagg_multigpu.py`, `optimized_prefill_decode_disagg_multigpu.py` | End-to-end inference flows modeling separate prefill and decode pools, both single-node and multi-GPU. |
 | `baseline_pipeline_parallelism.py`, `optimized_pipeline_parallelism.py` | Pipeline parallel workloads combining compute and KV-transfer scheduling. |
 | `baseline_moe_router_uniform.py`, `optimized_moe_router_topology.py`, `baseline_routing_static.py`, `optimized_routing_static.py` | Router variants for MoE and static/dynamic sharding decisions. |
-| `baseline_memory.py`, `optimized_memory.py`, `blackwell_profiling_guide.py`, `blackwell_roofline_analysis.py`, `comprehensive_profiling_toolkit.py` | Memory-bound case studies plus profiling guides tailored to routing workloads. |
-| `compare.py`, `Makefile`, `expectations_gb10.json`, `dynamo_config.yaml` | Harness entry, build rules, expectation baselines, and Dynamo config knobs. |
+| `baseline_memory.py`, `optimized_memory.py`, `blackwell_profiling_guide.py` | Memory-bound case studies plus profiling guides tailored to routing workloads (use `aisp tools roofline` for roofline analysis). |
+| `compare.py`, `Makefile`, `expectations_b200.json`, `dynamo_config.yaml` | Harness entry, build rules, expectation baselines, and Dynamo config knobs. |
 
 ## Running the Benchmarks
 Use the benchmark harness for quick comparisons or drive the Typer CLI when you need repeatable artifact capture.
 ```bash
-cd ch17
-python compare.py --profile none
-python cli/aisp.py bench list-targets --chapter ch17
-python cli/aisp.py bench run --targets ch17 --profile minimal
+python ch17/compare.py --profile none
+python -m cli.aisp bench list-targets --chapter ch17
+python -m cli.aisp bench run --targets ch17 --profile minimal
 ```
 - Override `--profile` or `--iterations` per workload when capturing Nsight traces.
-- Expectation baselines live next to each chapter in `expectations_gb10.json`; refresh with `--update-expectations` after validating new hardware.
+- Expectation baselines live next to each chapter in `expectations_b200.json`; refresh with `--update-expectations` after validating new hardware.
 
 ## Validation Checklist
 - `python optimized_dynamic_routing.py --trace` logs TTFT/TPOT trends that settle faster than the baseline's oscillations.
-- `python optimized_pipeline_parallelism.py --microbatches 8 --profile minimal` shows overlapping prefill/decode segments with fewer idle bubbles; bump `--microbatches` to shrink the pipeline bubble and check stage imbalance via the reported metrics.
-- `python blackwell_roofline_analysis.py --artifacts ./artifacts` reproduces the documented roofline points using your latest captures.
+- `python optimized_pipeline_parallelism.py --profile minimal` shows overlapping prefill/decode segments with fewer idle bubbles.
+- `python -m cli.aisp tools roofline` reproduces the documented roofline points using your latest captures.
 
 ## Notes
-- `comprehensive_profiling_toolkit.py` bundles Nsight Systems/Compute runs plus summary markdown to streamline PoB updates.
+- `blackwell_profiling_guide.py` walks through Nsight Systems/Compute captures and interpreting roofline vs occupancy bottlenecks for routing-heavy workloads.
 - `baseline_prefill_decode_disagg_multigpu.py` can run in simulation-only mode by passing `--simulate-fabric`, avoiding the need for multi-node hardware while iterating on routing logic.

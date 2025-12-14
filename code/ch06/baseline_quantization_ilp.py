@@ -30,12 +30,12 @@ class BaselineQuantizationILPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize full precision tensors."""
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: Full precision ILP operations."""
-        assert self.input is not None and self.output is not None
+        assert self.input is not None
         with self._nvtx_range("baseline_quantization_ilp"):
             self.output = self.input * 2.0 + 1.0
             self._synchronize()

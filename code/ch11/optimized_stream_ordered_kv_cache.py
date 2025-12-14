@@ -12,7 +12,8 @@ class OptimizedStreamOrderedKvCacheBenchmark(ConcurrentStreamOptimized):
         super().__init__(
             "stream_ordered_kv_cache",
             num_elements=18_000_000,
-            num_streams=8,
+            num_segments=8,
+            num_streams=2,
         )
 
 

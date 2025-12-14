@@ -33,19 +33,14 @@ class BaselineBankConflictsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         
         torch.manual_seed(42)
         self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
-        self._synchronize()
-        # Warm up to exclude compile/setup cost.
-        self._extension.bank_conflicts(self.output, self.input)
-        self._synchronize()
-        torch.manual_seed(42)
-        self.input = torch.randn(self.N, device=self.device, dtype=torch.float32)
-        self.output = torch.empty(self.N, device=self.device, dtype=torch.float32)
+        self.output = None
         self._synchronize()
     
     def benchmark_fn(self) -> None:
         """Benchmark: access pattern causing bank conflicts."""
-        assert self._extension is not None and self.output is not None and self.input is not None
+        assert self._extension is not None and self.input is not None
+        if self.output is None or self.output.shape != self.input.shape:
+            self.output = torch.empty_like(self.input)
         with self._nvtx_range("bank_conflicts_baseline"):
             for _ in range(self.repeats):
                 self._extension.bank_conflicts(self.output, self.input)

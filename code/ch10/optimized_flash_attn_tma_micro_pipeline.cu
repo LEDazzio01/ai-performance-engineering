@@ -9,9 +9,12 @@
 #include <cuda_runtime.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
+#include <vector>
 
 #include "../core/common/headers/tma_helpers.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 #if CUDART_VERSION < 13000
 int main() {
@@ -32,6 +35,47 @@ constexpr int TILE_KV = 64;    // rows per tile (K/V)
 constexpr int THREADS = 128;
 constexpr int STAGES  = 2;     // double buffer
 constexpr int ITERS   = 10;
+
+inline bool make_2d_tensor_map_col_row(
+    CUtensorMap& desc,
+    PFN_cuTensorMapEncodeTiled_v12000 encode,
+    void* base,
+    int width,
+    int height,
+    int ld,
+    int box_width,
+    int box_height,
+    CUtensorMapSwizzle swizzle_mode) {
+    constexpr uint32_t rank = 2;
+    std::uint64_t dims[rank] = {
+        static_cast<std::uint64_t>(width),
+        static_cast<std::uint64_t>(height),
+    };
+    std::uint64_t stride[rank - 1] = {static_cast<std::uint64_t>(ld * sizeof(float))};
+    std::uint32_t box[rank] = {static_cast<std::uint32_t>(box_width),
+                               static_cast<std::uint32_t>(box_height)};
+    std::uint32_t elem_stride[rank] = {1, 1};
+
+    constexpr auto interleave = CU_TENSOR_MAP_INTERLEAVE_NONE;
+    constexpr auto promotion = CU_TENSOR_MAP_L2_PROMOTION_NONE;
+    constexpr auto oob_fill = CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE;
+
+    auto fn = encode ? encode : cuTensorMapEncodeTiled;
+    CUresult res = fn(
+        &desc,
+        CU_TENSOR_MAP_DATA_TYPE_FLOAT32,
+        rank,
+        base,
+        dims,
+        stride,
+        box,
+        elem_stride,
+        interleave,
+        swizzle_mode,
+        promotion,
+        oob_fill);
+    return res == CUDA_SUCCESS;
+}
 
 // TMA kernel with double-buffered K/V prefetch
 template <int TILE_M, int TILE_N>
@@ -79,6 +123,7 @@ __global__ void flash_attn_tma_kernel(
     for (int d = 0; d < D_HEAD; ++d) o_reg[d] = 0.f;
 
     const int num_tiles = (seq_len + TILE_M - 1) / TILE_M;
+    block_barrier::arrival_token stage_tokens[STAGES];
     
     // Lambda to issue TMA load
     auto issue_tma_load = [&](int tile_idx) {
@@ -88,10 +133,13 @@ __global__ void flash_attn_tma_kernel(
         
         if (tid == 0) {
             cde::cp_async_bulk_tensor_2d_global_to_shared(
-                smem_k[stage], &k_desc, row_base, 0, *bars[stage]);
+                &smem_k[stage], &k_desc, 0, row_base, *bars[stage]);
             cde::cp_async_bulk_tensor_2d_global_to_shared(
-                smem_v[stage], &v_desc, row_base, 0, *bars[stage]);
-            cde::cp_async_bulk_commit_group();
+                &smem_v[stage], &v_desc, 0, row_base, *bars[stage]);
+            stage_tokens[stage] = cuda::device::barrier_arrive_tx(*bars[stage], 1, 2 * TILE_BYTES);
+        }
+        else {
+            stage_tokens[stage] = bars[stage]->arrive();
         }
     };
 
@@ -108,17 +156,7 @@ __global__ void flash_attn_tma_kernel(
         const int row_base = tile_idx * TILE_M;
         const int rows_this = min(TILE_M, seq_len - row_base);
 
-        // Wait for this tile's data
-        block_barrier::arrival_token token;
-        if (tid == 0) {
-            token = cuda::device::barrier_arrive_tx(*bars[stage], 1, 2 * TILE_BYTES);
-        } else {
-            token = bars[stage]->arrive();
-        }
-        bars[stage]->wait(std::move(token));
-        if (tid == 0) {
-            cde::cp_async_bulk_wait_group_read<0>();
-        }
+        bars[stage]->wait(std::move(stage_tokens[stage]));
         __syncthreads();
 
         // Process all rows in this tile
@@ -209,9 +247,18 @@ int main() {
     check_cuda(cudaMalloc(&d_v, bytes), "malloc v");
     check_cuda(cudaMalloc(&d_o, bytes), "malloc o");
 
-    check_cuda(cudaMemset(d_q, 0, bytes), "zero q");
-    check_cuda(cudaMemset(d_k, 0, bytes), "zero k");
-    check_cuda(cudaMemset(d_v, 0, bytes), "zero v");
+    // Deterministic non-zero initialization (outside timed region).
+    std::vector<float> h_q(seq_len * d_head);
+    std::vector<float> h_k(seq_len * d_head);
+    std::vector<float> h_v(seq_len * d_head);
+    for (int i = 0; i < seq_len * d_head; ++i) {
+        h_q[i] = (static_cast<float>((i % 13) - 6)) * 0.01f;
+        h_k[i] = (static_cast<float>((i % 17) - 8)) * 0.01f;
+        h_v[i] = (static_cast<float>((i % 19) - 9)) * 0.01f;
+    }
+    check_cuda(cudaMemcpy(d_q, h_q.data(), bytes, cudaMemcpyHostToDevice), "copy q");
+    check_cuda(cudaMemcpy(d_k, h_k.data(), bytes, cudaMemcpyHostToDevice), "copy k");
+    check_cuda(cudaMemcpy(d_v, h_v.data(), bytes, cudaMemcpyHostToDevice), "copy v");
     check_cuda(cudaMemset(d_o, 0, bytes), "zero o");
 
     // Create TMA descriptors
@@ -226,10 +273,10 @@ int main() {
     const int box_h = TILE_KV;
     const int box_w = D_HEAD;
     
-    if (!make_2d_tensor_map(k_desc, encode, d_k, d_head, seq_len, d_head,
-                            box_w, box_h, CU_TENSOR_MAP_SWIZZLE_NONE) ||
-        !make_2d_tensor_map(v_desc, encode, d_v, d_head, seq_len, d_head,
-                            box_w, box_h, CU_TENSOR_MAP_SWIZZLE_NONE)) {
+    if (!make_2d_tensor_map_col_row(k_desc, encode, d_k, d_head, seq_len, d_head,
+                                    box_w, box_h, CU_TENSOR_MAP_SWIZZLE_NONE) ||
+        !make_2d_tensor_map_col_row(v_desc, encode, d_v, d_head, seq_len, d_head,
+                                    box_w, box_h, CU_TENSOR_MAP_SWIZZLE_NONE)) {
         std::printf("SKIP: Failed to encode TMA descriptors\nTIME_MS: 0.0\n");
         cudaFree(d_q); cudaFree(d_k); cudaFree(d_v); cudaFree(d_o);
         return 0;
@@ -265,6 +312,17 @@ int main() {
 
     check_cuda(cudaEventDestroy(start), "destroy start");
     check_cuda(cudaEventDestroy(stop), "destroy stop");
+
+#ifdef VERIFY
+    std::vector<float> h_o(seq_len * d_head);
+    check_cuda(cudaMemcpy(h_o.data(), d_o, bytes, cudaMemcpyDeviceToHost), "copy o");
+    double checksum = 0.0;
+    for (float v : h_o) {
+        checksum += static_cast<double>(v);
+    }
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
+#endif
+
     check_cuda(cudaStreamDestroy(stream), "destroy stream");
     check_cuda(cudaFree(d_q), "free q");
     check_cuda(cudaFree(d_k), "free k");

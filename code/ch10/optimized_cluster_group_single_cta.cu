@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "cluster_group_common.cuh"
+#include "../core/common/headers/cuda_verify.cuh"
 
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
@@ -165,6 +166,13 @@ int main() {
     printf("Verification (optimized single CTA): max |sum diff|=%.6f, |sq diff|=%.6f\n",
            max_diff(h_sum, ref_sum),
            max_diff(h_squares, ref_squares));
+
+    double checksum = 0.0;
+    for (int i = 0; i < chunks; ++i) {
+        checksum += static_cast<double>(h_sum[i]) + static_cast<double>(h_squares[i]);
+    }
+    checksum /= static_cast<double>(chunks);
+    VERIFY_PRINT_CHECKSUM(static_cast<float>(checksum));
 
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));

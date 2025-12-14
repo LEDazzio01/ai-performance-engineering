@@ -16,7 +16,7 @@ import pytest
 
 # Try to import hypothesis; skip tests if not available
 try:
-    from hypothesis import given, settings, strategies as st, assume
+    from hypothesis import HealthCheck, given, settings, strategies as st, assume
 
     HYPOTHESIS_AVAILABLE = True
 except ImportError:
@@ -51,6 +51,9 @@ except ImportError:
 
     def assume(x):
         pass
+
+    class HealthCheck:  # type: ignore
+        too_slow = object()
 
 
 from core.benchmark.expectations import (
@@ -100,7 +103,7 @@ class TestSpeedupTimingConsistency:
     within floating-point tolerance (1e-6).
     """
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),
@@ -129,7 +132,7 @@ class TestSpeedupTimingConsistency:
             f"{expected_speedup} (baseline={baseline_time}, optimized={optimized_time})"
         )
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),
@@ -156,7 +159,7 @@ class TestSpeedupTimingConsistency:
             f"Serialized speedup {stored_speedup} differs from computed {entry.best_speedup}"
         )
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),
@@ -200,7 +203,7 @@ class TestRegressionVisibility:
     the stored best_speedup SHALL be less than 1.0 (not clamped) and is_regression SHALL be true.
     """
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),
@@ -233,7 +236,7 @@ class TestRegressionVisibility:
             f"is_regression should be True when speedup is {entry.best_speedup}"
         )
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),
@@ -266,7 +269,7 @@ class TestRegressionVisibility:
             f"is_regression should be False when speedup is {entry.best_speedup}"
         )
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         provenance=valid_provenance(),
@@ -300,7 +303,7 @@ class TestRegressionVisibility:
             f"Speedup {entry.best_speedup} should be {expected_speedup}, not clamped"
         )
 
-    @settings(max_examples=100)
+    @settings(max_examples=100, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),
@@ -592,7 +595,7 @@ class TestAtomicProvenanceConsistency:
     same provenance (git_commit, hardware_key, profile_name).
     """
 
-    @settings(max_examples=50)
+    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
     @given(
         baseline_time=valid_time_ms(),
         optimized_time=valid_time_ms(),

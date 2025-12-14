@@ -23,6 +23,8 @@
 #include <vector>
 #include <numeric>
 
+#include "../core/common/headers/cuda_verify.cuh"
+
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
         cudaError_t err = (call);                                              \
@@ -180,6 +182,9 @@ int main() {
     printf("  - Single kernel launch\n");
     printf("  - No intermediate global memory buffer\n");
     printf("  - Modern GPUs have fast atomics\n");
+
+    const float verify_checksum = total;
+    VERIFY_PRINT_CHECKSUM(verify_checksum);
     
     // Cleanup
     CUDA_CHECK(cudaEventDestroy(start));
@@ -189,5 +194,4 @@ int main() {
     
     return 0;
 }
-
 

@@ -1,4 +1,4 @@
-"""Ch7 baseline memory access benchmark (uncoalesced)."""
+"""Ch7 baseline memory access benchmark (scalar copy)."""
 
 from __future__ import annotations
 
@@ -14,13 +14,12 @@ from core.benchmark.cuda_binary_benchmark import CudaBinaryBenchmark
 
 
 class BaselineMemoryAccessBenchmark(CudaBinaryBenchmark):
-    """Wraps the uncoalesced CUDA kernel baseline."""
+    """Wraps the scalar CUDA copy baseline."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         n_elems = 1 << 24
         repeat = 50
-        perm_stride = 97
         super().__init__(
             chapter_dir=chapter_dir,
             binary_name="baseline_memory_access",
@@ -32,12 +31,11 @@ class BaselineMemoryAccessBenchmark(CudaBinaryBenchmark):
             workload_params={
                 "N": n_elems,
                 "repeat": repeat,
-                "perm_stride": perm_stride,
                 "dtype": "float32",
             },
         )
         self.register_workload_metadata(
-            bytes_per_iteration=float(n_elems * 16),
+            bytes_per_iteration=float(n_elems * 8),
         )
 
     def get_custom_metrics(self) -> Optional[dict]:
