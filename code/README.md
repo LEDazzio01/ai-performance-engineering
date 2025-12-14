@@ -1,4 +1,4 @@
-# AI Systems Performance Engineering - Code Examples and Benchmark Harness including Correctness and Speedup Verifications
+# AI Systems Performance Engineering - Code and Benchmark Verifications
 
 [![O'Reilly Book](../img/ai_sys_perf_engg_cover_cheetah_sm.png)](https://www.amazon.com/Systems-Performance-Engineering-Optimizing-Algorithms/dp/B0F47689K8/)
 
