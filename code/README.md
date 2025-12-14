@@ -1,4 +1,6 @@
-# AI Systems Performance Engineering
+# AI Systems Performance Engineering - Code Examples and Benchmark Harness including Correctness and Speedup Verifications
+
+[![O'Reilly Book](../img/ai_sys_perf_engg_cover_cheetah_sm.png)](https://www.amazon.com/Systems-Performance-Engineering-Optimizing-Algorithms/dp/B0F47689K8/)
 
 ## Summary
 Reference implementation of high-performance PyTorch, CUDA, and Triton workloads for NVIDIA Blackwell platforms.
