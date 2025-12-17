@@ -17,6 +17,7 @@ Addresses large-scale inference concerns: disaggregated compute/storage, KV-cach
 | `baseline_kv_cache_management.py`, `optimized_kv_cache_management.py`, `optimized_kv_cache_management_math.py`, `optimized_kv_cache_nvlink_pool.py`, `baseline_kv_cache_local_only.py` | KV-cache orchestration utilities with local-only, math-only, and NVLink-pooled variants. |
 | `baseline_continuous_batching.py`, `optimized_continuous_batching.py` | Continuous batching scheduler demonstrating TTFT-aware queueing. |
 | `baseline_moe_inference.py`, `optimized_moe_inference.py` | Inference-specific MoE workloads that pair router load with communication control. |
+| `baseline_moe_overlap.py`, `optimized_moe_overlap_shared_expert.py`, `baseline_wide_ep.py`, `optimized_wide_ep.py`, `baseline_moe_routing_simple.py`, `optimized_moe_routing_simple_topology_aware.py` | MoE expert-parallel microbenchmarks illustrating overlap, packing/unpacking, and topology-aware routing dispatch. |
 | `compare.py`, `requirements.txt`, `expectations_b200.json`, `Makefile` | Harness entry and dependencies for inference-focused validation. |
 
 ## Running the Benchmarks

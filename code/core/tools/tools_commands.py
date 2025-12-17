@@ -126,6 +126,31 @@ TOOLS: Dict[str, ToolSpec] = {
         script_path=REPO_ROOT / "labs" / "flexattention" / "flex_attention_cute.py",
         description="Run the FlashAttention CuTe backend tool (FlexAttention fallback utility).",
     ),
+    "dtensor-mesh": ToolSpec(
+        name="dtensor-mesh",
+        script_path=REPO_ROOT / "ch13" / "dtensor_mesh_tool.py",
+        description="Run the DTensor mesh setup utility (chapter tool; not a benchmark pair).",
+    ),
+    "nvfp4-trtllm": ToolSpec(
+        name="nvfp4-trtllm",
+        script_path=REPO_ROOT / "ch18" / "nvfp4_trtllm_tool.py",
+        description="Run the NVFP4/TRT-LLM integration utility (chapter tool; not a benchmark pair).",
+    ),
+    "fp8-calibration-free": ToolSpec(
+        name="fp8-calibration-free",
+        script_path=REPO_ROOT / "ch19" / "fp8_calibration_free_tool.py",
+        description="Run the calibration-free FP8 serving utility (chapter tool; not a benchmark pair).",
+    ),
+    "kernel-verification": ToolSpec(
+        name="kernel-verification",
+        script_path=REPO_ROOT / "ch20" / "kernel_verification_tool.py",
+        description="Run Chapter 20 kernel verification utility (tool; not a benchmark pair).",
+    ),
+    "proofwright-verify": ToolSpec(
+        name="proofwright-verify",
+        script_path=REPO_ROOT / "ch20" / "proofwright_verify_tool.py",
+        description="Run Chapter 20 ProofWright verification utility (tool; not a benchmark pair).",
+    ),
 }
 
 

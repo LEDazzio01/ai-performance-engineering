@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""optimized_wide_ep.py - Wide expert-parallel all-to-all (fused pack/unpack) (Ch15).
+"""baseline_wide_ep.py - Wide expert-parallel all-to-all (naive pack/unpack) (Ch15).
 
-Pairs with: baseline_wide_ep.py
+Pairs with: optimized_wide_ep.py
 
-Semantic contract:
-- Both variants apply the same shared expert to the same token activations.
-- Routing/placement changes do NOT change the final output tensor because the
-  expert weights are shared across expert ids.
+Design choice (for benchmarkability):
+- All experts share the same weights (a single shared expert module).
+- Routing/placement changes therefore do NOT change the final output tensor.
+- The measured speedup comes from communication (pack/unpack) efficiency, not
+  changing the math.
 
-Optimization behavior:
-- Uses a single GPU permutation (`argsort`) to pack tokens by destination rank.
-- Uses single-shot gather/scatter ops instead of a Python loop over ranks.
+Baseline behavior:
+- Simulates expert-parallel all-to-all by packing tokens per destination rank
+  using a Python loop + boolean masks.
+- Applies the shared expert to the packed buffer, then unpacks back to original
+  token order.
 """
 
 from __future__ import annotations
@@ -37,8 +40,8 @@ def _pseudo_uniform_expert_ids(token_ids: torch.Tensor, num_experts: int) -> tor
     return ((token_ids * 1103515245 + 12345) % int(num_experts)).to(torch.int64)
 
 
-class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized: fused pack/unpack for wide expert-parallel all-to-all."""
+class BaselineWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Baseline: naive per-rank pack/unpack for expert-parallel all-to-all."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -107,10 +110,22 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         expert_ids_flat = self.expert_ids.reshape(-1)
         dest_ranks = torch.div(expert_ids_flat, self.experts_per_rank, rounding_mode="floor")
 
-        with self._nvtx_range("optimized_wide_ep"):
+        with self._nvtx_range("baseline_wide_ep"):
             with torch.no_grad():
-                perm = torch.argsort(dest_ranks)
-                send_buf = flat.index_select(0, perm)
+                send_tokens: list[torch.Tensor] = []
+                send_pos: list[torch.Tensor] = []
+                for r in range(self.world_size):
+                    mask = dest_ranks == r
+                    indices = mask.nonzero(as_tuple=False).squeeze(-1)
+                    if indices.numel() == 0:
+                        continue
+                    send_tokens.append(flat.index_select(0, indices))
+                    send_pos.append(indices)
+                if not send_tokens:
+                    raise RuntimeError("Routing produced no tokens for any rank")
+
+                perm = torch.cat(send_pos, dim=0)
+                send_buf = torch.cat(send_tokens, dim=0)
 
                 recv_buf = torch.empty_like(send_buf)
                 recv_buf.copy_(send_buf)
@@ -169,11 +184,10 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedWideEPBenchmark()
+    return BaselineWideEPBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
-

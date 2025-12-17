@@ -1,16 +1,18 @@
-#!/usr/bin/env python3
-"""optimized_wide_ep.py - Wide expert-parallel all-to-all (fused pack/unpack) (Ch15).
+"""optimized_moe_router_uniform_topology.py - Topology-aware MoE routing (Ch17).
 
-Pairs with: baseline_wide_ep.py
+Pairs with: baseline_moe_router_uniform.py
 
 Semantic contract:
 - Both variants apply the same shared expert to the same token activations.
-- Routing/placement changes do NOT change the final output tensor because the
+- Routing decisions do NOT change the final output tensor semantics because the
   expert weights are shared across expert ids.
 
 Optimization behavior:
-- Uses a single GPU permutation (`argsort`) to pack tokens by destination rank.
-- Uses single-shot gather/scatter ops instead of a Python loop over ranks.
+- Routes tokens preferentially to experts in the token's local island to reduce
+  cross-island transfers.
+- Simulates cross-island expert-parallel communication by gathering "remote"
+  tokens and performing device-to-device copies; this variant aims to minimize
+  the remote fraction via locality-aware routing.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from ch15.verification_payload_mixin import VerificationPayloadMixin
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from core.optimization.moe_inference import ExpertMLP
 
@@ -37,16 +39,16 @@ def _pseudo_uniform_expert_ids(token_ids: torch.Tensor, num_experts: int) -> tor
     return ((token_ids * 1103515245 + 12345) % int(num_experts)).to(torch.int64)
 
 
-class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Optimized: fused pack/unpack for wide expert-parallel all-to-all."""
+class OptimizedMoERouterTopologyBenchmark(VerificationPayloadMixin, BaseBenchmark):
+    """Optimized: topology-aware routing with low remote-transfer fraction."""
 
     def __init__(self) -> None:
         super().__init__()
         self.hidden_size = 1024
         self.ffn_size = 4096
-        self.world_size = 64
-        self.experts_per_rank = 1
-        self.num_experts = self.world_size * self.experts_per_rank
+        self.num_islands = 4
+        self.experts_per_island = 16
+        self.num_experts = self.num_islands * self.experts_per_island
         self.batch = 128
         self.seq = 32
         self.dtype = torch.bfloat16
@@ -64,20 +66,21 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.expert: Optional[nn.Module] = None
         self.inputs: Optional[torch.Tensor] = None
         self.expert_ids: Optional[torch.Tensor] = None
+        self.local_island: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
         self._verify_probe: Optional[torch.Tensor] = None
         self._verify_meta: Optional[torch.Tensor] = None
 
     def setup(self) -> None:
         if not torch.cuda.is_available():
-            raise RuntimeError("SKIPPED: CUDA required for wide-EP benchmark")
+            raise RuntimeError("SKIPPED: CUDA required for MoE router benchmark")
 
         if self.num_experts <= 0:
             raise ValueError("num_experts must be positive")
-        if self.experts_per_rank <= 0:
-            raise ValueError("experts_per_rank must be positive")
-        if self.num_experts % self.world_size != 0:
-            raise ValueError("num_experts must be divisible by world_size")
+        if self.experts_per_island <= 0:
+            raise ValueError("experts_per_island must be positive")
+        if self.num_experts != self.num_islands * self.experts_per_island:
+            raise ValueError("num_experts must equal num_islands * experts_per_island")
 
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
@@ -86,11 +89,26 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.inputs = torch.randn(self.batch, self.seq, self.hidden_size, device=self.device, dtype=self.dtype)
 
         token_ids = torch.arange(self.batch * self.seq, device=self.device, dtype=torch.int64)
-        self.expert_ids = _pseudo_uniform_expert_ids(token_ids, self.num_experts).view(self.batch, self.seq)
+        local_island = (token_ids % int(self.num_islands)).to(torch.int64)
+        self.local_island = local_island.view(self.batch, self.seq)
+
+        experts_per_island = int(self.experts_per_island)
+        local_experts = _pseudo_uniform_expert_ids(token_ids, experts_per_island)
+        expert_ids = local_island * experts_per_island + local_experts
+
+        # Controlled spill: every 8th token routes to the next island to simulate overflow.
+        spill = (token_ids % 8 == 0)
+        if spill.any():
+            spill_island = (local_island + 1) % int(self.num_islands)
+            spill_local = _pseudo_uniform_expert_ids(token_ids + 17, experts_per_island)
+            spill_ids = spill_island * experts_per_island + spill_local
+            expert_ids = torch.where(spill, spill_ids, expert_ids)
+
+        self.expert_ids = expert_ids.view(self.batch, self.seq)
 
         self._verify_probe = self.inputs[:1, :1, :256].detach().cpu()
         self._verify_meta = torch.tensor(
-            [int(self.world_size), int(self.experts_per_rank), int(self.num_experts)],
+            [int(self.num_islands), int(self.experts_per_island), int(self.num_experts)],
             dtype=torch.int64,
         )
 
@@ -100,28 +118,26 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._synchronize()
 
     def benchmark_fn(self) -> None:
-        if self.expert is None or self.inputs is None or self.expert_ids is None:
+        if self.expert is None or self.inputs is None or self.expert_ids is None or self.local_island is None:
             raise RuntimeError("setup() must run before benchmark_fn()")
 
         flat = self.inputs.view(-1, self.hidden_size)
         expert_ids_flat = self.expert_ids.reshape(-1)
-        dest_ranks = torch.div(expert_ids_flat, self.experts_per_rank, rounding_mode="floor")
+        local_island_flat = self.local_island.reshape(-1)
+        dest_island = torch.div(expert_ids_flat, self.experts_per_island, rounding_mode="floor")
 
-        with self._nvtx_range("optimized_wide_ep"):
+        with self._nvtx_range("optimized_moe_router_topology"):
             with torch.no_grad():
-                perm = torch.argsort(dest_ranks)
-                send_buf = flat.index_select(0, perm)
+                remote_mask = dest_island != local_island_flat
+                remote_idx = remote_mask.nonzero(as_tuple=False).squeeze(-1)
+                if remote_idx.numel() > 0:
+                    remote_send = flat.index_select(0, remote_idx)
+                    remote_recv = torch.empty_like(remote_send)
+                    remote_recv.copy_(remote_send)
+                    remote_back = torch.empty_like(remote_recv)
+                    remote_back.copy_(remote_recv)
 
-                recv_buf = torch.empty_like(send_buf)
-                recv_buf.copy_(send_buf)
-
-                recv_out = self.expert(recv_buf)
-
-                recv_back = torch.empty_like(recv_out)
-                recv_back.copy_(recv_out)
-
-                out_flat = torch.empty_like(flat)
-                out_flat.index_copy_(0, perm, recv_back)
+                out_flat = self.expert(flat)
                 self.output = out_flat.view(self.batch, self.seq, self.hidden_size)
 
         self._synchronize()
@@ -132,7 +148,7 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
         output_slice = self.output[:2, :2, :256].detach().cpu().float().clone()
         param_count = sum(p.numel() for p in self.expert.parameters()) if self.expert is not None else 0
         self._set_verification_payload(
-            inputs={"probe": self._verify_probe, "routing": self._verify_meta},
+            inputs={"probe": self._verify_probe, "topology": self._verify_meta},
             output=output_slice,
             batch_size=int(self.batch),
             parameter_count=int(param_count),
@@ -143,16 +159,13 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
             output_tolerance=(0.0, 0.0),
-            signature_overrides={
-                "world_size": int(self.world_size),
-                "collective_type": "all_to_all",
-            },
         )
 
     def teardown(self) -> None:
         self.expert = None
         self.inputs = None
         self.expert_ids = None
+        self.local_island = None
         self.output = None
         super().teardown()
 
@@ -169,7 +182,7 @@ class OptimizedWideEPBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
 
 def get_benchmark() -> BaseBenchmark:
-    return OptimizedWideEPBenchmark()
+    return OptimizedMoERouterTopologyBenchmark()
 
 
 if __name__ == "__main__":

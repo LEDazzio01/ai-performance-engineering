@@ -1,9 +1,9 @@
-"""Python harness wrapper for tma_multicast_baseline.cu (Chapter 10).
+"""Python harness wrapper for tma_multicast_cluster.cu (Chapter 10).
 
-This benchmark participates in the harness as a *comparable* baseline for the
-cluster multicast optimization.
+This benchmark participates in the harness as a *comparable* optimized variant
+for the cluster multicast example.
 
-Pairs with: optimized_cluster_multicast.py
+Pairs with: baseline_cluster_multicast.py
 """
 
 from __future__ import annotations
@@ -16,15 +16,15 @@ from core.benchmark.verification import simple_signature
 from core.harness.benchmark_harness import BaseBenchmark
 
 
-class BaselineClusterMulticastBenchmark(CudaBinaryBenchmark):
-    """Runs tma_multicast_baseline.cu (no cluster multicast)."""
+class OptimizedClusterMulticastBenchmark(CudaBinaryBenchmark):
+    """Runs tma_multicast_cluster.cu (cluster multicast)."""
 
     def __init__(self) -> None:
         chapter_dir = Path(__file__).parent
         super().__init__(
             chapter_dir=chapter_dir,
-            binary_name="tma_multicast_baseline",
-            friendly_name="TMA Multicast Baseline (No Cluster Multicast)",
+            binary_name="tma_multicast_cluster",
+            friendly_name="TMA Multicast Optimized (Cluster Multicast)",
             iterations=1,
             warmup=1,
             timeout_seconds=120,
@@ -37,6 +37,8 @@ class BaselineClusterMulticastBenchmark(CudaBinaryBenchmark):
                 "tile_m": 64,
                 "tile_n": 64,
                 "tile_k": 32,
+                "cluster_m": 4,
+                "cluster_n": 1,
             },
         )
         self.register_workload_metadata(bytes_per_iteration=48 * 1024 * 1024)
@@ -53,10 +55,11 @@ class BaselineClusterMulticastBenchmark(CudaBinaryBenchmark):
 
 
 def get_benchmark() -> BaseBenchmark:
-    return BaselineClusterMulticastBenchmark()
+    return OptimizedClusterMulticastBenchmark()
 
 
 if __name__ == "__main__":
     from core.harness.benchmark_harness import benchmark_main
 
     benchmark_main(get_benchmark)
+

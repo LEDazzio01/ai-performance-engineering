@@ -2259,10 +2259,19 @@ def _test_chapter_impl(
     if profiling_output_dir:
         base_config.profiling_output_dir = str(profiling_output_dir)
 
-    # Fields that should not be overridden by individual benchmarks
-    protected_fields: Set[str] = {"enable_memory_tracking", "detect_setup_precomputation"}  # Always track memory and setup precompute detection
+    # BenchmarkConfig fields that should not be overridden by individual benchmarks.
+    # This is computed once per run so it is obvious which knobs are CLI/policy-owned.
+    protected_fields: Set[str] = {"enable_memory_tracking", "detect_setup_precomputation"}
     if enable_profiling:
         protected_fields.update({"enable_profiling", "enable_nsys", "enable_ncu", "enable_nvtx", "profile_type"})
+    caller_owned_fields: Set[str] = set(CALLER_OWNED_FIELDS)
+    if cli_iterations_provided:
+        caller_owned_fields.add("iterations")
+    if cli_warmup_provided:
+        caller_owned_fields.add("warmup")
+    for field_name in protected_fields:
+        if getattr(base_config, field_name, None):
+            caller_owned_fields.add(field_name)
 
     def _merged_config(benchmark_obj) -> BenchmarkConfig:
         merged = copy.deepcopy(base_config)
@@ -2274,7 +2283,7 @@ def _test_chapter_impl(
                 value = getattr(override, field.name, None)
                 if value is None:
                     continue
-                if field.name in CALLER_OWNED_FIELDS:
+                if field.name in caller_owned_fields:
                     continue
                 if field.name == "launch_via":
                     base_value = getattr(merged, field.name, None)
@@ -2303,13 +2312,7 @@ def _test_chapter_impl(
                             **value,
                         }
                     continue
-                if field.name == "iterations" and cli_iterations_provided:
-                    continue
-                if field.name == "warmup" and cli_warmup_provided:
-                    continue
                 if field.name == "env_passthrough" and not value:
-                    continue
-                if field.name in protected_fields and getattr(base_config, field.name):
                     continue
                 setattr(merged, field.name, copy.deepcopy(value))
         merged._sync_execution_mode()

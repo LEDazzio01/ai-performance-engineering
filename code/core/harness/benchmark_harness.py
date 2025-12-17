@@ -1558,11 +1558,39 @@ class BenchmarkHarness:
             raise RuntimeError(message)
 
         nproc_per_node = getattr(config, "nproc_per_node", None) or 1
-        torchrun_cmd: List[str] = [
-            "torchrun",
-            "--nproc_per_node",
-            str(nproc_per_node),
-        ]
+        def _sockets_permitted() -> bool:
+            """Return True if the runtime can create sockets (required by torchrun rendezvous)."""
+            try:
+                import socket
+
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.close()
+                return True
+            except Exception:
+                return False
+
+        sockets_permitted = _sockets_permitted()
+
+        # Torchrun rendezvous uses TCPStore even when nproc_per_node=1. Some sandboxed
+        # environments disallow socket syscalls entirely; in that case, fall back to
+        # launching the wrapper directly for single-process runs so we can still enforce
+        # invariants like seed immutability.
+        if not sockets_permitted:
+            nnodes = int(getattr(config, "nnodes", None) or 1)
+            if nnodes != 1:
+                raise RuntimeError("Torchrun launch requires socket permissions (nnodes>1 requested).")
+            if int(nproc_per_node) != 1:
+                raise RuntimeError("Torchrun launch requires socket permissions (nproc_per_node>1 requested).")
+            if getattr(config, "rdzv_backend", None) or getattr(config, "rdzv_endpoint", None):
+                raise RuntimeError("Torchrun rendezvous flags require socket permissions in this environment.")
+            print("[harness] sockets unavailable; launching torchrun wrapper directly (single process)", flush=True)
+            torchrun_cmd = [sys.executable]
+        else:
+            torchrun_cmd = [
+                "torchrun",
+                "--nproc_per_node",
+                str(nproc_per_node),
+            ]
         if getattr(config, "nnodes", None):
             torchrun_cmd.extend(["--nnodes", str(config.nnodes)])
         if getattr(config, "rdzv_backend", None) or getattr(config, "nnodes", None):
@@ -1631,6 +1659,16 @@ class BenchmarkHarness:
                 env[key] = os.environ[key]
         print(f"[harness] torchrun env passthrough: {getattr(config, 'env_passthrough', [])}", flush=True)
         env.update(spec.env)
+        if not sockets_permitted:
+            env.setdefault("RANK", "0")
+            env.setdefault("LOCAL_RANK", "0")
+            env.setdefault("WORLD_SIZE", "1")
+            env.setdefault("LOCAL_WORLD_SIZE", "1")
+            env.setdefault("GROUP_RANK", "0")
+            env.setdefault("ROLE_RANK", "0")
+            env.setdefault("ROLE_NAME", "default")
+            env.setdefault("MASTER_ADDR", "127.0.0.1")
+            env.setdefault("MASTER_PORT", "29500")
 
         stdout = ""
         stderr = ""
