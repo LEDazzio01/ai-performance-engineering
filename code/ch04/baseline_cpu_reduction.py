@@ -62,8 +62,7 @@ class BaselineCpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         ).to(self.device).eval()
         
         self.input = torch.randn(self.batch_size, self.hidden_dim, device=self.device)
-        shard_size = self.batch_size // self.num_shards
-        self.output = torch.zeros(shard_size, self.hidden_dim, device=self.device)
+        self.output = None
         torch.cuda.synchronize(self.device)
     
     def benchmark_fn(self) -> None:
@@ -77,8 +76,10 @@ class BaselineCpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
                 # This is the bottleneck: multiple GPU->CPU copies + CPU addition
                 cpu_shards = [shard.cpu() for shard in shards]
                 reduced = sum(cpu_shards) / float(self.num_shards)
-                # Copy result back to GPU
-                self.output = reduced.to(self.device)
+                # Copy result back to GPU (allocate once, then reuse buffer)
+                if self.output is None:
+                    self.output = torch.empty_like(reduced, device=self.device)
+                self.output.copy_(reduced, non_blocking=False)
         self._synchronize()
 
     def capture_verification_payload(self) -> None:

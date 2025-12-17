@@ -65,11 +65,8 @@ class OptimizedGpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         ).to(self.device).eval()
         
         self.input = torch.randn(self.batch_size, self.hidden_dim, device=self.device)
-        # Pre-allocate output buffer (reused each iteration)
-        shard_size = self.batch_size // self.num_shards
-        self.output = torch.zeros(shard_size, self.hidden_dim, device=self.device)
-        # Pre-allocate reduction buffer
-        self._reduction_buffer = torch.zeros(shard_size, self.hidden_dim, device=self.device)
+        self.output = None
+        self._reduction_buffer = None
         torch.cuda.synchronize(self.device)
 
     def benchmark_fn(self) -> None:
@@ -88,6 +85,10 @@ class OptimizedGpuReductionBenchmark(VerificationPayloadMixin, BaseBenchmark):
             shards = torch.chunk(out, chunks=self.num_shards, dim=0)
             
             # In-place sum reduction (stays on GPU)
+            if self._reduction_buffer is None or self.output is None:
+                shard0 = shards[0]
+                self._reduction_buffer = torch.empty_like(shard0)
+                self.output = torch.empty_like(shard0)
             self._reduction_buffer.zero_()
             for shard in shards:
                 self._reduction_buffer.add_(shard)
