@@ -5,6 +5,7 @@ from typing import Callable, Optional
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from labs.fullstack_cluster import baseline_matmul
 
@@ -12,7 +13,7 @@ from labs.fullstack_cluster import baseline_matmul
 TensorFn = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
-class CapstoneMatmulBenchmark(BaseBenchmark):
+class CapstoneMatmulBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Shared benchmark wrapper for the capstone GEMM kernels."""
 
     def __init__(
@@ -85,6 +86,23 @@ class CapstoneMatmulBenchmark(BaseBenchmark):
     def get_config(self) -> Optional[BenchmarkConfig]:
         return self._config
 
+    def capture_verification_payload(self) -> None:
+        if self._lhs is None or self._rhs is None or self._last_output is None:
+            raise RuntimeError("benchmark_fn() must be called before capture_verification_payload()")
+        self._set_verification_payload(
+            inputs={"lhs": self._lhs, "rhs": self._rhs},
+            output=self._last_output,
+            batch_size=self._size,
+            parameter_count=self._parameter_count,
+            precision_flags={
+                "fp16": True,
+                "bf16": False,
+                "fp8": False,
+                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
+            },
+            output_tolerance=(1e-3, 200.0),
+        )
+
     def validate_result(self) -> Optional[str]:
         if not self._validate:
             return None
@@ -110,40 +128,3 @@ class CapstoneMatmulBenchmark(BaseBenchmark):
             f"{self._label}.bytes_transferred": bytes_transferred,
             f"{self._label}.arithmetic_intensity": flops / bytes_transferred if bytes_transferred > 0 else 0.0,
         }
-
-    def get_verify_output(self) -> torch.Tensor:
-        if self._last_output is None:
-            raise RuntimeError("benchmark_fn() must be called before verification")
-        return self._last_output.detach().clone()
-
-    def get_verify_inputs(self) -> dict:
-        if self._lhs is None or self._rhs is None:
-            raise RuntimeError("setup() must be called before get_verify_inputs()")
-        return {"lhs": self._lhs, "rhs": self._rhs}
-
-    def get_input_signature(self) -> dict:
-        if self._lhs is None or self._rhs is None:
-            raise RuntimeError("setup() must be called before get_input_signature()")
-        return {
-            "label": self._label,
-            "size": self._size,
-            "shapes": {
-                "lhs": tuple(self._lhs.shape),
-                "rhs": tuple(self._rhs.shape),
-            },
-            "dtypes": {
-                "lhs": str(self._lhs.dtype),
-                "rhs": str(self._rhs.dtype),
-            },
-            "batch_size": int(self._size),
-            "parameter_count": int(self._parameter_count),
-            "precision_flags": {
-                "fp16": True,
-                "bf16": False,
-                "fp8": False,
-                "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
-            },
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        return (1e-3, 200.0)
