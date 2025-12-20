@@ -29,7 +29,6 @@ from contextlib import contextmanager, nullcontext
 from typing import Optional
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -191,10 +190,6 @@ class OptimizedFlashAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize tiled attention model."""
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            enable_tf32()  # Enable TF32 for Tensor Cores (Ampere+)
-        
         torch.manual_seed(42)
         
         # Use FP16 for tensor core acceleration

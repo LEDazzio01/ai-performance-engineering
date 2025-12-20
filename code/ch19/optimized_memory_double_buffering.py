@@ -57,9 +57,6 @@ class OptimizedMemoryDoubleBufferingBenchmark(VerificationPayloadMixin, BaseBenc
         """Setup: Initialize model and double buffers."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         self.model = nn.Sequential(
             nn.Linear(self.hidden_dim, self.hidden_dim * 4),
             nn.ReLU(),

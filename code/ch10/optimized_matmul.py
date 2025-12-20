@@ -16,7 +16,6 @@ import torch
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from core.utils.compile_utils import enable_tf32
 
 
 def resolve_device() -> torch.device:
@@ -53,11 +52,6 @@ class OptimizedTensorCoreBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: initialize matrices with same workload as baseline."""
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
-        
         torch.manual_seed(42)
         # Keep FP32 inputs for signature/workload equivalence with baseline.
         self.A = torch.randn(self.n, self.n, device=self.device, dtype=torch.float32)

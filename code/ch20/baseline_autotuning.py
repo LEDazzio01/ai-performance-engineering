@@ -15,7 +15,6 @@ import ch20.arch_config  # noqa: F401 - Apply chapter defaults
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 
 
 class AutotuneModel(nn.Module):
@@ -70,7 +69,6 @@ class BaselineAutotuningBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        enable_tf32(set_global_precision=True)
 
         self.model = AutotuneModel(self.hidden_dim).to(self.device, dtype=torch.bfloat16).eval()
         self.inputs = torch.randn(self.batch, self.hidden_dim, device=self.device, dtype=torch.bfloat16)

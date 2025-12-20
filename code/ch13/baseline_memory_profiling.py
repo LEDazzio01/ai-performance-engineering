@@ -9,7 +9,6 @@ import torch.nn as nn
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 
 
 class SimpleModel(nn.Module):
@@ -55,10 +54,6 @@ class BaselineMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         torch.manual_seed(42)
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
         torch.cuda.reset_peak_memory_stats()
         
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()

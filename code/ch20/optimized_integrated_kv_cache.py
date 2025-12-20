@@ -29,7 +29,6 @@ except ImportError:  # pragma: no cover - older PyTorch fallback
 
 from typing import Optional
 
-from core.utils.compile_utils import enable_tf32
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
@@ -225,11 +224,6 @@ class OptimizedIntegratedKVCacheBenchmark(VerificationPayloadMixin, BaseBenchmar
         """Setup: Initialize model with integrated KV cache."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
-            enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         

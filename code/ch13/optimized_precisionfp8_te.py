@@ -5,7 +5,7 @@ from __future__ import annotations
 import ctypes
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -16,7 +16,6 @@ import torch.nn as nn
 from torch.optim import Optimizer
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import configure_tf32, restore_tf32
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -85,7 +84,6 @@ class OptimizedTEFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self.static_target: Optional[torch.Tensor] = None
         self.graph: Optional[torch.cuda.CUDAGraph] = None
         self.capture_stream: Optional[torch.cuda.Stream] = None
-        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -118,9 +116,6 @@ class OptimizedTEFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
             # Use default scaling factor compute (callable required; default uses margin-based scaling)
             scaling_factor_compute_algo=None,
         )
-        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
@@ -218,13 +213,10 @@ class OptimizedTEFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self.capture_stream = None
         self.input_pool = []
         self.target_pool = []
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
         super().teardown()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=50, warmup=10)
+        return BenchmarkConfig(iterations=50, warmup=10, backend_policy="fp32_strict")
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""

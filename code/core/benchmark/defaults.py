@@ -111,6 +111,7 @@ class BenchmarkDefaults:
     multi_gpu_required: bool = False
     profile_type: str = "minimal"
     nsys_nvtx_include: Optional[List[str]] = None
+    backend_policy: str = "performance"
     
     # Reproducibility defaults
     # Default to nondeterministic for performance; users can opt-in if needed.
@@ -183,6 +184,7 @@ class BenchmarkDefaults:
             "multi_gpu_required": self.multi_gpu_required,
             "profile_type": self.profile_type,
             "nsys_nvtx_include": self.nsys_nvtx_include,
+            "backend_policy": self.backend_policy,
             "deterministic": self.deterministic,
             "seed": self.seed,
             "setup_timeout_seconds": self.setup_timeout_seconds,

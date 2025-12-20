@@ -56,11 +56,6 @@ class BaselineTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-            # The harness enables TF32 globally as a "quick win". Disable it for
-            # this baseline so we measure true FP32 (non-TF32) GEMM behavior.
-            torch.backends.cuda.matmul.allow_tf32 = False
-            torch.backends.cudnn.allow_tf32 = False
-            torch.set_float32_matmul_precision("highest")
         # Baseline: FP32 operations without tensor cores
         # Tensor cores accelerate FP16/BF16 matrix operations
         # This baseline uses FP32 which doesn't use tensor cores
@@ -106,6 +101,7 @@ class BaselineTensorCoresBenchmark(VerificationPayloadMixin, BaseBenchmark):
         return BenchmarkConfig(
             iterations=20,
             warmup=5,
+            backend_policy="fp32_strict",
         )
     
     def get_custom_metrics(self) -> Optional[dict]:

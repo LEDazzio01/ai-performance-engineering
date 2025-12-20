@@ -10,7 +10,6 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-from core.utils.compile_utils import enable_tf32
 from torch.distributed.fsdp import (
     BackwardPrefetch,
     FullyShardedDataParallel as FSDP,
@@ -106,8 +105,6 @@ def main():
     rank, world_size, local_rank = _init_distributed()
     _set_seed(1337 + rank)
 
-    enable_tf32()
-    torch.backends.cudnn.benchmark = True
 
     dataloader, sampler = _build_dataloader(args.sequence_length, args.micro_batch_size, rank, world_size)
 

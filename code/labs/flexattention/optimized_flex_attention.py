@@ -18,7 +18,6 @@ from torch.nn.attention.flex_attention import flex_attention
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 from labs.flexattention.flexattention_common import (
     build_flex_attention_inputs,
     make_relative_bias_score_mod,
@@ -74,7 +73,6 @@ class OptimizedFlexAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-        enable_tf32()
         torch._inductor.config.triton.cudagraphs = True
         torch._inductor.config.max_autotune = True
 

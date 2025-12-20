@@ -36,7 +36,6 @@ from core.harness.cuda_capabilities import tma_support_status
 
 def _enable_blackwell_compiler_defaults() -> None:
     """Turn on Blackwell-friendly defaults for torch.compile/Inductor."""
-    torch.set_float32_matmul_precision("high")
     try:
         from torch._inductor import config as triton_cfg  # type: ignore
 

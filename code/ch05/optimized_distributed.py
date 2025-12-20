@@ -31,9 +31,6 @@ class OptimizedDistributedBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize data and (optional) distributed process group."""
         skip_if_insufficient_gpus()
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         
         # Initialize distributed if running in multi-rank mode

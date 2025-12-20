@@ -21,7 +21,6 @@ if str(REPO_ROOT) not in sys.path:
 from arch_config import prefer_sdpa_backends
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
@@ -64,7 +63,6 @@ class OptimizedDecodeAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark)
             raise RuntimeError("labs.moe_cuda decode attention requires CUDA")
 
         # Optimization: Enable TF32 for faster matmuls
-        enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 

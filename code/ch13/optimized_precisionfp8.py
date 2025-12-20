@@ -16,7 +16,6 @@ from torch.amp import autocast
 from torch.cuda.amp import GradScaler
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -81,9 +80,6 @@ class OptimizedFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def setup(self) -> None:
-        enable_tf32()
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)

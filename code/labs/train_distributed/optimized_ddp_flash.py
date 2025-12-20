@@ -12,7 +12,6 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import fp16_compress_hook
-from core.utils.compile_utils import enable_tf32
 
 from labs.train_distributed.training_utils.utils import (
     build_dataloader,
@@ -71,8 +70,6 @@ def main():
     is_main = rank == 0
 
     set_seed(2025 + rank)
-    enable_tf32()
-    torch.backends.cudnn.benchmark = True
 
     tokenizer = build_tokenizer()
     dataset = get_dataset()["train"]

@@ -9,7 +9,6 @@ import torch.nn as nn
 from torch.amp import autocast
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import configure_tf32, restore_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -51,7 +50,6 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.batch_size = 512
         self.hidden_dim = 2048
         self.micro_steps = 4
-        self._tf32_state = None
         tokens = self.batch_size * self.hidden_dim
         self._workload = WorkloadMetadata(
             requests_per_iteration=float(self.micro_steps),
@@ -70,9 +68,6 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
-            # Match baseline's TF32 configuration so the speedup reflects bf16/autocast
-            # rather than TF32 or cuDNN autotuning.
-            self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
         
         # Keep the "precision mixed" story focused: use bf16 autocast with FP32 weights.
         # BF16 keeps the FP32 exponent range and typically does not require gradient scaling.
@@ -141,9 +136,6 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.targets = None
         self.optimizer = None
         self.criterion = None
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -153,6 +145,7 @@ class OptimizedPrecisionMixedBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            backend_policy="fp32_strict",
         )
     def get_workload_metadata(self) -> Optional[WorkloadMetadata]:
         return self._workload

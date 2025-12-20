@@ -37,6 +37,7 @@ import torch
 
 from core.utils.compile_utils import enable_tf32
 from core.benchmark.verification_mixin import VerificationPayloadMixin
+from core.harness.backend_policy import apply_backend_policy, normalize_backend_policy, restore_backend_policy
 
 if TYPE_CHECKING:
     from core.benchmark.models import (
@@ -425,6 +426,7 @@ class BenchmarkConfig:
     profile_mode: Optional[str] = field(default_factory=lambda: _get_default_value("profile_mode", "none"))
     profile_type: str = field(default_factory=lambda: _get_default_value("profile_type", "minimal"))
     nsys_nvtx_include: Optional[List[str]] = field(default_factory=lambda: _get_default_value("nsys_nvtx_include", None))
+    backend_policy: str = field(default_factory=lambda: _get_default_value("backend_policy", "performance"))
     enable_nvtx: Optional[bool] = field(default_factory=lambda: _get_default_value("enable_nvtx", None))
     enable_cleanup: bool = field(default_factory=lambda: _get_default_value("enable_cleanup", False))
     use_subprocess: bool = field(default_factory=lambda: _get_default_value("use_subprocess", True))
@@ -1341,11 +1343,6 @@ class BenchmarkHarness:
             "deterministic_mode": self.config.deterministic,
         }
         
-        if self.config.deterministic:
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-            torch.use_deterministic_algorithms(True, warn_only=True)
-        
         if self.config.seed is not None:
             seed = self.config.seed
             random.seed(seed)
@@ -1360,13 +1357,6 @@ class BenchmarkHarness:
             if LOGGER_AVAILABLE:
                 logger.info(f"Seeds set to {seed} (random, numpy, torch, cuda)")
         
-        # Log deterministic mode warning if enabled
-        if self.config.deterministic and LOGGER_AVAILABLE:
-            logger.info(
-                "Deterministic mode enabled (may impact performance by 5-20%). "
-                "This ensures bitwise reproducibility, but forces slower fallback kernels and ops without deterministic support may raise."
-            )
-
         # Always capture current seeds for mutation detection, even if we did not explicitly seed.
         try:
             seed_info["torch_seed"] = int(torch.initial_seed())
@@ -2022,6 +2012,18 @@ class BenchmarkHarness:
             else:
                 gpu_mem_logger = None
 
+        backend_state = None
+        if config.launch_via != LaunchVia.TORCHRUN and config.execution_mode != ExecutionMode.SUBPROCESS:
+            policy_name = normalize_backend_policy(getattr(config, "backend_policy", None))
+            backend_state = apply_backend_policy(policy_name, bool(config.deterministic))
+            if self._seed_info is not None:
+                self._seed_info["deterministic_mode"] = bool(config.deterministic)
+            if config.deterministic and LOGGER_AVAILABLE:
+                logger.info(
+                    "Deterministic mode enabled (may impact performance by 5-20%). "
+                    "This ensures bitwise reproducibility, but forces slower fallback kernels and ops without deterministic support may raise."
+                )
+
         try:
             if config.launch_via == LaunchVia.TORCHRUN:
                 print("[harness] dispatch torchrun", flush=True)
@@ -2033,6 +2035,8 @@ class BenchmarkHarness:
             return self._benchmark_with_threading(benchmark, config)
         finally:
             benchmark._config = previous_config  # type: ignore[attr-defined]
+            if backend_state is not None:
+                restore_backend_policy(backend_state)
             if gpu_mem_logger is not None:
                 log_file = gpu_mem_logger.stop()
                 if LOGGER_AVAILABLE:

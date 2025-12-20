@@ -22,7 +22,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from core.utils import compile_utils as _compile_utils_patch  # noqa: F401
-from core.utils.compile_utils import enable_tf32, maybe_nested_compile_region
+from core.utils.compile_utils import maybe_nested_compile_region
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
@@ -170,19 +170,6 @@ class OptimizedRegionalCompilationBenchmark(VerificationPayloadMixin, BaseBenchm
         _ = layer_indices
         self._iteration = 0
         self.setup()
-
-    def _configure_runtime(self) -> None:
-        """Enable TF32 tensor cores + high matmul precision for BF16 execution."""
-        enable_tf32()
-        try:
-            torch.set_float32_matmul_precision("high")
-        except Exception as e:
-            import warnings
-            warnings.warn(
-                f"Failed to set float32_matmul_precision='high': {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
 
     def _prepare_cuda_graphs(self) -> None:
         """Capture CUDA graphs per sequence length to eliminate Python overhead."""

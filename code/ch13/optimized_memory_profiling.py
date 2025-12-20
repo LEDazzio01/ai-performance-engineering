@@ -9,7 +9,6 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -64,10 +63,6 @@ class OptimizedMemoryProfilingBenchmark(VerificationPayloadMixin, BaseBenchmark)
         )
     
     def setup(self) -> None:
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
         torch.manual_seed(42)
         torch.cuda.reset_peak_memory_stats()
         

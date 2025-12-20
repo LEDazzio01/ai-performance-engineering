@@ -44,9 +44,6 @@ class OptimizedCudaGraphsBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize tensors and load CUDA extension."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         self._extension = load_cuda_graphs_extension()
         
         torch.manual_seed(42)

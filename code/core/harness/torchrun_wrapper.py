@@ -23,13 +23,11 @@ from typing import Optional
 import numpy as np
 import torch
 
+from core.harness.backend_policy import BackendPolicyName, apply_backend_policy
 
-def _set_deterministic_mode(enabled: bool) -> None:
-    if not enabled:
-        return
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True, warn_only=True)
+
+def _apply_backend_policy(deterministic: bool) -> None:
+    apply_backend_policy(BackendPolicyName.PERFORMANCE, deterministic)
 
 
 def _set_seeds(seed: int) -> None:
@@ -91,7 +89,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     if not script_path.exists():
         raise FileNotFoundError(f"Target script not found: {script_path}")
 
-    _set_deterministic_mode(bool(args.aisp_deterministic))
+    _apply_backend_policy(bool(args.aisp_deterministic))
     _set_seeds(int(args.aisp_expected_torch_seed))
 
     expected_torch_seed = int(args.aisp_expected_torch_seed)
@@ -123,4 +121,3 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
@@ -13,7 +13,6 @@ if str(repo_root) not in sys.path:
 import torch
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import configure_tf32, restore_tf32
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -39,7 +38,6 @@ class OptimizedCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
         self.C: Optional[torch.Tensor] = None
-        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.m * self.n),
@@ -51,15 +49,6 @@ class OptimizedCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         
-        # Only use the new matmul precision APIs to avoid mixed-mode warnings.
-        self._tf32_state = configure_tf32(
-            enable_matmul=True,
-            enable_cudnn=True,
-            matmul_precision="high",
-            cudnn_precision="high",
-        )
-        torch.set_float32_matmul_precision("high")
-
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
         self.C = None
@@ -102,9 +91,6 @@ class OptimizedCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Restore TF32 knobs and free tensors."""
         self.A = None
         self.B = None
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

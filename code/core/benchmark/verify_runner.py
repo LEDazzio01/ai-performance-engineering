@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 
+from core.harness.backend_policy import apply_backend_policy, normalize_backend_policy, restore_backend_policy
 from core.benchmark.verification import (
     ComparisonDetails,
     EnforcementPhase,
@@ -798,35 +799,45 @@ class VerifyRunner:
         # Benchmarks should create fixed inputs in setup(), not benchmark_fn().
         seed_info = set_deterministic_seeds(seed)
         
-        # Setup creates model and fixed inputs deterministically
-        benchmark.setup()
-        
-        # Block CUDA graphs in verification to prevent capture/replay cheating
         cfg = getattr(benchmark, "_config", None) or getattr(benchmark, "config", None)
-        if getattr(cfg, "enable_cuda_graph", False) or getattr(benchmark, "enable_cuda_graph", False):
-            raise RuntimeError("Verification forbids CUDA graph capture. Disable enable_cuda_graph for verify runs.")
-        
-        inputs_for_validation: Dict[str, torch.Tensor] = {}
-        signature: Optional[InputSignature] = None
-        stream_auditor = None
-        pre_streams: List[int] = []
-        audit_ctx = nullcontext()
-        declared_streams: List[Any] = []
-        device = getattr(benchmark, "device", None)
-        use_cuda = bool(torch.cuda.is_available() and isinstance(device, torch.device) and device.type == "cuda")
-        if use_cuda:
-            from core.harness.validity_checks import audit_streams, get_active_streams
-            if hasattr(benchmark, "get_custom_streams"):
-                try:
-                    custom_streams = benchmark.get_custom_streams()
-                    if custom_streams:
-                        declared_streams = [custom_streams] if isinstance(custom_streams, torch.cuda.Stream) else list(custom_streams)
-                except Exception as exc:
-                    raise RuntimeError(f"get_custom_streams() failed during verification: {exc}")
-            audit_ctx = audit_streams(getattr(benchmark, "device", None))
-            pre_streams = get_active_streams(getattr(benchmark, "device", None), declared_streams)
-        
+        if cfg is None and hasattr(benchmark, "get_config"):
+            try:
+                cfg = benchmark.get_config()
+            except Exception:
+                cfg = None
+
+        policy_name = normalize_backend_policy(getattr(cfg, "backend_policy", None))
+        backend_state = apply_backend_policy(policy_name, deterministic=True)
+
         try:
+            # Setup creates model and fixed inputs deterministically
+            benchmark.setup()
+
+            # Block CUDA graphs in verification to prevent capture/replay cheating
+            cfg = getattr(benchmark, "_config", None) or getattr(benchmark, "config", None) or cfg
+            if getattr(cfg, "enable_cuda_graph", False) or getattr(benchmark, "enable_cuda_graph", False):
+                raise RuntimeError("Verification forbids CUDA graph capture. Disable enable_cuda_graph for verify runs.")
+
+            inputs_for_validation: Dict[str, torch.Tensor] = {}
+            signature: Optional[InputSignature] = None
+            stream_auditor = None
+            pre_streams: List[int] = []
+            audit_ctx = nullcontext()
+            declared_streams: List[Any] = []
+            device = getattr(benchmark, "device", None)
+            use_cuda = bool(torch.cuda.is_available() and isinstance(device, torch.device) and device.type == "cuda")
+            if use_cuda:
+                from core.harness.validity_checks import audit_streams, get_active_streams
+                if hasattr(benchmark, "get_custom_streams"):
+                    try:
+                        custom_streams = benchmark.get_custom_streams()
+                        if custom_streams:
+                            declared_streams = [custom_streams] if isinstance(custom_streams, torch.cuda.Stream) else list(custom_streams)
+                    except Exception as exc:
+                        raise RuntimeError(f"get_custom_streams() failed during verification: {exc}")
+                audit_ctx = audit_streams(getattr(benchmark, "device", None))
+                pre_streams = get_active_streams(getattr(benchmark, "device", None), declared_streams)
+
             # Run benchmark function under stream audit when CUDA is available
             with audit_ctx as stream_auditor:
                 if stream_auditor is not None:
@@ -861,17 +872,17 @@ class VerifyRunner:
 
                 # Payload-backed signatures are extracted post-run.
                 signature = self._extract_signature(benchmark)
-            
+
             # Sync CUDA
             if use_cuda:
                 torch.cuda.synchronize(getattr(benchmark, "device", None))
-            
+
             # Extract outputs
             outputs = self._extract_output(benchmark)
             metrics = self._extract_workload_metrics(benchmark)
             if signature is None:
                 raise RuntimeError("get_input_signature() did not produce a signature during verification run")
-            
+
             # Stream audit check for verification path
             if stream_auditor is not None:
                 from core.harness.validity_checks import check_stream_sync_completeness, get_active_streams
@@ -905,13 +916,13 @@ class VerifyRunner:
                     raise RuntimeError(
                         "STREAM TIMING VIOLATION (verification): " + " | ".join(issues)
                     )
-            
+
             # Check for seed mutation
             if detect_seed_mutation(seed_info):
                 raise RuntimeError("Benchmark mutated RNG seeds during execution")
-            
+
             return outputs, metrics, seed_info, inputs_for_validation, signature
-            
+
         finally:
             # Always teardown
             if hasattr(benchmark, "teardown"):
@@ -919,6 +930,7 @@ class VerifyRunner:
                     benchmark.teardown()
                 except Exception:
                     pass
+            restore_backend_policy(backend_state)
 
     def _validate_inputs_match_signature(
         self,

@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
 
@@ -37,11 +36,6 @@ class OptimizedQuantizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
     
     def setup(self) -> None:
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
-        
         torch.manual_seed(42)
         self.model = nn.Sequential(
             nn.Linear(256, 512),

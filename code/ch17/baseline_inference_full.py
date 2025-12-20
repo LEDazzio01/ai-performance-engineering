@@ -52,8 +52,6 @@ class BaselineInferenceFullBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def setup(self) -> None:
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         random.seed(42)

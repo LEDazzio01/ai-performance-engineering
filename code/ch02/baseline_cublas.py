@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import configure_tf32, restore_tf32
 
 
 class BaselineCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -27,7 +26,6 @@ class BaselineCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None
         self.C: Optional[torch.Tensor] = None
-        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         tokens = self.m * self.n
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
@@ -40,8 +38,6 @@ class BaselineCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         
-        self._tf32_state = configure_tf32(matmul_precision="highest", cudnn_precision="highest")
-
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
         self.C = None
@@ -76,14 +72,10 @@ class BaselineCublasBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Restore TF32 settings and free tensors."""
         self.A = None
         self.B = None
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
-
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=50, warmup=5)
+        return BenchmarkConfig(iterations=50, warmup=5, backend_policy="fp32_strict")
 
     def get_workload_metadata(self):
         return self._workload

@@ -44,9 +44,6 @@ class OptimizedContinuousBatchingBenchmark(VerificationPayloadMixin, BaseBenchma
     
     def setup(self) -> None:
         """Setup: initialize model and request queue."""
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         

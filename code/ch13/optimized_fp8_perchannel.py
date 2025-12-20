@@ -25,7 +25,6 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
-from core.utils.compile_utils import configure_tf32, restore_tf32
 
 
 class FP8PerChannelLinear(nn.Module):
@@ -124,8 +123,6 @@ class OptimizedFP8PerChannelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.in_features = 4096
         self.out_features = 4096
         self.dtype = torch.float32
-        self._tf32_state = None
-        self._prev_precision: Optional[str] = None
         self._last = 0.0
         self._error_sum = 0.0
         self._verify_input: Optional[torch.Tensor] = None
@@ -148,10 +145,6 @@ class OptimizedFP8PerChannelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
 
-        self._prev_precision = torch.get_float32_matmul_precision()
-        self._tf32_state = configure_tf32(enable_matmul=True, enable_cudnn=True)
-        torch.set_float32_matmul_precision("high")
-        
         # Create model with per-channel FP8
         self.model = FP8PerChannelLinear(
             self.in_features, self.out_features
@@ -215,11 +208,6 @@ class OptimizedFP8PerChannelBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.model = None
         self.ref_model = None
         self.x = None
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
-        if self._prev_precision is not None:
-            torch.set_float32_matmul_precision(self._prev_precision)  # type: ignore[arg-type]
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

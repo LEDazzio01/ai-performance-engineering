@@ -47,9 +47,6 @@ class OptimizedKernelLaunchesBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: initialize tensor and capture CUDA graph."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         # Use bfloat16 for GPU performance
         dtype = torch.bfloat16 if self.device.type == "cuda" and torch.cuda.is_bf16_supported() else torch.float32
         self.x_template = torch.randn(*self.size, device=self.device, dtype=dtype)

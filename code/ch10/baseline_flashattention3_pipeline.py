@@ -29,7 +29,6 @@ import torch.nn.functional as F
 from typing import Optional
 import math
 
-from core.utils.compile_utils import enable_tf32
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
@@ -157,10 +156,6 @@ class BaselineFlashAttention3Benchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup baseline attention model."""
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            enable_tf32()
-        
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)

@@ -136,10 +136,6 @@ class OptimizedRegionalCompileBenchmark(VerificationPayloadMixin, BaseBenchmark)
         torch.cuda.manual_seed_all(42)
         
         # Enable cuDNN autotuning for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-        
         self.model = TinyTransformerBlock(
             hidden=self.hidden,
             num_heads=self.num_heads,

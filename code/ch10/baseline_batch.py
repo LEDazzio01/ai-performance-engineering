@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 from ch10.workload_config import WORKLOAD
 
@@ -45,10 +44,6 @@ class BaselineBatchBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize model with small batch size."""
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
         # Harness provides seeding - model and input creation order must match optimized
         self.model = nn.Sequential(
             nn.Linear(self.hidden_dim, self.ffn_dim),

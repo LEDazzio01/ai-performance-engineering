@@ -15,7 +15,7 @@ if str(repo_root) not in sys.path:
 
 import torch
 
-from typing import Optional, Tuple
+from typing import Optional
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (  # noqa: E402
@@ -25,7 +25,6 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
-from core.utils.compile_utils import configure_tf32, restore_tf32
 
 
 class BaselineCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -41,7 +40,6 @@ class BaselineCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.n = 4096
         self.k = 4096
         self.block_k = 128
-        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         self._workload = WorkloadMetadata(
             requests_per_iteration=1.0,
             tokens_per_iteration=float(self.m * self.n),
@@ -59,12 +57,6 @@ class BaselineCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Using FP16 to match optimized version for fair comparison
         # Disable TF32 to use standard GEMM kernels (not CUTLASS-optimized)
         # Match optimized version backend settings for fair comparison
-        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
-        torch.set_float32_matmul_precision("high")
-        # Match optimized version cuDNN settings
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         # Match optimized version dtype for fair comparison
         self.A = torch.randn(self.m, self.k, device=self.device, dtype=torch.float16)
         self.B = torch.randn(self.k, self.n, device=self.device, dtype=torch.float16)
@@ -121,9 +113,6 @@ class BaselineCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.A = None
         self.B = None
         self.C = None
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
         torch.cuda.empty_cache()
     
     def get_config(self) -> BenchmarkConfig:
@@ -133,6 +122,7 @@ class BaselineCutlassBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=5,
             enable_memory_tracking=False,
             enable_profiling=False,
+            backend_policy="fp32_strict",
         )
 
     def get_custom_metrics(self) -> Optional[dict]:

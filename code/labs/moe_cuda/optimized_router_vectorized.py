@@ -22,7 +22,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 
 
@@ -153,7 +152,6 @@ class VectorizedRouterBenchmark(VerificationPayloadMixin, BaseBenchmark):
         except Exception:
             pass
         
-        enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         model = GroupedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)

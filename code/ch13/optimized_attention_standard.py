@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.utils.compile_utils import enable_tf32
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig, WorkloadMetadata
 
@@ -61,10 +60,6 @@ class OptimizedAttentionFlexBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
     
     def setup(self) -> None:
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
         torch.manual_seed(42)
         
         self.model = FlexAttention(hidden_dim=self.hidden_dim, num_heads=8).to(self.device).eval()

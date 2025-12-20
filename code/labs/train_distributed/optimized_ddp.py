@@ -16,10 +16,8 @@ from pathlib import Path
 
 try:
     from arch_config import prefer_sdpa_backends  # type: ignore
-    from core.utils.compile_utils import enable_tf32  # type: ignore
 except Exception:  # pragma: no cover - defensive
     prefer_sdpa_backends = None  # type: ignore
-    enable_tf32 = None  # type: ignore
 
 from labs.train_distributed.training_utils.utils import (
     build_dataloader,
@@ -76,18 +74,6 @@ def main():
 
     rank = dist.get_rank()
     set_seed(2025 + rank)
-    if enable_tf32 is not None:
-        enable_tf32(set_global_precision=True)
-    else:
-        torch.set_float32_matmul_precision("high")
-        matmul_backend = getattr(torch.backends.cuda, "matmul", None)
-        if matmul_backend is not None and hasattr(matmul_backend, "fp32_precision"):
-            matmul_backend.fp32_precision = "high"  # type: ignore[attr-defined]
-        cudnn_conv = getattr(torch.backends.cudnn, "conv", None)
-        if cudnn_conv is not None and hasattr(cudnn_conv, "fp32_precision"):
-            cudnn_conv.fp32_precision = "tf32"  # type: ignore[attr-defined]
-    torch.backends.cudnn.benchmark = True
-
     tokenizer = build_tokenizer()
     dataset = get_dataset()["train"]
 

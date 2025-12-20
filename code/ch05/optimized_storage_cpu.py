@@ -32,9 +32,6 @@ class OptimizedStorageGdsBenchmark(VerificationPayloadMixin, BaseBenchmark):
     
     def setup(self) -> None:
         """Setup: Initialize data and create temp file."""
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data = torch.randn(self.size, device=self.device, dtype=torch.float32)
         

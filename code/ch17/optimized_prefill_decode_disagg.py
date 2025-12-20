@@ -24,7 +24,6 @@ from core.harness.benchmark_harness import (  # noqa: E402
     WorkloadMetadata,
 )
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32  # noqa: E402
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range  # noqa: E402
 
 
@@ -85,7 +84,6 @@ class OptimizedDisaggregatedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self._verification_payload = None
 
     def setup(self) -> None:
-        enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
 

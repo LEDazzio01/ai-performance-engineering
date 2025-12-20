@@ -9,7 +9,6 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from core.utils.compile_utils import enable_tf32
 from torch.distributed.optim import ZeroRedundancyOptimizer
 from torch.nn.parallel import DistributedDataParallel as DDP
 
@@ -65,8 +64,6 @@ def main():
     torch.cuda.set_device(device)
     set_seed(123 + rank)
 
-    enable_tf32()
-    torch.backends.cudnn.benchmark = True
 
     model = _build_model(args.hidden_size, device)
     ddp_model = DDP(

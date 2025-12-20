@@ -7,13 +7,12 @@ The optimized version shows how a single fused operation is faster.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import torch
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from core.utils.compile_utils import configure_tf32, restore_tf32
 
 
 class BaselineGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -32,7 +31,6 @@ class BaselineGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.left: Optional[torch.Tensor] = None
         self.right: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
         
         # Register workload metadata in __init__ for compliance checks
         self.register_workload_metadata(
@@ -43,8 +41,6 @@ class BaselineGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
-        self._tf32_state = configure_tf32(enable_matmul=True, enable_cudnn=True)
-        
         # Create input matrices - same as optimized version
         self.left = torch.randn(self.m, self.k, device=self.device, dtype=torch.float32)
         self.right = torch.randn(self.k, self.n, device=self.device, dtype=torch.float32)
@@ -101,9 +97,6 @@ class BaselineGemmBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.left = None
         self.right = None
         self.output = None
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
         torch.cuda.empty_cache()
 
     def get_config(self) -> BenchmarkConfig:

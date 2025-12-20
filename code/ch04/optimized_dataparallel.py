@@ -35,7 +35,6 @@ from core.harness.benchmark_harness import (  # noqa: E402
     BenchmarkMode,
     WorkloadMetadata,
 )
-from core.utils.compile_utils import enable_tf32
 from ch04.verification_payload_mixin import VerificationPayloadMixin
 
 
@@ -81,7 +80,6 @@ class OptimizedDdpBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         if not torch.cuda.is_available() or torch.cuda.device_count() < 2:
             raise RuntimeError("SKIPPED: requires >=2 GPUs")
-        enable_tf32()
         torch.manual_seed(42)
 
         # Direct model on GPU - no DataParallel wrapper

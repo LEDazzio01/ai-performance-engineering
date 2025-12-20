@@ -18,7 +18,7 @@ if str(repo_root) not in sys.path:
 import torch
 import torch.nn as nn
 
-from typing import Optional, Tuple
+from typing import Optional
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
@@ -28,7 +28,6 @@ from core.harness.benchmark_harness import (
     BenchmarkMode,
     WorkloadMetadata,
 )
-from core.utils.compile_utils import configure_tf32, restore_tf32
 
 
 def resolve_device() -> torch.device:
@@ -69,8 +68,6 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output = None  # For output verification
         self.batch_size = 256
         self.hidden_dim = 4096
-        self._tf32_state: Optional[Tuple[Optional[str], Optional[str]]] = None
-        self._prev_precision: Optional[str] = None
         self._verify_input: Optional[torch.Tensor] = None
         self.parameter_count: int = 0
         tokens = self.batch_size * self.hidden_dim
@@ -86,14 +83,10 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize FP32 model and data."""
         # Harness provides seeding - creation order must match optimized
-        self._prev_precision = torch.get_float32_matmul_precision()
         torch.manual_seed(42)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(42)
 
-        self._tf32_state = configure_tf32(enable_matmul=False, enable_cudnn=False)
-        torch.set_float32_matmul_precision("highest")
-        
         # FP32 model (full precision) - same architecture as optimized
         self.model = SimpleModel(hidden_dim=self.hidden_dim).to(self.device).train()
         self.inputs = torch.randn(self.batch_size, self.hidden_dim, device=self.device, dtype=torch.float32)
@@ -149,11 +142,6 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
     def teardown(self) -> None:
         """Cleanup."""
         del self.model, self.inputs, self.targets, self.optimizer, self.criterion
-        if self._tf32_state is not None:
-            restore_tf32(self._tf32_state)
-            self._tf32_state = None
-        if self._prev_precision is not None:
-            torch.set_float32_matmul_precision(self._prev_precision)  # type: ignore[arg-type]
         super().teardown()
     
     def get_config(self) -> BenchmarkConfig:
@@ -163,6 +151,7 @@ class BaselinePrecisionFP8Benchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            backend_policy="fp32_strict",
         )
     def get_custom_metrics(self) -> Optional[dict]:
         """Return domain-specific metrics using standardized helper."""

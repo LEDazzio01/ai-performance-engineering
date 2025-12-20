@@ -25,7 +25,7 @@ except ImportError:
     pass  # Continue if arch_config not available
 from typing import Optional
 
-from core.utils.compile_utils import enable_tf32, compile_callable
+from core.utils.compile_utils import compile_callable
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
@@ -79,11 +79,6 @@ class OptimizedMatmulCUTLASSBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize matrices and compile matmul."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            # Enable TF32 for faster matmul on Ampere+ GPUs
-            enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         

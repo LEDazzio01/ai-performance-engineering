@@ -22,7 +22,6 @@ import torch.nn as nn
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from core.utils.compile_utils import enable_tf32
 
 
 class OptimizedAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -42,10 +41,6 @@ class OptimizedAttentionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         self.output = None
 
     def setup(self) -> None:
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()
         torch.manual_seed(42)
 
         # Use FP16 for tensor core optimization

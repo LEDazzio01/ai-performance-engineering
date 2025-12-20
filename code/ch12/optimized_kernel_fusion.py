@@ -45,9 +45,6 @@ class OptimizedKernelFusionBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: Initialize tensors and load CUDA extension."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         # Load CUDA extension (will compile on first call)
         self._extension = load_kernel_fusion_extension()
         

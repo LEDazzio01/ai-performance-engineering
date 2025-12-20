@@ -28,9 +28,6 @@ class OptimizedVectorizationBenchmark(VerificationPayloadMixin, BaseBenchmark):
     def setup(self) -> None:
         """Setup: Initialize data."""
         # Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         self.data = torch.randn(self.N, device=self.device)
         self._synchronize()

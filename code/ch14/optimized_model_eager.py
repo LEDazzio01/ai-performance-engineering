@@ -20,7 +20,7 @@ import torch.nn as nn
 from typing import Optional
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
-from core.utils.compile_utils import enable_tf32, compile_model
+from core.utils.compile_utils import compile_model
 from core.harness.benchmark_harness import (  # noqa: E402
     BaseBenchmark,
     BenchmarkConfig,
@@ -30,7 +30,6 @@ from core.harness.benchmark_harness import (  # noqa: E402
 )
 
 # Ensure consistent TF32 state before any operations (new API only)
-enable_tf32()
 
 # Note: arch_config not imported here to avoid TF32 API mixing with torch.compile
 # torch.compile handles TF32 internally, but we need consistent state first
@@ -110,10 +109,6 @@ class OptimizedModelCompiledBenchmark(VerificationPayloadMixin, BaseBenchmark):
         """Setup: initialize model and compile it."""
         
         # Optimization: Enable cuDNN benchmarking for optimal kernel selection
-        if torch.cuda.is_available():
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
-            enable_tf32()  # Enable TF32 for speedup
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         

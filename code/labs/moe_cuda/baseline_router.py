@@ -17,7 +17,6 @@ from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.profiling.nvtx_helper import get_nvtx_enabled, nvtx_range
 from core.harness.benchmark_harness import WorkloadMetadata
-from core.utils.compile_utils import enable_tf32
 from labs.moe_cuda.optimized_router_vectorized import VectorizedTopKMoE
 
 class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -74,7 +73,6 @@ class BaselineRouterDenseBenchmark(VerificationPayloadMixin, BaseBenchmark):
         except Exception:
             pass
 
-        enable_tf32()
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         model = VectorizedTopKMoE(self.hidden_size, self.num_experts, self.top_k, expansion=2)

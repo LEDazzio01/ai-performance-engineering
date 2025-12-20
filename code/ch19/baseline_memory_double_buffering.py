@@ -51,8 +51,6 @@ class MemoryDoubleBufferingBenchmark(VerificationPayloadMixin, BaseBenchmark):
 
     def setup(self) -> None:
         """Setup: Initialize single-GPU tensors."""
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
         torch.manual_seed(42)
         torch.cuda.manual_seed_all(42)
         self.model = nn.Sequential(
