@@ -144,6 +144,7 @@ class BenchmarkDefaults:
     # Output defaults
     profiling_output_dir: Optional[str] = None
     ncu_metric_set: str = "auto"  # 'auto', 'deep_dive', 'roofline', 'minimal'
+    ncu_replay_mode: str = "kernel"  # 'kernel' or 'application'
     
     @classmethod
     def from_env(cls) -> BenchmarkDefaults:
@@ -206,6 +207,7 @@ class BenchmarkDefaults:
             "profiling_output_dir": self.profiling_output_dir,
             "ncu_metric_set": self.ncu_metric_set,
             "pm_sampling_interval": self.pm_sampling_interval,
+            "ncu_replay_mode": self.ncu_replay_mode,
         }
 
 

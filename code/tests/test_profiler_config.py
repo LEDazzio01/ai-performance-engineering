@@ -31,6 +31,7 @@ from core.profiling.profiler_config import (
     set_default_profiler_metric_set,
     discover_nvtx_includes,
     build_profiler_config_from_benchmark,
+    resolve_ncu_metrics,
 )
 
 
@@ -107,6 +108,12 @@ class TestGetChapterMetrics:
             assert len(result) > 0
 
 
+class TestResolveNcuMetrics:
+    def test_auto_uses_chapter_metrics(self):
+        metrics = resolve_ncu_metrics("auto", chapter=11)
+        assert metrics == CH11_STREAM_METRICS
+
+
 class TestProfilerConfig:
     """Test ProfilerConfig class."""
     
@@ -175,6 +182,16 @@ class TestProfilerConfig:
         # Check metrics are joined
         metrics_str = ",".join(custom_metrics)
         assert metrics_str in cmd
+
+    def test_ncu_command_for_target(self):
+        """ncu command should support arbitrary target commands."""
+        config = ProfilerConfig(metric_set="minimal")
+        cmd = config.get_ncu_command_for_target(
+            output_path="/tmp/test",
+            target_command=["/usr/bin/true", "--flag"],
+        )
+        assert "ncu" in cmd
+        assert "/usr/bin/true" in cmd
     
     def test_torch_profiler_config_minimal(self):
         """Minimal preset should return lightweight config."""
@@ -271,6 +288,7 @@ class TestBuildProfilerConfigFromBenchmark:
                 self.ncu_metric_set = None
                 self.pm_sampling_interval = None
                 self.nsys_nvtx_include = None
+                self.ncu_replay_mode = None
         
         result = build_profiler_config_from_benchmark(HarnessConfig())
         
@@ -285,11 +303,13 @@ class TestBuildProfilerConfigFromBenchmark:
                 self.ncu_metric_set = "deep_dive"
                 self.pm_sampling_interval = 50000
                 self.nsys_nvtx_include = ["kernel1"]
+                self.ncu_replay_mode = "application"
         
         result = build_profiler_config_from_benchmark(HarnessConfig())
         
         assert result.preset == "deep_dive"
         assert result.metric_set == "deep_dive"
+        assert result.ncu_replay_mode == "application"
 
 
 class TestMetricNaming:

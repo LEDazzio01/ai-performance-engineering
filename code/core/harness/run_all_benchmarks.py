@@ -60,6 +60,10 @@ from core.harness.benchmark_harness import BaseBenchmark, BenchmarkHarness, Benc
 from core.benchmark.defaults import BenchmarkDefaults, set_defaults, get_defaults
 from core.benchmark.run_manifest import reset_gpu_state, get_git_info
 from core.profiling.gpu_telemetry import format_gpu_telemetry, query_gpu_telemetry
+from core.profiling.profiler_config import (
+    build_profiler_config_from_benchmark,
+    resolve_ncu_metrics,
+)
 try:
     from core.benchmark.cuda_binary_benchmark import detect_supported_arch
 except ImportError:  # pragma: no cover - optional dependency during docs builds
@@ -1651,6 +1655,7 @@ def profile_python_benchmark_ncu(
     benchmark_path: Path,
     chapter_dir: Path,
     output_dir: Path,
+    config: BenchmarkConfig,
     variant: str = "baseline"
 ) -> Optional[Path]:
     """Profile a Python benchmark using ncu (NVIDIA Compute Profiler).
@@ -1660,6 +1665,7 @@ def profile_python_benchmark_ncu(
         benchmark_path: Path to Python benchmark file (for naming)
         chapter_dir: Path to chapter directory
         output_dir: Directory to save ncu-rep file
+        config: BenchmarkConfig used for profiling settings
         variant: 'baseline' or 'optimized' for naming
         
     Returns:
@@ -1674,6 +1680,14 @@ def profile_python_benchmark_ncu(
     benchmark_name = benchmark_path.stem
     ncu_output = output_dir / f"{benchmark_name}_{variant}.ncu-rep"
     
+    profiler_config = build_profiler_config_from_benchmark(config)
+    nvtx_includes = profiler_config.nvtx_includes
+    chapter_num = None
+    chapter_name = chapter_dir.name
+    if chapter_name.startswith("ch") and chapter_name[2:].isdigit():
+        chapter_num = int(chapter_name[2:])
+    metrics_override = resolve_ncu_metrics(config.ncu_metric_set, chapter=chapter_num)
+
     # Create a temporary wrapper script that runs the benchmark
     wrapper_script = tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False)
     
@@ -1682,6 +1696,9 @@ def profile_python_benchmark_ncu(
 import sys
 from pathlib import Path
 
+# Add repo root so NVTX helpers can be imported
+sys.path.insert(0, r'{repo_root}')
+
 # Add chapter directory to path
 sys.path.insert(0, r'{chapter_dir}')
 
@@ -1689,6 +1706,19 @@ sys.path.insert(0, r'{chapter_dir}')
 from {benchmark_path.stem} import get_benchmark
 
 benchmark = get_benchmark()
+from core.harness.benchmark_harness import BenchmarkConfig, ReadOnlyBenchmarkConfigView
+_profiling_config = BenchmarkConfig(
+    enable_profiling=True,
+    enable_nsys=True,
+    enable_ncu=True,
+    enable_nvtx=True,
+    nsys_nvtx_include={nvtx_includes!r},
+    profile_type={config.profile_type!r},
+    ncu_metric_set={config.ncu_metric_set!r},
+    pm_sampling_interval={config.pm_sampling_interval!r},
+    ncu_replay_mode={config.ncu_replay_mode!r},
+)
+benchmark._config = ReadOnlyBenchmarkConfigView.from_config(_profiling_config)
 benchmark.setup()
 
 # Warmup
@@ -1710,16 +1740,14 @@ benchmark.teardown()
         wrapper_script.close()
         
         # Build ncu command
-        ncu_command = [
-            "ncu",
-            "--force-overwrite",
-            "--set", "full",
-            "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
-            "--replay-mode", "kernel",
-            "-o", str(ncu_output.with_suffix("")),  # ncu adds .ncu-rep automatically
-            sys.executable,
-            wrapper_script.name
-        ]
+        ncu_command = profiler_config.get_ncu_command(
+            str(ncu_output.with_suffix("")),
+            wrapper_script.name,
+            python_executable=sys.executable,
+            metrics=metrics_override,
+            nvtx_includes=nvtx_includes,
+        )
+        ncu_command.insert(1, "--force-overwrite")
         
         # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
         # ncu is slower than nsys and needs more time for metric collection
@@ -1755,6 +1783,7 @@ def profile_cuda_executable_ncu(
     executable: Path,
     chapter_dir: Path,
     output_dir: Path,
+    config: BenchmarkConfig,
     variant: str = "baseline"
 ) -> Optional[Path]:
     """Profile a CUDA executable using ncu (NVIDIA Compute Profiler).
@@ -1763,6 +1792,7 @@ def profile_cuda_executable_ncu(
         executable: Path to CUDA executable
         chapter_dir: Path to chapter directory
         output_dir: Directory to save ncu-rep file
+        config: BenchmarkConfig used for profiling settings
         variant: 'baseline' or 'optimized' for naming
         
     Returns:
@@ -1777,16 +1807,19 @@ def profile_cuda_executable_ncu(
     exec_name = executable.stem
     ncu_output = output_dir / f"{exec_name}_{variant}.ncu-rep"
     
-    # Build ncu command
-    ncu_command = [
-        "ncu",
-        "--force-overwrite",
-        "--set", "full",
-        "--metrics", "gpu__time_duration.avg,sm__throughput.avg.pct_of_peak_sustained_elapsed,sm__warps_active.avg.pct_of_peak_sustained_active",
-        "--replay-mode", "kernel",
-        "-o", str(ncu_output.with_suffix("")),  # ncu adds .ncu-rep automatically
-        str(executable)
-    ]
+    profiler_config = build_profiler_config_from_benchmark(config)
+    chapter_num = None
+    chapter_name = chapter_dir.name
+    if chapter_name.startswith("ch") and chapter_name[2:].isdigit():
+        chapter_num = int(chapter_name[2:])
+    metrics_override = resolve_ncu_metrics(config.ncu_metric_set, chapter=chapter_num)
+    ncu_command = profiler_config.get_ncu_command_for_target(
+        str(ncu_output.with_suffix("")),
+        [str(executable)],
+        metrics=metrics_override,
+        nvtx_includes=profiler_config.nvtx_includes,
+    )
+    ncu_command.insert(1, "--force-overwrite")
     
     try:
         # ncu profiling timeout: align with BenchmarkDefaults.ncu_timeout_seconds
@@ -2520,7 +2553,12 @@ def _test_chapter_impl(
                     if check_ncu_available():
                         logger.info(f"ncu...")
                         ncu_path = profile_python_benchmark_ncu(
-                            baseline_benchmark, baseline_path, chapter_dir, profiling_output_dir, variant="baseline"
+                            baseline_benchmark,
+                            baseline_path,
+                            chapter_dir,
+                            profiling_output_dir,
+                            _merged_config(baseline_benchmark),
+                            variant="baseline",
                         )
                         if ncu_path:
                             result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(repo_root))
@@ -2889,8 +2927,12 @@ def _test_chapter_impl(
                         if check_ncu_available():
                             logger.info(f"ncu...")
                             ncu_path = profile_python_benchmark_ncu(
-                                optimized_benchmark, optimized_path, chapter_dir, profiling_output_dir,
-                                variant=f"optimized_{technique}"
+                                optimized_benchmark,
+                                optimized_path,
+                                chapter_dir,
+                                profiling_output_dir,
+                                _merged_config(optimized_benchmark),
+                                variant=f"optimized_{technique}",
                             )
                             if ncu_path:
                                 opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(repo_root))
@@ -3328,7 +3370,11 @@ def _test_chapter_impl(
                 if check_ncu_available():
                     logger.info(f"      ncu...")
                     ncu_path = profile_cuda_executable_ncu(
-                        baseline_executable, chapter_dir, profiling_output_dir, variant="baseline"
+                        baseline_executable,
+                        chapter_dir,
+                        profiling_output_dir,
+                        base_config,
+                        variant="baseline",
                     )
                     if ncu_path:
                         result_entry['baseline_ncu_rep'] = str(ncu_path.relative_to(repo_root))
@@ -3518,8 +3564,11 @@ def _test_chapter_impl(
                     if check_ncu_available():
                         logger.info("ncu...")
                         ncu_path = profile_cuda_executable_ncu(
-                            optimized_executable, chapter_dir, profiling_output_dir,
-                            variant=f"optimized_{technique}"
+                            optimized_executable,
+                            chapter_dir,
+                            profiling_output_dir,
+                            base_config,
+                            variant=f"optimized_{technique}",
                         )
                         if ncu_path:
                             opt_result['optimized_ncu_rep'] = str(ncu_path.relative_to(repo_root))

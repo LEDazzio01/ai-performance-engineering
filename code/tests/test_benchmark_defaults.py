@@ -32,6 +32,7 @@ class TestBenchmarkDefaults:
         assert defaults.detect_setup_precomputation is True
         assert defaults.graph_capture_cheat_ratio_threshold == 10.0
         assert defaults.graph_capture_memory_threshold_mb == 100.0
+        assert defaults.ncu_replay_mode == "kernel"
     
     def test_from_env_returns_defaults(self):
         """Test that from_env() returns default values (env vars no longer supported)."""
@@ -64,6 +65,7 @@ class TestBenchmarkConfigDefaults:
         assert config.detect_setup_precomputation is True
         assert config.graph_capture_cheat_ratio_threshold == 10.0
         assert config.graph_capture_memory_threshold_mb == 100.0
+        assert config.ncu_replay_mode == "kernel"
     
 
 

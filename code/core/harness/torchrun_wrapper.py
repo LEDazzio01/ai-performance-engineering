@@ -50,13 +50,15 @@ def _parse_int_env(name: str) -> Optional[int]:
 
 
 def _resolve_local_rank() -> int:
-    for key in ("LOCAL_RANK", "RANK"):
-        value = os.environ.get(key)
-        if value is not None and value != "":
-            try:
-                return int(value)
-            except ValueError as exc:
-                raise RuntimeError(f"Invalid {key} value: {value!r}") from exc
+    value = os.environ.get("LOCAL_RANK")
+    if value is not None and value != "":
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid LOCAL_RANK value: {value!r}") from exc
+    world_size = os.environ.get("WORLD_SIZE")
+    if world_size not in (None, "", "1"):
+        raise RuntimeError("LOCAL_RANK must be set when WORLD_SIZE > 1")
     return 0
 
 

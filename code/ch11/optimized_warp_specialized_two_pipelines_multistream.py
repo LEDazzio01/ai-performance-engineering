@@ -11,6 +11,7 @@ from typing import Optional
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig  # noqa: E402
+from core.profiling.nvtx_helper import canonicalize_nvtx_name
 from core.utils.extension_loader_template import load_cuda_extension_v2
 from core.harness.hardware_capabilities import ensure_dsmem_supported  # noqa: E402
 
@@ -101,6 +102,9 @@ class OptimizedDualPipelineBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=5,
             measurement_timeout_seconds=120,
             setup_timeout_seconds=120,
+            ncu_replay_mode="application",
+            ncu_metric_set="minimal",
+            nsys_nvtx_include=[canonicalize_nvtx_name("optimized_dual_pipeline_multistream")],
         )
 
     def get_custom_metrics(self) -> Optional[dict]:

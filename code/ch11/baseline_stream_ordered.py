@@ -13,6 +13,7 @@ import torch
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.profiling.stream_ordered import run_standard_allocator_capture
+from core.profiling.nvtx_helper import canonicalize_nvtx_name
 
 
 class BaselineStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -64,7 +65,13 @@ class BaselineStreamOrderedBenchmark(VerificationPayloadMixin, BaseBenchmark):
         )
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=10, warmup=5)
+        return BenchmarkConfig(
+            iterations=10,
+            warmup=5,
+            ncu_replay_mode="application",
+            ncu_metric_set="minimal",
+            nsys_nvtx_include=[canonicalize_nvtx_name("stream_ordered_baseline")],
+        )
 
     def validate_result(self) -> Optional[str]:
         if self.output is None:

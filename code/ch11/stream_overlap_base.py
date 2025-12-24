@@ -8,7 +8,11 @@ import torch
 
 from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
-from core.profiling.nvtx_helper import nvtx_range, get_nvtx_enabled
+from core.profiling.nvtx_helper import (
+    canonicalize_nvtx_name,
+    get_nvtx_enabled,
+    nvtx_range,
+)
 
 
 def resolve_device() -> torch.device:
@@ -58,7 +62,7 @@ class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        config = self.get_config()
+        config = getattr(self, "_config", None) or self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range(self.label, enable=enable_nvtx):
@@ -104,7 +108,14 @@ class StridedStreamBaseline(VerificationPayloadMixin, BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         # Copy + compute per chunk is heavier; keep iteration count modest.
-        return BenchmarkConfig(iterations=20, warmup=5)
+        nvtx_tag = canonicalize_nvtx_name(self.label)
+        return BenchmarkConfig(
+            iterations=20,
+            warmup=5,
+            ncu_replay_mode="application",
+            ncu_metric_set="minimal",
+            nsys_nvtx_include=[nvtx_tag],
+        )
 
     def validate_result(self) -> str | None:
         if self.host_output is None or self.host_input is None:
@@ -200,7 +211,7 @@ class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
         torch.cuda.synchronize()
 
     def benchmark_fn(self) -> None:
-        config = self.get_config()
+        config = getattr(self, "_config", None) or self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
 
         with nvtx_range(self.label, enable=enable_nvtx):
@@ -257,7 +268,14 @@ class ConcurrentStreamOptimized(VerificationPayloadMixin, BaseBenchmark):
 
     def get_config(self) -> BenchmarkConfig:
         # Streams overlap chunked work; fewer iterations keep runtime reasonable.
-        return BenchmarkConfig(iterations=16, warmup=5)
+        nvtx_tag = canonicalize_nvtx_name(self.label)
+        return BenchmarkConfig(
+            iterations=16,
+            warmup=5,
+            ncu_replay_mode="application",
+            ncu_metric_set="minimal",
+            nsys_nvtx_include=[nvtx_tag],
+        )
 
     def validate_result(self) -> str | None:
         if not self.host_out_chunks:

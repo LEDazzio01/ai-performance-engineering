@@ -542,6 +542,7 @@ class BenchmarkConfig:
     profiling_timeout_seconds: Optional[int] = field(default_factory=lambda: _get_default_value("profiling_timeout_seconds", None))
     ncu_metric_set: str = field(default_factory=lambda: _get_default_value("ncu_metric_set", "auto"))
     pm_sampling_interval: Optional[int] = field(default_factory=lambda: _get_default_value("pm_sampling_interval", None))
+    ncu_replay_mode: str = field(default_factory=lambda: _get_default_value("ncu_replay_mode", "kernel"))
 
     # Triton-style best practices (based on triton/testing.py)
     # See: https://github.com/triton-lang/triton/blob/main/python/triton/testing.py
@@ -3039,6 +3040,11 @@ class BenchmarkHarness:
                     else:
                         mark_stage('warmup', 'skipped')
                     
+                    if getattr(config, "lock_gpu_clocks", False) and self.device.type == "cuda":
+                        device_index = self.device.index if self.device.index is not None else 0
+                        # Short ramp to bring current clocks up to the locked application clocks.
+                        ramp_gpu_clocks(device=device_index, duration_ms=10.0, max_iters=40)
+
                     # Memory tracking: Use context manager to track peak memory during benchmark execution
                     start_stage('measurement')
                     with self._memory_tracking(config) as mem_result:

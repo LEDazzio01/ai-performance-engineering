@@ -358,6 +358,22 @@ def get_chapter_metrics(chapter: int) -> List[str]:
     return CHAPTER_METRICS.get(chapter, ROOFLINE_METRICS)
 
 
+def resolve_ncu_metrics(metric_set: str, chapter: Optional[int] = None) -> List[str]:
+    """Resolve an NCU metrics list from a metric set and optional chapter."""
+    metric_set_norm = str(metric_set or "deep_dive").lower()
+    if metric_set_norm == "auto":
+        if chapter is not None:
+            return get_chapter_metrics(chapter)
+        return DEEP_DIVE_METRICS
+    if metric_set_norm == "roofline":
+        return ROOFLINE_METRICS
+    if metric_set_norm == "minimal":
+        return MINIMAL_METRICS
+    if metric_set_norm == "deep_dive":
+        return DEEP_DIVE_METRICS
+    return DEEP_DIVE_METRICS
+
+
 NCU_SET_BY_METRIC = {
     "deep_dive": "full",
     "roofline": "roofline",
@@ -469,7 +485,21 @@ class ProfilerConfig:
             List of command arguments for subprocess.run
         """
         import sys
-        
+        return self.get_ncu_command_for_target(
+            output_path,
+            [python_executable or sys.executable, python_script],
+            metrics=metrics,
+            nvtx_includes=nvtx_includes,
+        )
+
+    def get_ncu_command_for_target(
+        self,
+        output_path: str,
+        target_command: Sequence[str],
+        metrics: Optional[List[str]] = None,
+        nvtx_includes: Optional[Sequence[str]] = None,
+    ) -> List[str]:
+        """Generate ncu command for an arbitrary target command."""
         preset = (self.preset or "minimal").lower()
         metric_set = self.metric_set or "deep_dive"
         if metrics is None:
@@ -509,10 +539,9 @@ class ProfilerConfig:
 
         cmd.extend([
             "-o", output_path,
-            python_executable or sys.executable,
-            python_script,
+            *target_command,
         ])
-        
+
         return cmd
     
     def get_proton_command(
@@ -685,6 +714,7 @@ def build_profiler_config_from_benchmark(
     if metric_set is None or str(metric_set).lower() == "auto":
         metric_set = preset if preset in {"minimal", "roofline", "deep_dive"} else "deep_dive"
     sampling_interval = getattr(config, "pm_sampling_interval", None)
+    replay_mode = getattr(config, "ncu_replay_mode", None)
     explicit_includes = getattr(config, "nsys_nvtx_include", None)
     # Fail-fast policy: do not auto-infer NVTX include filters from source code.
     # If the caller wants NVTX filtering, they must explicitly pass
@@ -695,4 +725,5 @@ def build_profiler_config_from_benchmark(
         preset=preset,
         nvtx_includes=nvtx_includes or None,
         pm_sampling_interval=sampling_interval,
+        ncu_replay_mode=str(replay_mode) if replay_mode else "kernel",
     )

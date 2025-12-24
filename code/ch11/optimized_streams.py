@@ -21,6 +21,7 @@ import torch
 
 from core.harness.benchmark_harness import BaseBenchmark, BenchmarkConfig
 from core.benchmark.verification_mixin import VerificationPayloadMixin
+from core.profiling.nvtx_helper import canonicalize_nvtx_name
 
 
 class OptimizedStreamsBenchmark(VerificationPayloadMixin, BaseBenchmark):
@@ -153,6 +154,9 @@ class OptimizedStreamsBenchmark(VerificationPayloadMixin, BaseBenchmark):
             warmup=10,
             enable_memory_tracking=False,
             enable_profiling=False,
+            ncu_replay_mode="application",
+            ncu_metric_set="minimal",
+            nsys_nvtx_include=[canonicalize_nvtx_name("streams_pipelined")],
         )
     
     def get_custom_metrics(self) -> Optional[dict]:
