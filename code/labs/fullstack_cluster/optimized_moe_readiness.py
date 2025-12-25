@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import torch
 
+from core.benchmark.verification_mixin import VerificationPayloadMixin
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
@@ -123,7 +124,7 @@ def main() -> None:
     )
 
 
-class OptimizedMoEReadinessBenchmark(BaseBenchmark):
+class OptimizedMoEReadinessBenchmark(VerificationPayloadMixin, BaseBenchmark):
     """Harness entry that launches this module via torchrun with NCCL small-message knobs."""
 
     def __init__(self) -> None:
@@ -131,6 +132,7 @@ class OptimizedMoEReadinessBenchmark(BaseBenchmark):
         self._probe = torch.zeros(1, dtype=torch.float32)
         self._verify_output = torch.zeros(1, dtype=torch.float32)
         self.parameter_count = 0
+        self.workload_size = 1
         self.register_workload_metadata(requests_per_iteration=1.0)
         self._workload_registered = True
 
@@ -153,14 +155,14 @@ class OptimizedMoEReadinessBenchmark(BaseBenchmark):
         """Return domain-specific metrics for performance analysis."""
         # Basic metrics - override in subclass for domain-specific values
         return {
-            "moe_readiness.workload_size": float(getattr(self, 'batch_size', 0)),
+            "moe_readiness.workload_size": float(self.workload_size),
         }
 
     def get_torchrun_spec(self, config: BenchmarkConfig | None = None) -> TorchrunLaunchSpec:
         script_path = Path(__file__).resolve()
         return TorchrunLaunchSpec(
             script_path=script_path,
-            script_args=[],
+            script_args=["--skip-preflight", "--disable-heatmaps"],
             env={
                 "NCCL_DEBUG": "WARN",
                 "NCCL_PROTO": "LL128",
@@ -178,32 +180,20 @@ class OptimizedMoEReadinessBenchmark(BaseBenchmark):
             },
         )
 
-    def get_verify_output(self) -> torch.Tensor:
-        """Return output tensor for verification comparison."""
-        return self._verify_output.detach().clone()
-
-    def get_verify_inputs(self) -> dict:
-        return {"probe": self._probe}
-
-    def get_input_signature(self) -> dict:
-        """Return input signature for verification."""
-        return {
-            "type": "moe_readiness_optimized",
-            "shapes": {"probe": tuple(self._probe.shape)},
-            "dtypes": {"probe": str(self._probe.dtype)},
-            "batch_size": 1,
-            "parameter_count": int(self.parameter_count),
-            "precision_flags": {
+    def capture_verification_payload(self) -> None:
+        self._set_verification_payload(
+            inputs={"probe": self._probe},
+            output=self._verify_output,
+            batch_size=1,
+            parameter_count=int(self.parameter_count),
+            precision_flags={
                 "fp16": False,
                 "bf16": False,
                 "fp8": False,
                 "tf32": torch.backends.cuda.matmul.allow_tf32 if torch.cuda.is_available() else False,
             },
-        }
-
-    def get_output_tolerance(self) -> tuple:
-        """Return tolerance for numerical comparison."""
-        return (0.1, 1.0)
+            output_tolerance=(0.1, 1.0),
+        )
 
 
 def get_benchmark() -> OptimizedMoEReadinessBenchmark:

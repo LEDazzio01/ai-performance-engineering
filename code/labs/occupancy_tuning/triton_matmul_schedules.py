@@ -90,7 +90,7 @@ class TritonMatmulProtonBenchmark(VerificationPayloadMixin, BaseBenchmark):
         schedule: MatmulSchedule,
         *,
         size: int = 4096,
-        size_k: int = 512,
+        size_k: int = 256,
         iterations: int = 2,
         warmup: int = 10,
         dtype: torch.dtype = torch.float16,
@@ -120,6 +120,7 @@ class TritonMatmulProtonBenchmark(VerificationPayloadMixin, BaseBenchmark):
             enable_ncu=False,
             enable_proton=False,
             profile_type="minimal",
+            full_device_sync=True,
             target_label=f"labs/occupancy_tuning:{schedule.name}",
             use_subprocess=True,
         )

@@ -2,16 +2,12 @@
 //
 // Baseline for the cluster multicast example:
 // - Blocks are launched in clusters (same shape as optimized).
-// - The leader CTA loads the B tile into its SMEM via TMA.
-// - Other CTAs read the leader's tile through DSMEM (map_shared_rank).
-//   This avoids multicast but still enables on-chip sharing.
+// - Each CTA loads the B tile into its own SMEM via standard global loads (no multicast).
+//   This causes redundant global loads for the same tile across the cluster.
 //
 // COMPARE WITH: tma_multicast_cluster.cu
 //   - Optimized uses TMA multicast so a single load feeds all CTAs in the cluster.
 
-#include <cooperative_groups.h>
-#include <cuda/__ptx/instructions/cp_async_bulk_tensor.h>
-#include <cuda/barrier>
 #include <cuda_runtime.h>
 
 #include <cstdio>
@@ -19,11 +15,7 @@
 #include <vector>
 
 #include "../core/common/headers/cuda_verify.cuh"
-#include "../core/common/headers/tma_helpers.cuh"
 
-namespace cg = cooperative_groups;
-namespace cptx = cuda::ptx;
-namespace cde = cuda::device::experimental;
 
 #define CUDA_CHECK(call)                                                       \
     do {                                                                       \
@@ -39,10 +31,10 @@ namespace cde = cuda::device::experimental;
 // NOTE: This example is designed to be *bandwidth sensitive* so that cluster
 // multicast has a clear win: keep TILE_M small (low reuse of each B element)
 // while keeping TILE_N/TILE_K large (large B tile).
-constexpr int TILE_M = 8;
+constexpr int TILE_M = 4;
 constexpr int TILE_N = 128;
 constexpr int TILE_K = 128;
-constexpr int BLOCK_SIZE = 256;
+constexpr int BLOCK_SIZE = 128;
 
 // Cluster configuration: 16x1 cluster along M (shares B tiles).
 constexpr int CLUSTER_M = 16;
@@ -50,62 +42,31 @@ constexpr int CLUSTER_N = 1;
 
 __global__ __launch_bounds__(BLOCK_SIZE, 1)
 void tma_nomulticast_gemm_kernel(
-    const __grid_constant__ CUtensorMap b_desc,
     const float* __restrict__ A,  // [M, K]
     const float* __restrict__ B,  // [K, N]
     float* __restrict__ C,        // [M, N]
     int M, int N, int K
 	) {
 #if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)
-    cg::cluster_group cluster = cg::this_cluster();
-    const int cluster_rank = cluster.block_rank();
-
     const int tile_m = blockIdx.x;
 	    const int tile_n = blockIdx.y;
 	    const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
 
     const int tid = threadIdx.x;
-    // 256 threads × (1×4 outputs/thread) = 1024 outputs = 8×128 tile.
+    // 128 threads × (1×4 outputs/thread) = 512 outputs = 4×128 tile.
     constexpr int COLS_PER_THREAD = 4;
     constexpr int THREADS_PER_ROW = TILE_N / COLS_PER_THREAD;  // 32
-    const int thread_m = tid / THREADS_PER_ROW;                // 0..7
+    const int thread_m = tid / THREADS_PER_ROW;                // 0..3
     const int thread_n = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;  // 0..124
 
     __shared__ alignas(128) float A_smem[TILE_M][TILE_K];
     __shared__ alignas(128) float B_smem[TILE_K][TILE_N];
-
-    using block_barrier = cuda::barrier<cuda::thread_scope_block>;
-    __shared__ alignas(block_barrier) unsigned char barrier_storage[sizeof(block_barrier)];
-    auto* bar = reinterpret_cast<block_barrier*>(barrier_storage);
-    if (tid == 0) {
-        init(bar, static_cast<int>(blockDim.x));
-        cde::fence_proxy_async_shared_cta();
-    }
-    __syncthreads();
 
 	    float acc[COLS_PER_THREAD] = {0.0f};
 	    const int num_k_tiles = (K + TILE_K - 1) / TILE_K;
 	
 	    for (int k_tile = 0; k_tile < num_k_tiles; ++k_tile) {
 	        const int k_base = k_tile * TILE_K;
-	
-        // Baseline: leader loads once, followers read via DSMEM (no multicast).
-        block_barrier::arrival_token token;
-        if (cluster_rank == 0) {
-            if (tid == 0) {
-                const int coords[2] = {k_base, tile_n * TILE_N};
-                cptx::cp_async_bulk_tensor(
-                    cptx::space_shared,
-                    cptx::space_global,
-                    &B_smem[0][0],
-                    &b_desc,
-                    coords,
-                    cuda::device::barrier_native_handle(*bar));
-                token = cuda::device::barrier_arrive_tx(*bar, 1, sizeof(B_smem));
-            } else {
-                token = bar->arrive();
-            }
-        }
 	
 	        // Load A tile while the rank-0 B load is in flight.
 	        for (int i = tid; i < TILE_M * TILE_K; i += blockDim.x) {
@@ -115,13 +76,16 @@ void tma_nomulticast_gemm_kernel(
             int global_k = k_base + kk;
             A_smem[mm][kk] = (global_m < M && global_k < K) ? A[global_m * K + global_k] : 0.0f;
 	        }
+        for (int i = tid; i < TILE_K * TILE_N; i += blockDim.x) {
+            int kk = i / TILE_N;
+            int nn = i % TILE_N;
+            int global_k = k_base + kk;
+            int global_n = tile_n * TILE_N + nn;
+            B_smem[kk][nn] = (global_k < K && global_n < N) ? B[global_k * N + global_n] : 0.0f;
+        }
 	        __syncthreads();
 	
-        if (cluster_rank == 0) {
-            bar->wait(std::move(token));
-        }
-        cluster.sync();
-        const float* b_tile = cluster.map_shared_rank(&B_smem[0][0], 0);
+        const float* b_tile = &B_smem[0][0];
 	
 	        #pragma unroll
 	        for (int kk = 0; kk < TILE_K; ++kk) {
@@ -133,7 +97,6 @@ void tma_nomulticast_gemm_kernel(
         }
 	
 	        __syncthreads();
-	        cluster.sync();
     }
 
     #pragma unroll
@@ -243,27 +206,6 @@ int main(int argc, char** argv) {
     CUDA_CHECK(cudaMemcpy(d_A, h_A.data(), bytes_A, cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(d_B, h_B.data(), bytes_B, cudaMemcpyHostToDevice));
 
-    CUtensorMap b_desc{};
-    cuda_tma::check_cu(cuInit(0), "cuInit");
-    auto encode = cuda_tma::load_cuTensorMapEncodeTiled();
-    if (!encode) {
-        std::fprintf(stderr, "cuTensorMapEncodeTiled unavailable on this runtime.\n");
-        return 1;
-    }
-	    const bool ok = cuda_tma::make_2d_tensor_map(
-	        b_desc,
-	        encode,
-	        d_B,
-	        /*width=*/N,
-	        /*height=*/K,
-	        /*ld=*/N,
-	        /*box_width=*/TILE_N,
-	        /*box_height=*/TILE_K,
-	        CU_TENSOR_MAP_SWIZZLE_NONE);
-	    if (!ok) {
-	        return 1;
-	    }
-
     dim3 block(BLOCK_SIZE);
     dim3 grid((M + TILE_M - 1) / TILE_M,
               (N + TILE_N - 1) / TILE_N);
@@ -288,7 +230,7 @@ int main(int argc, char** argv) {
     config.numAttrs = 1;
 
     // Warmup
-    CUDA_CHECK(cudaLaunchKernelEx(&config, tma_nomulticast_gemm_kernel, b_desc, d_A, d_B, d_C, M, N, K));
+    CUDA_CHECK(cudaLaunchKernelEx(&config, tma_nomulticast_gemm_kernel, d_A, d_B, d_C, M, N, K));
     CUDA_CHECK(cudaDeviceSynchronize());
 
     cudaEvent_t start, stop;
@@ -298,7 +240,7 @@ int main(int argc, char** argv) {
     const int iterations = 20;
     CUDA_CHECK(cudaEventRecord(start));
     for (int i = 0; i < iterations; ++i) {
-        CUDA_CHECK(cudaLaunchKernelEx(&config, tma_nomulticast_gemm_kernel, b_desc, d_A, d_B, d_C, M, N, K));
+        CUDA_CHECK(cudaLaunchKernelEx(&config, tma_nomulticast_gemm_kernel, d_A, d_B, d_C, M, N, K));
     }
     CUDA_CHECK(cudaEventRecord(stop));
     CUDA_CHECK(cudaEventSynchronize(stop));

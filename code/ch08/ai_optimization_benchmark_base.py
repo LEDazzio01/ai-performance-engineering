@@ -18,8 +18,9 @@ from core.utils.extension_loader_template import load_cuda_extension
 
 
 class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
-    rows: int = 1 << 13  # 8192 samples
+    rows: int = 1 << 15  # 32,768 samples
     cols: int = 512
+    inner_iterations: int = 8
     nvtx_label: str = "ai_optimization"
     output_tolerance = (0.1, 1.0)
 
@@ -32,7 +33,7 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         self.inputs: Optional[torch.Tensor] = None
         self.weights: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        self.register_workload_metadata(requests_per_iteration=float(self.inner_iterations))
 
     def setup(self) -> None:
         self.extension = load_cuda_extension(
@@ -61,7 +62,8 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
             if self.output is None:
                 self.output = torch.empty(self.rows, device=self.device, dtype=torch.float32)
-            self._invoke_kernel()
+            for _ in range(self.inner_iterations):
+                self._invoke_kernel()
 
     def capture_verification_payload(self) -> None:
         """Register verification payload once after timing."""
@@ -118,8 +120,8 @@ class AiOptimizationBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return AI optimization kernel metrics for roofline analysis."""
-        flops = float(self.rows * self.cols * 2)  # matmul + tanh approx
-        bytes_transferred = float((self.rows * self.cols + self.cols + self.rows) * 4)
+        flops = float(self.rows * self.cols * 2 * self.inner_iterations)  # matmul + tanh approx
+        bytes_transferred = float((self.rows * self.cols + self.cols + self.rows) * 4 * self.inner_iterations)
         return {
             f"{self.nvtx_label}.rows": float(self.rows),
             f"{self.nvtx_label}.cols": float(self.cols),

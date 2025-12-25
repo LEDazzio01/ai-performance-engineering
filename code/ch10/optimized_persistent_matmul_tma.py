@@ -110,6 +110,13 @@ def _ensure_triton_allocator():
 # TMA Persistent Matmul Kernel
 # ============================================================================
 
+BLOCK_M = 64
+BLOCK_N = 64
+BLOCK_K = 64
+GROUP_M = 8
+NUM_WARPS = 4
+NUM_STAGES = 4
+
 @triton.jit
 def persistent_matmul_tma(
     A_ptr, B_ptr, C_ptr,
@@ -195,11 +202,11 @@ def run_optimized(M=1024, N=1024, K=1024):
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        128, 128, 128,
-        GROUP_M=8,
+        BLOCK_M, BLOCK_N, BLOCK_K,
+        GROUP_M=GROUP_M,
         NUM_SMS=num_sms,
-        num_warps=8,
-        num_stages=3,
+        num_warps=NUM_WARPS,
+        num_stages=NUM_STAGES,
     )
     return c
 
@@ -244,8 +251,10 @@ class PersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
         # Set allocator BEFORE creating tensors (required for Triton TMA autotuning)
         _ensure_triton_allocator()
         
-        if self.M % 128 != 0 or self.N % 128 != 0 or self.K % 128 != 0:
-            raise RuntimeError("FAIL FAST: persistent_matmul_tma requires M/N/K divisible by 128.")
+        if self.M % BLOCK_M != 0 or self.N % BLOCK_N != 0 or self.K % BLOCK_K != 0:
+            raise RuntimeError(
+                f"FAIL FAST: persistent_matmul_tma requires M/N/K divisible by {BLOCK_M}."
+            )
 
         self.a = torch.randn(self.M, self.K, device=self.device, dtype=torch.float16)
         self.b = torch.randn(self.K, self.N, device=self.device, dtype=torch.float16)
@@ -267,11 +276,11 @@ class PersistentMatmulTMABenchmark(VerificationPayloadMixin, BaseBenchmark):
             self.a.stride(0), self.a.stride(1),
             self.b.stride(0), self.b.stride(1),
             self.c.stride(0), self.c.stride(1),
-            128, 128, 128,
-            GROUP_M=8,
+            BLOCK_M, BLOCK_N, BLOCK_K,
+            GROUP_M=GROUP_M,
             NUM_SMS=num_sms,
-            num_warps=8,
-            num_stages=3,
+            num_warps=NUM_WARPS,
+            num_stages=NUM_STAGES,
         )
         self._synchronize()
         if self.c is None:

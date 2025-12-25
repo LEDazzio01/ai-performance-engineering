@@ -42,8 +42,8 @@ class OptimizedMatmulTCGen05PipelinedBenchmark(VerificationPayloadMixin, BaseBen
         self._tcgen05_available = available
         self._skip_reason = reason or "SKIPPED: tcgen05 matmul unavailable"
         self.device = torch.device("cuda")
-        # Match baseline for fair comparison (baseline uses n=8192)
-        self.n = 8192
+        # Match baseline for fair comparison (larger size reduces CPU overhead noise).
+        self.n = 12288
         self.size = self.n
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None

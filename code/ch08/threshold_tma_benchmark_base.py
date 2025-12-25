@@ -15,6 +15,7 @@ class ThresholdBenchmarkBaseTMA(ThresholdBenchmarkBase):
     requirement_label = "threshold_tma"
     rows: int = 1 << 25  # Larger working set for TMA microbenchmark
     threshold: float = 0.05
+    inner_iterations: int = 16
 
     def setup(self) -> None:
         ensure_blackwell_tma_supported("Chapter 8 threshold TMA pipeline")

@@ -39,10 +39,10 @@ namespace cde = cuda::device::experimental;
 // NOTE: This example is designed to be *bandwidth sensitive* so that cluster
 // multicast has a clear win: keep TILE_M small (low reuse of each B element)
 // while keeping TILE_N/TILE_K large (large B tile).
-constexpr int TILE_M = 8;
+constexpr int TILE_M = 4;
 constexpr int TILE_N = 128;
 constexpr int TILE_K = 128;
-constexpr int BLOCK_SIZE = 256;
+constexpr int BLOCK_SIZE = 128;
 
 // Cluster configuration: 16x1 cluster along M (shares B tiles).
 constexpr int CLUSTER_M = 16;
@@ -69,10 +69,10 @@ void tma_multicast_gemm_kernel(
     const bool tile_valid = (tile_m * TILE_M < M) && (tile_n * TILE_N < N);
 
     const int tid = threadIdx.x;
-    // 256 threads × (1×4 outputs/thread) = 1024 outputs = 8×128 tile.
+    // 128 threads × (1×4 outputs/thread) = 512 outputs = 4×128 tile.
     constexpr int COLS_PER_THREAD = 4;
     constexpr int THREADS_PER_ROW = TILE_N / COLS_PER_THREAD;  // 32
-    const int thread_m = tid / THREADS_PER_ROW;                // 0..7
+    const int thread_m = tid / THREADS_PER_ROW;                // 0..3
     const int thread_n = (tid % THREADS_PER_ROW) * COLS_PER_THREAD;  // 0..124
 
     __shared__ alignas(128) float A_smem[TILE_M][TILE_K];

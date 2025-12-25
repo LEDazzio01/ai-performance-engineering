@@ -465,7 +465,7 @@ def load_cuda_extension(
     Args:
         extension_name: Name of the extension (used for caching)
         cuda_source_file: Path to the .cu source file
-        build_dir: Directory for build artifacts (defaults to source_dir/build)
+        build_dir: Directory for build artifacts (defaults to source_dir/build/<extension_name>)
         include_dirs: Additional include directories
         extra_cuda_cflags: Additional CUDA compiler flags
         verbose: Enable verbose compilation output
@@ -494,7 +494,7 @@ def load_cuda_extension(
         
         # Default build directory
         if build_dir is None:
-            build_dir = source_dir / "build"
+            build_dir = source_dir / "build" / extension_name
         
         # Normalize include directories
         include_dirs = list(include_dirs) if include_dirs is not None else []

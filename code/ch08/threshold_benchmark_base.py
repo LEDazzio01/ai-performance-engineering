@@ -26,6 +26,7 @@ class ThresholdBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     threshold: float = 2.5
     nvtx_label: str = "threshold"
     output_tolerance = (0.1, 1.0)
+    inner_iterations: int = 8
 
     def __init__(self) -> None:
         super().__init__()
@@ -36,7 +37,7 @@ class ThresholdBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         self.outputs: Optional[torch.Tensor] = None
         self.host_inputs: Optional[torch.Tensor] = None
         self.extension = None
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        self.register_workload_metadata(requests_per_iteration=float(self.inner_iterations))
 
     def setup(self) -> None:
         self.extension = load_cuda_extension(
@@ -62,7 +63,8 @@ class ThresholdBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         config = self.get_config()
         enable_nvtx = get_nvtx_enabled(config) if config else False
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
-            self._invoke_kernel()
+            for _ in range(self.inner_iterations):
+                self._invoke_kernel()
         if self.inputs is None or self.outputs is None:
             raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")
 
@@ -140,7 +142,7 @@ class ThresholdBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
 
     def get_custom_metrics(self) -> Optional[dict]:
         """Return threshold kernel optimization metrics."""
-        bytes_transferred = float(self.rows * 4 * 2)  # float32 read + write
+        bytes_transferred = float(self.rows * 4 * 2 * self.inner_iterations)  # float32 read + write
         return {
             f"{self.nvtx_label}.rows": float(self.rows),
             f"{self.nvtx_label}.threshold": self.threshold,

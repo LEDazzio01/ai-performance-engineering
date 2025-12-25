@@ -18,8 +18,9 @@ from core.utils.extension_loader_template import load_cuda_extension
 
 
 class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
-    rows: int = 4096
-    cols: int = 2048
+    rows: int = 8192
+    cols: int = 4096
+    inner_iterations: int = 8
     nvtx_label: str = "hbm"
     output_tolerance = (1e-2, 5e-3)
 
@@ -30,7 +31,10 @@ class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             raise RuntimeError("CUDA required for HBM benchmarks")
         self.device = torch.device("cuda")
         bytes_per_iteration = float(self.rows * self.cols * 4 + self.rows * 4)
-        self.register_workload_metadata(bytes_per_iteration=bytes_per_iteration, requests_per_iteration=1.0)
+        self.register_workload_metadata(
+            bytes_per_iteration=bytes_per_iteration * self.inner_iterations,
+            requests_per_iteration=float(self.inner_iterations),
+        )
         self.extension = None
         self.matrix_row: Optional[torch.Tensor] = None
         self.matrix_col: Optional[torch.Tensor] = None
@@ -65,7 +69,8 @@ class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
             if self.output is None:
                 self.output = torch.empty(self.rows, device=self.device, dtype=torch.float32)
-            self._invoke_kernel()
+            for _ in range(self.inner_iterations):
+                self._invoke_kernel()
         if self.matrix_row is None or self.matrix_col is None or self.output is None:
             raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")
 
@@ -131,7 +136,7 @@ class HBMBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         """Return HBM optimization metrics for memory bandwidth analysis."""
         elements = self.rows * self.cols
         bytes_per_element = 4  # float32
-        bytes_transferred = float(elements * bytes_per_element)
+        bytes_transferred = float(elements * bytes_per_element * self.inner_iterations)
         return {
             f"{self.nvtx_label}.rows": float(self.rows),
             f"{self.nvtx_label}.cols": float(self.cols),

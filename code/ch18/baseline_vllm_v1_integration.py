@@ -7,6 +7,7 @@ Demonstrates basic vLLM v1 usage without advanced features like:
 - Prefix caching
 """
 
+import os
 import torch
 import time
 from typing import Dict, Any, List, Optional
@@ -19,6 +20,13 @@ repo_root = Path(__file__).resolve().parents[1]
 hack_path = repo_root / "hack"
 if str(hack_path) not in sys.path:
     sys.path.insert(0, str(hack_path))
+# Ensure child processes inherit the hack path for the numba stub.
+existing_pythonpath = os.environ.get("PYTHONPATH", "")
+if existing_pythonpath:
+    if str(hack_path) not in existing_pythonpath.split(os.pathsep):
+        os.environ["PYTHONPATH"] = f"{hack_path}{os.pathsep}{existing_pythonpath}"
+else:
+    os.environ["PYTHONPATH"] = str(hack_path)
 # Import numba (will resolve to hack/numba) so vLLM sees a compatible module.
 import numba  # noqa: F401
 

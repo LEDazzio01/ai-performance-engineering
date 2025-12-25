@@ -1,191 +1,203 @@
 #!/usr/bin/env python3
 """Baseline: Tensor Parallelism without communication overlap.
 
-Demonstrates basic tensor parallelism without optimization.
+Synchronous all-gather after each shard computation; launched via torchrun.
 """
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+# Add common to path
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from typing import Dict, Any, Optional
-import sys
-from pathlib import Path
-import time
-import os
 
-# Add common to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from core.benchmark.verification import PrecisionFlags, simple_signature
 from core.harness.benchmark_harness import (
     BaseBenchmark,
     BenchmarkConfig,
-    BenchmarkHarness,
-    BenchmarkMode,
-    WorkloadMetadata,
+    LaunchVia,
+    TorchrunLaunchSpec,
 )
-from ch04.verification_payload_mixin import VerificationPayloadMixin
 from core.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-
-class BaselineTensorParallel:
-    """Baseline tensor parallelism without overlap."""
-    
-    def __init__(
-        self,
-        batch_size: int = 8,
-        seq_length: int = 2048,
-        hidden_size: int = 4096,
-        num_layers: int = 4,
-    ):
-        self.batch_size = batch_size
-        self.seq_length = seq_length
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        
-        # Initialize distributed
-        self._init_distributed()
-        
-        self.device = torch.device(f"cuda:{self.local_rank}")
-        torch.cuda.set_device(self.device)
-        
-        # Hidden size per rank
-        self.hidden_per_rank = hidden_size // self.world_size
-        
-        logger.info(f"TP Rank {self.rank}/{self.world_size}: {self.hidden_per_rank} hidden dims")
-    
-    def _init_distributed(self):
-        """Initialize distributed process group."""
-        if not dist.is_initialized():
-            if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-                dist.init_process_group(backend='nccl')
-            else:
-                logger.warning("Running in simulation mode (no distributed)")
-                self.rank = 0
-                self.world_size = 1
-                self.local_rank = 0
-                return
-        
-        self.rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
-        self.local_rank = self.rank % torch.cuda.device_count()
-    
-    def setup(self):
-        """Initialize sharded model."""
-        # Column-parallel linear layers (each rank gets a slice)
-        self.layers = nn.ModuleList([
-            nn.Linear(self.hidden_size, self.hidden_per_rank, bias=False)
-            for _ in range(self.num_layers)
-        ]).to(self.device).to(torch.bfloat16)
-        
-        # Create input (replicated across ranks)
-        self.input = torch.randn(
-            self.batch_size,
-            self.seq_length,
-            self.hidden_size,
-            device=self.device,
-            dtype=torch.bfloat16
-        )
-        
-        logger.info(f"Setup complete (Rank {self.rank})")
-    
-    def run(self) -> float:
-        """Execute baseline tensor parallel forward pass."""
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        
-        x = self.input
-        
-        for layer in self.layers:
-            # Baseline: Compute local shard
-            local_output = layer(x)
-            
-            # Baseline: AllGather after computation (no overlap)
-            if self.world_size > 1 and dist.is_initialized():
-                output_list = [torch.empty_like(local_output) for _ in range(self.world_size)]
-                dist.all_gather(output_list, local_output)
-                x = torch.cat(output_list, dim=-1)
-            else:
-                x = local_output
-        
-        torch.cuda.synchronize()
-        elapsed = time.perf_counter() - start
-        
-        logger.info(f"Rank {self.rank}: {elapsed*1000:.2f} ms")
-        
-        return elapsed * 1000
-    
-    def cleanup(self):
-        """Clean up resources."""
-        del self.layers, self.input
-        torch.cuda.empty_cache()
+_DEFAULT_BATCH = 8
+_DEFAULT_SEQ = 2048
+_DEFAULT_HIDDEN = 4096
+_DEFAULT_LAYERS = 4
 
 
-def run_benchmark(
-    batch_size: int = 8,
-    seq_length: int = 2048,
-    hidden_size: int = 4096,
-    num_layers: int = 4,
-    profile: str = "none",
-    **kwargs
-) -> Dict[str, Any]:
-    """Run baseline tensor parallel benchmark."""
-    
-    benchmark = BaselineTensorParallel(
-        batch_size=batch_size,
-        seq_length=seq_length,
-        hidden_size=hidden_size,
-        num_layers=num_layers,
+def _init_distributed() -> tuple[int, int, int]:
+    if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
+        raise RuntimeError("baseline_tensor_parallel requires torchrun (RANK/WORLD_SIZE missing).")
+    if not dist.is_initialized():
+        dist.init_process_group(backend="nccl")
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+    torch.cuda.set_device(local_rank)
+    return rank, world_size, local_rank
+
+
+def _build_layers(hidden: int, hidden_per_rank: int, num_layers: int, device: torch.device):
+    shard = nn.ModuleList([
+        nn.Linear(hidden, hidden_per_rank, bias=False)
+        for _ in range(num_layers)
+    ]).to(device).to(torch.bfloat16)
+    proj = nn.ModuleList([
+        nn.Linear(hidden, hidden, bias=False)
+        for _ in range(num_layers)
+    ]).to(device).to(torch.bfloat16)
+    aux = nn.ModuleList([
+        nn.Linear(hidden, hidden, bias=False)
+        for _ in range(num_layers)
+    ]).to(device).to(torch.bfloat16)
+    return shard, proj, aux
+
+
+def _run_worker(
+    iters: int,
+    warmup: int,
+    batch: int,
+    seq_length: int,
+    hidden: int,
+    num_layers: int,
+) -> None:
+    rank, world_size, local_rank = _init_distributed()
+    if world_size < 2:
+        raise RuntimeError("baseline_tensor_parallel requires >=2 GPUs.")
+    if hidden % world_size != 0:
+        raise ValueError("hidden_size must be divisible by world_size")
+
+    torch.manual_seed(42)
+    torch.cuda.manual_seed_all(42)
+
+    device = torch.device(f"cuda:{local_rank}")
+    hidden_per_rank = hidden // world_size
+
+    shard_layers, proj_layers, aux_layers = _build_layers(hidden, hidden_per_rank, num_layers, device)
+    inputs = torch.randn(batch, seq_length, hidden, device=device, dtype=torch.bfloat16)
+    gather_list = [torch.empty(batch, seq_length, hidden_per_rank, device=device, dtype=torch.bfloat16)
+                   for _ in range(world_size)]
+
+    def _step() -> None:
+        x = inputs
+        for layer_idx in range(num_layers):
+            local_out = shard_layers[layer_idx](x)
+            dist.all_gather(gather_list, local_out)
+            full_out = torch.cat(gather_list, dim=-1)
+            aux_out = aux_layers[layer_idx](x)
+            proj_out = proj_layers[layer_idx](full_out)
+            x = proj_out + aux_out
+
+    for _ in range(max(warmup, 0)):
+        _step()
+    torch.cuda.synchronize(device)
+
+    start = time.perf_counter()
+    for _ in range(max(iters, 1)):
+        _step()
+    torch.cuda.synchronize(device)
+    elapsed = time.perf_counter() - start
+
+    tokens_per_iter = batch * seq_length
+    tokens_per_s = tokens_per_iter * (max(iters, 1) / max(elapsed, 1e-9))
+    if rank == 0:
+        print(f"rank0 tokens/s: {tokens_per_s:.2f} tokens/s")
+        print(f"rank0 time_per_iter_ms: {(elapsed / max(iters,1)) * 1000.0:.3f}")
+
+    dist.barrier()
+    dist.destroy_process_group()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Baseline tensor parallel benchmark")
+    parser.add_argument("--iters", type=int, default=3)
+    parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--batch-size", type=int, default=_DEFAULT_BATCH)
+    parser.add_argument("--seq-length", type=int, default=_DEFAULT_SEQ)
+    parser.add_argument("--hidden-size", type=int, default=_DEFAULT_HIDDEN)
+    parser.add_argument("--num-layers", type=int, default=_DEFAULT_LAYERS)
+    args = parser.parse_args()
+    _run_worker(
+        args.iters,
+        args.warmup,
+        args.batch_size,
+        args.seq_length,
+        args.hidden_size,
+        args.num_layers,
     )
-    benchmark.setup()
-    torch.cuda.synchronize()
-    t0 = torch.cuda.Event(enable_timing=True)
-    t1 = torch.cuda.Event(enable_timing=True)
-    t0.record()
-    elapsed_ms = benchmark.run()
-    t1.record()
-    torch.cuda.synchronize()
-    _ = t0.elapsed_time(t1)
-    benchmark.cleanup()
-    
-    return {
-        "mean_time_ms": elapsed_ms,
-        "world_size": benchmark.world_size,
-        "parallelism": "tensor_parallel_baseline",
-    }
 
 
-class _TensorParallelBenchmark(VerificationPayloadMixin, BaseBenchmark):
-    """Wrapper benchmark for tensor parallel - requires multi-GPU."""
+class BaselineTensorParallelBenchmark(BaseBenchmark):
+    """Harness entry that launches this module via torchrun."""
+
+    verification_not_applicable_reason = "torchrun benchmarks execute in external processes"
+    skip_input_check = True
+    skip_output_check = True
 
     def __init__(self) -> None:
         super().__init__()
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        tokens = float(_DEFAULT_BATCH * _DEFAULT_SEQ)
+        self.register_workload_metadata(requests_per_iteration=float(_DEFAULT_BATCH), tokens_per_iteration=tokens)
 
     def benchmark_fn(self) -> None:
-        raise RuntimeError("SKIPPED: baseline_tensor_parallel requires >=2 GPUs")
+        raise RuntimeError("SKIPPED: baseline_tensor_parallel requires torchrun")
 
     def get_config(self) -> BenchmarkConfig:
-        return BenchmarkConfig(iterations=1, warmup=5, multi_gpu_required=True)
+        return BenchmarkConfig(
+            launch_via=LaunchVia.TORCHRUN,
+            nproc_per_node=2,
+            iterations=3,
+            warmup=5,
+            multi_gpu_required=True,
+            measurement_timeout_seconds=900,
+        )
 
-    def get_verify_output(self) -> torch.Tensor:
-        raise RuntimeError("SKIPPED: baseline_tensor_parallel requires >=2 GPUs")
+    def get_torchrun_spec(self, config: Optional[BenchmarkConfig] = None) -> TorchrunLaunchSpec:
+        return TorchrunLaunchSpec(
+            script_path=Path(__file__).resolve(),
+            script_args=[],
+            multi_gpu_required=True,
+            name="baseline_tensor_parallel",
+            config_arg_map={
+                "iterations": "--iters",
+                "warmup": "--warmup",
+            },
+        )
 
     def get_input_signature(self) -> dict:
-        raise RuntimeError("SKIPPED: baseline_tensor_parallel requires >=2 GPUs")
+        signature = simple_signature(
+            batch_size=_DEFAULT_BATCH,
+            dtype="bfloat16",
+            seq_length=_DEFAULT_SEQ,
+            hidden_size=_DEFAULT_HIDDEN,
+            num_layers=_DEFAULT_LAYERS,
+            precision_flags=PrecisionFlags(bf16=True, tf32=False),
+        )
+        signature.world_size = 2
+        signature.collective_type = "all_gather"
+        return signature
 
     def get_output_tolerance(self) -> tuple:
         return (0.1, 1.0)
 
 
 def get_benchmark() -> BaseBenchmark:
-    gpu_count = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    if gpu_count < 2:
-        return _TensorParallelBenchmark()
-    return _TensorParallelBenchmark()
+    return BaselineTensorParallelBenchmark()
 
 
 if __name__ == "__main__":
-    from core.harness.benchmark_harness import benchmark_main
-    benchmark_main(get_benchmark)
+    main()

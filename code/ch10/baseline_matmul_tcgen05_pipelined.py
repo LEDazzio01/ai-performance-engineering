@@ -36,8 +36,8 @@ class BaselineMatmulTCGen05PipelinedBenchmark(VerificationPayloadMixin, BaseBenc
         self._skip_reason = reason or "SKIPPED: tcgen05 matmul unavailable"
         self.device = resolve_device()
         self.dtype = torch.float16
-        # Match other matmul benchmarks (baseline_matmul.py uses n=8192)
-        self.n = 8192
+        # Increase workload to reduce CPU overhead in timing cross-validation.
+        self.n = 12288
         self.size = self.n
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None

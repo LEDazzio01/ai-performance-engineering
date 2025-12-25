@@ -23,7 +23,7 @@ def get_benchmark() -> DecodeBenchmark:
         prompt_tokens=2048,
         decode_tokens=64,
         prefetch_batches=2,
-        host_payload_mb=1024,
+        host_payload_mb=512,
         hidden_size=256,
         use_pinned_host=True,
         use_copy_stream=True,

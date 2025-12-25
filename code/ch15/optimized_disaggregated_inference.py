@@ -27,7 +27,12 @@ class OptimizedDisaggregatedInferenceBenchmark(_DisaggregatedInferenceBenchmark)
     """Overlap decode work by batching speculative windows."""
 
     def __init__(self) -> None:
-        super().__init__(speculative_window=4, decode_parallelism=2)
+        super().__init__(
+            speculative_window=8,
+            decode_parallelism=2,
+            overlap_kv_transfer=True,
+            transfer_stride=16,
+        )
 
 
 def get_benchmark():

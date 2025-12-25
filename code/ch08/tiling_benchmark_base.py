@@ -34,9 +34,10 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     output_tolerance = (0.1, 1.0)
 
     nvtx_label: str = "tiling"
-    matrix_rows: int = 2048
-    matrix_cols: int = 2048
-    shared_dim: int = 2048
+    matrix_rows: int = 4096
+    matrix_cols: int = 4096
+    shared_dim: int = 4096
+    inner_iterations: int = 8
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,7 +46,7 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         self.matrix_a: Optional[torch.Tensor] = None
         self.matrix_b: Optional[torch.Tensor] = None
         self.output: Optional[torch.Tensor] = None
-        self.register_workload_metadata(requests_per_iteration=1.0)
+        self.register_workload_metadata(requests_per_iteration=float(self.inner_iterations))
 
     # --------------------------------------------------------------------- #
     # Benchmark lifecycle
@@ -87,7 +88,8 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
             )
 
         with nvtx_range(self.nvtx_label, enable=enable_nvtx):
-            self._invoke_kernel()
+            for _ in range(self.inner_iterations):
+                self._invoke_kernel()
 
     def capture_verification_payload(self) -> None:
         """Register verification payload once after timing."""
@@ -144,8 +146,8 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     def get_config(self) -> BenchmarkConfig:
         """Use fewer iterations because each kernel is compute-heavy."""
         return BenchmarkConfig(
-            iterations=48,
-            warmup=8,
+            iterations=12,
+            warmup=5,
         )
 
     def validate_result(self) -> Optional[str]:
@@ -185,8 +187,8 @@ class TilingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     def get_custom_metrics(self) -> Optional[dict]:
         """Return tiling optimization metrics for roofline analysis."""
         M, K, N = self.matrix_rows, self.shared_dim, self.matrix_cols
-        flops = 2.0 * M * K * N  # MAD operations
-        bytes_transferred = (M * K + K * N + M * N) * 4.0  # float32
+        flops = 2.0 * M * K * N * self.inner_iterations  # MAD operations
+        bytes_transferred = (M * K + K * N + M * N) * 4.0 * self.inner_iterations  # float32
         return {
             f"{self.nvtx_label}.matrix_m": float(M),
             f"{self.nvtx_label}.matrix_k": float(K),

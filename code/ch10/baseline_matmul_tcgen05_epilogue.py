@@ -35,10 +35,10 @@ class BaselineMatmulTCGen05EpilogueBenchmark(VerificationPayloadMixin, BaseBench
         self.module = None
         self.device = torch.device("cuda")
         # Choose dimensions where epilogue fusion is measurable:
-        # keep K minimal (tcgen05 requires K%64==0) and use moderate M/N so
-        # kernel-launch + extra memory passes in the baseline are visible.
-        self.M = 3072
-        self.N = 3072
+        # keep K minimal (tcgen05 requires K%64==0) and use smaller M/N so
+        # extra kernel launches and memory passes remain a visible fraction.
+        self.M = 2048
+        self.N = 2048
         self.K = 64
         self.A: Optional[torch.Tensor] = None
         self.B: Optional[torch.Tensor] = None

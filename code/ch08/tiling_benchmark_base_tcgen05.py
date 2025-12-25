@@ -7,6 +7,7 @@ from typing import Optional
 import torch
 
 from ch08.tiling_benchmark_base import TilingBenchmarkBase
+from core.harness.benchmark_harness import BenchmarkConfig
 
 
 def _check_tcgen05_extension_available() -> tuple[bool, Optional[str]]:
@@ -40,8 +41,8 @@ class TilingBenchmarkBaseTCGen05(TilingBenchmarkBase):
     # the redundant baseline output copy a measurable fraction of runtime.
     # Keep the compute workload substantial while increasing the output tensor
     # footprint (M x N) so the avoided copy is not lost in noise.
-    matrix_rows: int = 7680
-    matrix_cols: int = 7680
+    matrix_rows: int = 8192
+    matrix_cols: int = 8192
     # Use a smaller K so the baseline's redundant output copy is a larger
     # fraction of end-to-end time (and the optimization is clearly measurable).
     shared_dim: int = 64
@@ -56,3 +57,7 @@ class TilingBenchmarkBaseTCGen05(TilingBenchmarkBase):
     def _load_extension(self) -> None:
         from core.common.tcgen05 import load_tiling_tcgen05_module
         self.extension = load_tiling_tcgen05_module()
+
+    def get_config(self) -> BenchmarkConfig:
+        # tcgen05 kernels are extremely fast; use more iterations for stable mean timing.
+        return BenchmarkConfig(iterations=200, warmup=10)

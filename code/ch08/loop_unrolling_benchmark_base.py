@@ -30,11 +30,12 @@ def resolve_device() -> torch.device:
 class LoopUnrollingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     """Base class that manages CUDA extension loading and tensor setup."""
 
-    rows: int = 1 << 14  # 16,384 rows
+    rows: int = 1 << 17  # 131,072 rows
     elements_per_row: int = 512
     weight_period: int = 8
     nvtx_label: str = "loop_unrolling"
     output_tolerance = (5e-3, 5e-3)
+    inner_iterations: int = 4
 
     def __init__(self) -> None:
         super().__init__()
@@ -42,7 +43,10 @@ class LoopUnrollingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
         bytes_per_iteration = float(
             self.rows * self.elements_per_row * 4 + self.weight_period * 4 + self.rows * 4
         )
-        self.register_workload_metadata(bytes_per_iteration=bytes_per_iteration, requests_per_iteration=1.0)
+        self.register_workload_metadata(
+            bytes_per_iteration=bytes_per_iteration * self.inner_iterations,
+            requests_per_iteration=float(self.inner_iterations),
+        )
         self.extension = None
         self.inputs: Optional[torch.Tensor] = None
         self.weights: Optional[torch.Tensor] = None
@@ -85,7 +89,8 @@ class LoopUnrollingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
                     device=self.device,
                     dtype=torch.float32,
                 )
-            self._invoke_kernel()
+            for _ in range(self.inner_iterations):
+                self._invoke_kernel()
         if self.inputs is None or self.weights is None or self.output is None:
             raise RuntimeError("benchmark_fn() must run after setup() initializes tensors")
 
@@ -156,8 +161,8 @@ class LoopUnrollingBenchmarkBase(VerificationPayloadMixin, BaseBenchmark):
     def get_custom_metrics(self) -> Optional[dict]:
         """Return loop unrolling optimization metrics."""
         total_elements = self.rows * self.elements_per_row
-        flops = float(total_elements * 2)  # mul + add per element
-        bytes_transferred = float(total_elements * 4 + self.weight_period * 4)
+        flops = float(total_elements * 2 * self.inner_iterations)  # mul + add per element
+        bytes_transferred = float((total_elements * 4 + self.weight_period * 4) * self.inner_iterations)
         return {
             f"{self.nvtx_label}.rows": float(self.rows),
             f"{self.nvtx_label}.elements_per_row": float(self.elements_per_row),

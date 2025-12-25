@@ -31,21 +31,49 @@ from ch15.baseline_moe_inference import BaselineMoeInferenceBenchmark  # noqa: E
 class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
     """Shared harness that simulates prefill/decode split execution."""
 
-    def __init__(self, *, speculative_window: int, decode_parallelism: int):
+    def __init__(
+        self,
+        *,
+        speculative_window: int,
+        decode_parallelism: int,
+        overlap_kv_transfer: bool,
+        transfer_stride: int,
+    ):
         super().__init__()
         self.speculative_window = max(1, speculative_window)
         self.decode_parallelism = max(1, decode_parallelism)
+        self.overlap_kv_transfer = bool(overlap_kv_transfer)
+        self.transfer_stride = max(1, transfer_stride)
+        # Favor transfer-bound behavior to make batching gains visible.
+        self.config.num_layers = 2
+        self.config.num_moe_layers = 1
+        self.config.ffn_size = 1024
+        self.config.num_experts = 8
+        self.config.context_window = 256
+        self.config.decode_tokens = 256
         self.output = None
         self._disagg_history: Dict[str, List[float]] = {
             "prefill_ms": [],
             "decode_ms": [],
         }
+        self._kv_transfer_buffer: Optional[torch.Tensor] = None
+        self._kv_transfer_stream: Optional[torch.cuda.Stream] = None
+        self._kv_transfer_tokens: int = 0
         self.register_workload_metadata(requests_per_iteration=1.0)
 
     def setup(self) -> None:
         super().setup()
         if self.model is not None:
             self.model.to(device=self.device, dtype=self.config.dtype_obj)
+        self._kv_transfer_tokens = max(1, min(self.transfer_stride, self.config.decode_tokens))
+        self._kv_transfer_buffer = torch.empty(
+            (self.config.batch_size, self._kv_transfer_tokens, self.config.hidden_size),
+            device="cpu",
+            dtype=self.config.dtype_obj,
+            pin_memory=True,
+        )
+        if self.device.type == "cuda" and self.overlap_kv_transfer:
+            self._kv_transfer_stream = torch.cuda.Stream()
 
     def benchmark_fn(self) -> Dict[str, List[float]]:
         if self.model is None or self.prompts is None or self.kv_cache is None:
@@ -67,25 +95,65 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
             step = 0
             window = max(1, int(self.speculative_window) * int(self.decode_parallelism))
 
-            while step < cfg.decode_tokens:
-                tokens_now = min(window, cfg.decode_tokens - step)
-                start = time.perf_counter()
+            if window > 1:
+                start_decode = torch.cuda.Event(enable_timing=True)
+                end_decode = torch.cuda.Event(enable_timing=True)
+                start_decode.record()
+                while step < cfg.decode_tokens:
+                    tokens_now = min(window, cfg.decode_tokens - step)
+                    for bucket in range(tokens_now):
+                        position = context_position + step + bucket
+                        _hidden, decode_logits = self.model.decode(
+                            seeds,
+                            kv_cache=self.kv_cache,
+                            position=position,
+                        )
+                        seeds = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
+                    if self._kv_transfer_buffer is not None and self.kv_cache is not None:
+                        transfer_start = context_position + step
+                        transfer_end = transfer_start + tokens_now
+                        kv_slice = self.kv_cache[:, transfer_start:transfer_end, :]
+                        if self._kv_transfer_stream is not None:
+                            self._kv_transfer_stream.wait_stream(torch.cuda.current_stream(self.device))
+                            with torch.cuda.stream(self._kv_transfer_stream):
+                                self._kv_transfer_buffer[:, :tokens_now].copy_(kv_slice, non_blocking=True)
+                        else:
+                            self._kv_transfer_buffer[:, :tokens_now].copy_(kv_slice, non_blocking=False)
+                    step += tokens_now
+                if self._kv_transfer_stream is not None:
+                    torch.cuda.current_stream(self.device).wait_stream(self._kv_transfer_stream)
+                end_decode.record()
+                end_decode.synchronize()
+                total_decode_ms = float(start_decode.elapsed_time(end_decode))
+                avg_tpot_ms = total_decode_ms / max(float(cfg.decode_tokens), 1.0)
+                decode_samples.extend([avg_tpot_ms] * cfg.decode_tokens)
+            else:
+                while step < cfg.decode_tokens:
+                    tokens_now = min(window, cfg.decode_tokens - step)
+                    start = time.perf_counter()
 
-                for bucket in range(tokens_now):
-                    position = context_position + step + bucket
-                    _hidden, decode_logits = self.model.decode(
-                        seeds,
-                        kv_cache=self.kv_cache,
-                        position=position,
-                    )
-                    seeds = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
+                    for bucket in range(tokens_now):
+                        position = context_position + step + bucket
+                        _hidden, decode_logits = self.model.decode(
+                            seeds,
+                            kv_cache=self.kv_cache,
+                            position=position,
+                        )
+                        seeds = torch.argmax(decode_logits[:, -1, :], dim=-1, keepdim=True)
 
-                torch.cuda.synchronize(self.device)
-                decode_samples.append((time.perf_counter() - start) * 1000.0)
-                step += tokens_now
+                    if self._kv_transfer_buffer is not None and self.kv_cache is not None:
+                        transfer_start = context_position + step
+                        transfer_end = transfer_start + tokens_now
+                        kv_slice = self.kv_cache[:, transfer_start:transfer_end, :]
+                        self._kv_transfer_buffer[:, :tokens_now].copy_(kv_slice, non_blocking=False)
+
+                    torch.cuda.synchronize(self.device)
+                    decode_samples.append((time.perf_counter() - start) * 1000.0)
+                    step += tokens_now
         
         # Capture output for verification (final token predictions)
         self.output = seeds.detach()
+        self._synchronize()
 
         total_ms = sum(ttft_samples) + sum(decode_samples)
         throughput = cfg.tokens_per_iteration / max(total_ms / 1000.0, 1e-6)
@@ -106,13 +174,15 @@ class _DisaggregatedInferenceBenchmark(BaselineMoeInferenceBenchmark):
     def get_custom_metrics(self) -> Optional[Dict[str, float]]:
         """Return domain-specific metrics using standardized helper."""
         from core.benchmark.metrics import compute_inference_metrics
+        if not self._disagg_history["prefill_ms"] or not self._disagg_history["decode_ms"]:
+            raise RuntimeError("Disaggregated inference metrics require timing samples")
         return compute_inference_metrics(
-            ttft_ms=getattr(self, '_ttft_ms', 50.0),
-            tpot_ms=getattr(self, '_tpot_ms', 10.0),
-            total_tokens=getattr(self, 'total_tokens', 256),
-            total_requests=getattr(self, 'total_requests', 1),
-            batch_size=getattr(self, 'batch_size', 1),
-            max_batch_size=getattr(self, 'max_batch_size', 32),
+            ttft_ms=float(statistics.mean(self._disagg_history["prefill_ms"])),
+            tpot_ms=float(statistics.mean(self._disagg_history["decode_ms"])),
+            total_tokens=int(self.config.tokens_per_iteration),
+            total_requests=int(self.config.batch_size),
+            batch_size=int(self.config.batch_size),
+            max_batch_size=int(self.config.batch_size),
         )
 
     def get_config(self) -> BenchmarkConfig:
@@ -123,7 +193,12 @@ class BaselineDisaggregatedInferenceBenchmark(_DisaggregatedInferenceBenchmark):
     """Sequential prefill/decode simulation (no overlap)."""
 
     def __init__(self) -> None:
-        super().__init__(speculative_window=1, decode_parallelism=1)
+        super().__init__(
+            speculative_window=1,
+            decode_parallelism=1,
+            overlap_kv_transfer=False,
+            transfer_stride=1,
+        )
 
 
 def get_benchmark():

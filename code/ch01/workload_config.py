@@ -25,7 +25,7 @@ class Chapter1Workload:
     prefill_chunks: int = 8
     microbatch_size: int = 32
     performance_microbatches: int = 64
-    performance_hidden_dim: int = 4096
+    performance_hidden_dim: int = 8192
 
     @property
     def total_requests(self) -> int:
